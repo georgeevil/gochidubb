@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tachidubb_rebuild_showcase` (MCP) / `showcase-rebuild` (CLI) — re-stitch without re-dubbing
 - `tachidubb_list_models` — query installed Ollama translation models
 - `examples/` directory with ready-to-run dub, showcase, and agent scripts
+- **Server process manager** (`tools/tachidubb_serverctl.py`) — start, stop, restart,
+  status, and logs commands with PID file tracking and orphan detection.
+  Prevents lingering server processes after agentic code changes.
+- **PID file** (`server.py` writes `.tachidubb.pid` on startup, cleans up on shutdown)
+- **Signal handling** (`SIGTERM`/`SIGINT`) for graceful shutdown from external kill commands
+- **`--reload` flag** support for development auto-reload
+- **macOS launchd integration** (`install-launchd` command) for auto-start on login
+- Updated `start.sh` to delegate to the server manager
 
 ### Fixed
 - **Voice consistency in cross-lingual cloning** — QA retries were mutating the seed

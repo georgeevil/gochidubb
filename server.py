@@ -57,6 +57,7 @@ import re
 import logging
 import os
 import shutil
+import signal
 import sys
 import time
 import uuid
@@ -1280,8 +1281,14 @@ async def run_pipeline(
                 progress=min(pct, 62),
                 step_detail=f"Translating batch {done}/{total}{eta_str}",
             )
+        # translate_segments(segments, target_lang, model, max_concurrent=5,
+        #                     context_hint=..., progress_callback=...)
+        # NOTE: effective_src is NOT passed here — the translator uses
+        # source_lang from the prompt internally. The positional args are:
+        #   segments, target_lang, model
+        # NOT segments, source_lang, target_lang, model
         segments = await translate_segments(
-            segments, effective_src, target_lang, model,
+            segments, target_lang, model,
             context_hint=context_hint,
             progress_callback=_translate_progress,
         )
@@ -3632,8 +3639,10 @@ async def _run_translate_stage(
         job.update(kwargs); save_job(job)
     update(status="translating", progress=45,
            step_detail=f"Translating to {target_lang}...")
+    # translate_segments(segments, target_lang, model, ...)
+    # NOT (segments, source_lang, target_lang, model)
     translated = await translate_segments(
-        segments, effective_src, target_lang, model,
+        segments, target_lang, model,
         context_hint=context_hint,
     )
     # See comment on unload in main pipeline — free VRAM for VoxCPM
@@ -4490,8 +4499,10 @@ async def _continue_from_checkpoint(
             target_lang = cp.get("target_lang", "ru")
             model = cp.get("model", "gemma4:e4b")
             context_hint = cp.get("context_hint", "")
+            # translate_segments(segments, target_lang, model, ...)
+            # NOT (segments, source_lang, target_lang, model)
             segments = await translate_segments(
-                cp["segments"], effective_src, target_lang, model,
+                cp["segments"], target_lang, model,
                 context_hint=context_hint,
             )
             # Save translation_done checkpoint
@@ -4564,8 +4575,10 @@ async def _retranslate_stage(job_id: str, cp: dict, model: str,
                context_hint=context_hint, target_lang=target_lang,
                step_detail=f"Retranslating with {model}...")
         effective_src = cp.get("effective_src", "en")
+        # translate_segments(segments, target_lang, model, ...)
+        # NOT (segments, source_lang, target_lang, model)
         segments = await translate_segments(
-            cp["segments"], effective_src, target_lang, model,
+            cp["segments"], target_lang, model,
             context_hint=context_hint,
         )
         _save_checkpoint(job_id, work, stage="translation_done", data={
@@ -5424,11 +5437,40 @@ async def index():
 
 if __name__ == "__main__":
     import uvicorn
+    import atexit
+
+    # ── PID file management ──────────────────────────────────────────
+    # Write a PID file so the server manager (tachidubb_serverctl.py)
+    # can track and manage this process. The PID file is cleaned up on
+    # normal exit via atexit. If the process is killed with SIGKILL,
+    # the stale PID file is detected and cleaned by the manager.
+    _PID_FILE = Path(__file__).parent / ".tachidubb.pid"
+    try:
+        _PID_FILE.write_text(str(os.getpid()))
+        atexit.register(lambda: _PID_FILE.unlink(missing_ok=True))
+    except OSError:
+        pass  # Non-fatal — server manager will find us via `ps` fallback
+
+    # ── Signal handling for graceful shutdown ────────────────────────
+    # When the server manager sends SIGTERM (or the user presses Ctrl+C),
+    # uvicorn handles it internally and runs the lifespan shutdown phase.
+    # We also register a fallback to ensure the PID file is cleaned up
+    # even if uvicorn's signal handler doesn't fire atexit.
+    def _signal_cleanup(signum, frame):
+        _PID_FILE.unlink(missing_ok=True)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _signal_cleanup)
+    signal.signal(signal.SIGINT, _signal_cleanup)
+
+    # ── Parse --reload flag for development ──────────────────────────
+    _reload = "--reload" in sys.argv
+
     print("")
     print("+====================================================+")
     print("|  TachiDUBB Studio - AI Video Dubbing               |")
-    print("|  Opening browser at http://localhost:8910...       |")
+    print("|  http://localhost:8910                             |")
     print("|  Press Ctrl+C to stop                              |")
     print("+====================================================+")
     print("")
-    uvicorn.run(app, host="0.0.0.0", port=8910, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8910, log_level="info", reload=_reload)

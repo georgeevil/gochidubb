@@ -69,6 +69,35 @@ chmod +x install.sh
 
 First dubbing run downloads the VoxCPM2 model (~5 GB) — one time.
 
+### Server management
+
+The server ships with a process manager that prevents lingering processes after agentic code changes:
+
+```bash
+# Start in background (detached, survives terminal close)
+python tools/tachidubb_serverctl.py start
+
+# Check if running
+python tools/tachidubb_serverctl.py status
+
+# Graceful stop (SIGTERM, auto-force-kills after 10s)
+python tools/tachidubb_serverctl.py stop
+
+# Restart (stop + start)
+python tools/tachidubb_serverctl.py restart
+
+# Tail server logs
+python tools/tachidubb_serverctl.py logs --follow
+
+# Development mode with auto-reload on file changes
+python tools/tachidubb_serverctl.py foreground --reload
+
+# Auto-start on macOS login
+python tools/tachidubb_serverctl.py install-launchd
+```
+
+The manager writes a PID file (`.tachidubb.pid`) on startup and cleans it up on shutdown. If a process lingers after a crash or agentic restart, `status` detects orphaned processes and `stop` kills them all.
+
 ---
 
 ## 🤖 Agent control (MCP + CLI)

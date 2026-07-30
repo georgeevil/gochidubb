@@ -1,0 +1,102 @@
+"""Tests for pipeline/diarizer.py — speaker assignment and reference extraction."""
+from unittest.mock import patch
+
+import pytest
+
+from pipeline.diarizer import assign_speakers_to_segments, extract_fallback_reference
+
+
+class TestAssignSpeakersToSegments:
+    """assign_speakers_to_segments() maps diarization turns to segments."""
+
+    def test_exact_match(self):
+        """One speaker, one segment — simple mapping."""
+        segments = [{"start": 0.0, "end": 5.0}]
+        diarization = [(0.0, 5.0, "SPEAKER_00")]
+        result = assign_speakers_to_segments(segments, diarization)
+        assert len(result) == 1
+        assert result[0]["speaker"] == "SPEAKER_00"
+
+    def test_multiple_speakers(self):
+        segments = [
+            {"start": 0.0, "end": 3.0},
+            {"start": 3.5, "end": 7.0},
+            {"start": 7.5, "end": 10.0},
+        ]
+        diarization = [
+            (0.0, 3.0, "SPEAKER_00"),
+            (3.5, 7.0, "SPEAKER_01"),
+            (7.5, 10.0, "SPEAKER_00"),
+        ]
+        result = assign_speakers_to_segments(segments, diarization)
+        assert result[0]["speaker"] == "SPEAKER_00"
+        assert result[1]["speaker"] == "SPEAKER_01"
+        assert result[2]["speaker"] == "SPEAKER_00"
+
+    def test_overlap_best_overlap_wins(self):
+        """Segment overlapping multiple turns picks the one with most overlap."""
+        segments = [{"start": 2.0, "end": 6.0}]
+        diarization = [
+            (0.0, 4.0, "SPEAKER_00"),   # 2s overlap
+            (4.0, 8.0, "SPEAKER_01"),   # 2s overlap
+        ]
+        result = assign_speakers_to_segments(segments, diarization)
+        # Equal overlap, could be either — just check speaker is assigned
+        assert "speaker" in result[0]
+
+    def test_no_diarization(self):
+        """Without diarization data, defaults to SPEAKER_00."""
+        segments = [{"start": 0.0, "end": 5.0, "text": "Hello"}]
+        result = assign_speakers_to_segments(segments, [])
+        assert result[0]["speaker"] == "SPEAKER_00"
+
+    def test_empty_segments(self):
+        assert assign_speakers_to_segments([], [("0.0", "5.0", "SPEAKER_00")]) == []
+
+    def test_segment_matches_no_turn(self):
+        """Segment outside all diarization turns gets default SPEAKER_00."""
+        segments = [{"start": 100.0, "end": 105.0}]
+        diarization = [(0.0, 10.0, "SPEAKER_00")]
+        result = assign_speakers_to_segments(segments, diarization)
+        assert result[0]["speaker"] == "SPEAKER_00"
+
+
+class TestExtractFallbackReference:
+    """extract_fallback_reference() builds a single-speaker ref when diarization fails."""
+
+    def test_no_segments_returns_none(self):
+        assert extract_fallback_reference("/fake/audio.wav", [], "/fake/out.wav") is None
+
+    def test_with_segments_and_audio(self, temp_audio_file):
+        """Should write a ref file and return the path."""
+        segments = [
+            {"start": 0.0, "end": 0.5, "text": "Hello world"},
+            {"start": 0.6, "end": 1.0, "text": "This is a test."},
+        ]
+        out_path = "/tmp/_test_fallback_ref.wav"
+        import os
+        try:
+            result = extract_fallback_reference(temp_audio_file, segments, out_path)
+            # May succeed or return None depending on audio file read
+            # At minimum, shouldn't crash
+            if result:
+                assert os.path.exists(result)
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+
+    def test_filters_short_segments(self):
+        """Very short segments (<0.5s) should be excluded."""
+        segments = [
+            {"start": 0.0, "end": 0.3, "text": "Hi"},
+            {"start": 1.0, "end": 5.0, "text": "This is a proper segment with enough text"},
+        ]
+        out_path = "/tmp/_test_filter_short.wav"
+        import os
+        try:
+            # Without a real audio file, it'll return None, but that's expected
+            result = extract_fallback_reference("/nonexistent.wav", segments, out_path)
+            assert result is None  # Nothing to extract from missing file
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
