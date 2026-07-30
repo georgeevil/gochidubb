@@ -151,7 +151,7 @@ from pipeline.diarizer import (
 from pipeline.translator import translate_segments, check_ollama, ollama_pull_stream, unload_ollama_model
 from pipeline.synthesizer import VoxCPMSynthesizer, F5TTSEngine, EdgeTTSFallback
 from pipeline.assembler import assemble_dubbed_audio, merge_audio_video, write_srt
-from pipeline.models import get_system_status, MODEL_CATALOG
+from pipeline.models import get_system_status, MODEL_CATALOG, USE_LM_STUDIO, LM_STUDIO_URL
 from pipeline.vad import apply_vad_filter
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
@@ -1518,6 +1518,34 @@ async def run_pipeline(
 # ─────────────────────────────────────────────────────────────
 # API: System & Models
 # ─────────────────────────────────────────────────────────────
+
+@app.get("/api/lm_studio/models")
+async def get_lm_studio_models():
+    """Proxy to LM Studio API to get available models.
+    
+    The frontend calls this endpoint (instead of hitting LM Studio directly)
+    to avoid CORS issues and centralize configuration. The actual LM Studio
+    API path is determined by LM_STUDIO_URL env var.
+    """
+    if not USE_LM_STUDIO:
+        return {"models": []}
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{LM_STUDIO_URL}/models",
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    models = [m.get("id", "") for m in data.get("data", [])]
+                    return {"models": models}
+                log.warning(f"LM Studio returned {response.status} from {LM_STUDIO_URL}/models")
+                return {"models": []}
+    except Exception as e:
+        log.warning(f"Failed to fetch LM Studio models: {e}")
+        return {"models": []}
+
 
 @app.get("/api/system")
 async def system_status():
