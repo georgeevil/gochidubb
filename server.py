@@ -2033,10 +2033,12 @@ async def run_pipeline(
 @app.get("/api/lm_studio/models")
 async def get_lm_studio_models():
     """Proxy to LM Studio API to get available models.
-    
+
     The frontend calls this endpoint (instead of hitting LM Studio directly)
-    to avoid CORS issues and centralize configuration. The actual LM Studio
-    API path is determined by LM_STUDIO_URL env var.
+    to avoid CORS issues and centralize configuration. Queries LM Studio
+    directly on every call so the model list is current when the user opens
+    Settings / Models — this is not on a polling path, so it costs one request
+    per visit.
     """
     if not USE_LM_STUDIO:
         return {"models": []}
@@ -2273,6 +2275,19 @@ async def start_dub(
         actual_source = vid_path
         source_type = "upload"
         source_label = video.filename
+        # Log the uploaded file's real name/extension/size. The pipeline
+        # copies whatever the user uploads into source_video.mp4 regardless
+        # of actual format, so a .webp image (no audio/video stream) is a
+        # common "breaks silently" case — this line makes it obvious in the
+        # server log before the job even starts.
+        try:
+            _up_bytes = os.path.getsize(vid_path)
+        except OSError:
+            _up_bytes = -1
+        log.info(
+            f"[dub] upload job={job_id} file={video.filename!r} ext={ext} "
+            f"size={_up_bytes/1048576 if _up_bytes >= 0 else '?'}MB -> {vid_path}"
+        )
     elif source:
         actual_source = source
         source_type = "url" if source.startswith("http") else "path"

@@ -19,7 +19,14 @@ def _run(cmd, desc="", timeout=600):
     log.info(f"[{desc}] {' '.join(str(c) for c in cmd[:8])}")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
+        # Include stdout too — ffmpeg sometimes prints the real reason there
+        # (e.g. "No audio frames to encode") while stderr is generic.
+        log.debug(
+            f"[{desc}] exit={r.returncode} stdout={r.stdout[:400]!r} "
+            f"stderr={r.stderr[:400]!r}"
+        )
         raise RuntimeError(f"{desc} failed: {r.stderr[:400]}")
+    log.debug(f"[{desc}] ok stderr={r.stderr[:200]!r}")
     return r
 
 
@@ -207,7 +214,29 @@ def get_duration(path: str) -> float:
          "-of", "default=noprint_wrappers=1:nokey=1", path],
         capture_output=True, text=True,
     )
-    try:
-        return float(r.stdout.strip())
-    except (ValueError, AttributeError):
+    if r.returncode != 0:
+        # ffprobe failed to read the container — e.g. an image (webp/jpg/png)
+        # or a corrupted/truncated file copied into source_video.mp4. This is
+        # a top cause of "pipeline breaks silently": duration becomes 0.0,
+        # audio extraction yields an empty WAV, and transcription finds no
+        # speech. Surface it loudly so the user sees the real reason.
+        log.warning(
+            f"[duration] ffprobe could not read {path}: "
+            f"exit={r.returncode} stderr={r.stderr.strip()[:200]!r}"
+        )
         return 0.0
+    try:
+        dur = float(r.stdout.strip())
+    except (ValueError, AttributeError):
+        log.warning(
+            f"[duration] ffprobe returned non-numeric duration for {path}: "
+            f"{r.stdout.strip()!r}"
+        )
+        return 0.0
+    if dur <= 0:
+        log.warning(
+            f"[duration] {path} reported duration={dur}s — likely a still "
+            f"image or empty/unsupported container; downstream stages will fail"
+        )
+    log.debug(f"[duration] {path} -> {dur:.3f}s")
+    return dur

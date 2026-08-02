@@ -975,8 +975,12 @@ class EdgeTTSFallback(BaseTTSEngine):
         os.makedirs(output_dir, exist_ok=True)
         lang = target_lang[:2].lower()
         selected = voice or self.VOICE_MAP.get(lang, "en-US-ChristopherNeural")
-
         total = len(segments)
+        log.info(
+            f"[edge-tts] synthesizing {total} segments to {target_lang} "
+            f"(voice={selected}, out={output_dir})"
+        )
+
         for i, seg in enumerate(segments):
             text = seg.get("translated_text", seg["text"])
             if not text.strip():
@@ -988,11 +992,14 @@ class EdgeTTSFallback(BaseTTSEngine):
                 comm = edge_tts.Communicate(text, selected)
                 await comm.save(out_file)
                 seg["audio_path"] = out_file
+                log.debug(f"[edge-tts] [{i+1}/{total}] ok -> {os.path.basename(out_file)}")
             except Exception as e:
-                log.error(f"edge-tts failed [{i}]: {e}")
+                log.error(f"edge-tts failed [{i}]: {type(e).__name__}: {e}")
                 seg["audio_path"] = None
 
             if progress_callback:
                 progress_callback(i + 1, total)
 
+        ok = sum(1 for s in segments if s.get("audio_path"))
+        log.info(f"[edge-tts] done: {ok}/{total} segments synthesized")
         return segments

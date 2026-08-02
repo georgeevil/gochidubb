@@ -300,6 +300,10 @@ def diarize_speakers(audio_path: str,
         ]
         log.info(f"Diarization: {len(turns)} turns, "
                  f"{len(set(s for _,_,s in turns))} speakers")
+        log.debug(
+            f"[diarize] turns: {[(round(t[0],2), round(t[1],2), t[2]) for t in turns[:10]]}"
+            f"{' ...' if len(turns) > 10 else ''}"
+        )
         return turns
     except Exception as e:
         log.warning(f"Diarization inference failed: {e}")
