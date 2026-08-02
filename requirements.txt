@@ -7,10 +7,25 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.9
 httpx>=0.25.0
+# Required, not optional: pipeline/translator.py imports it at module level,
+# and server.py imports the translator at startup — without this the server
+# does not boot.
+aiohttp>=3.9.0
+
+# .env loading. server.py has a minimal built-in fallback parser, so this is
+# not strictly required, but the documented config flow assumes it.
+python-dotenv>=1.0.0
 
 # Agent integration (MCP server for Claude Code etc.). Optional but tiny.
 # CLI works without it; only `tools/tachidubb_mcp.py` requires this.
 mcp>=1.0.0
+
+# Observability — per-stage CPU/RAM sampling (pipeline/metrics.py).
+# Optional: without it, stages are still timed, just without resource stats.
+psutil>=5.9.0
+# GPU utilization sampling on NVIDIA. Optional — metrics.py falls back to
+# torch.cuda, then nvidia-smi, then no GPU stats at all.
+# nvidia-ml-py>=12.535.77
 
 # Audio/video I/O
 soundfile>=0.12.1
@@ -46,6 +61,12 @@ edge-tts>=6.1.9
 
 # Speaker diarization (optional, needs HF_TOKEN in .env or config-user.json)
 # pyannote.audio>=3.1
+
+# Hugging Face Hub client. Arrives transitively with faster-whisper, but
+# pipeline/diagnostics.py calls it directly to tell "you never accepted the
+# gated model's conditions" apart from "the download failed today" — which is
+# the one question pyannote's own error message cannot answer.
+huggingface_hub>=0.20.0
 
 # PyTorch — install separately with correct CUDA version:
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121

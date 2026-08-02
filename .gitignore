@@ -10,6 +10,13 @@ __pycache__/
 .env.*
 !.env.example
 .claude/settings.local.json
+# Persisted UserConfig — holds hf_token in plaintext (app/config.py)
+config-user.json
+
+# Server runtime artifacts
+.tachidubb.pid
+tachidubb.log
+.coverage
 
 # Runtime data
 uploads/*

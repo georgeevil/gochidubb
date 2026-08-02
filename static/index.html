@@ -226,6 +226,11 @@ const stageForStatus = (status) => {
       return 5;
     case 'complete':
       return 6;
+    // 'paused' = a stage run that was told to stop early (stop_after).
+    // It has no fixed position in the strip; the Stage panel is the
+    // accurate picture in that case.
+    case 'paused':
+      return -1;
     default:
       return -1;
   }
@@ -249,6 +254,7 @@ const STATUS_META = {
   synthesizing:                   { color: 'var(--accent)', label: 'Synthesizing' },
   assembling:                     { color: 'var(--accent)', label: 'Assembling' },
   merging:                        { color: 'var(--accent)', label: 'Merging' },
+  paused:                         { color: 'var(--warn)',   label: 'Paused after stage' },
 };
 
 const fmtSec = (s) => {
@@ -270,6 +276,14 @@ const fmtAge = (ts) => {
   if (d < 7 * 86400) return Math.floor(d / 86400) + 'd ago';
   const dt = new Date(ts * 1000);
   return dt.toLocaleDateString();
+};
+
+// Wall-clock only — the log viewer shows one session, so the date is noise.
+const fmtClock = (ts) => {
+  if (!ts) return '--:--:--';
+  const d = new Date(ts * 1000);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map(n => String(n).padStart(2, '0')).join(':');
 };
 
 const _lsGet = (key, fallback) => {
@@ -490,6 +504,124 @@ function LongProgress({ value, color = 'var(--accent)', height = 3 }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// SETUP NOTICES
+// ═══════════════════════════════════════════════════════════════════
+// This app runs on the user's own machine with no logs they'll ever read,
+// so anything that says "your environment is wrong" has to arrive here.
+// Notices come from /api/system (which merges passive checks, whatever the
+// last pipeline run observed, and the last deep probe). `code` is the
+// identity — dismissal and dedupe both key on it, never on the title.
+
+const SEV_META = {
+  error: { color: 'var(--err)',  bg: 'oklch(0.7 0.2 25 / 0.08)',   line: 'oklch(0.7 0.2 25 / 0.3)',   label: 'Problem' },
+  warn:  { color: 'var(--warn)', bg: 'oklch(0.78 0.15 60 / 0.08)', line: 'oklch(0.78 0.15 60 / 0.3)', label: 'Degraded' },
+  info:  { color: 'var(--ink-2)',bg: 'var(--bg-1)',                line: 'var(--line)',               label: 'Note' },
+};
+const sevMeta = (s) => SEV_META[s] || SEV_META.warn;
+
+// Dismissals persist so a known-and-accepted warning (e.g. "running on CPU")
+// doesn't nag on every launch. Stored as a comma-joined list of codes because
+// _lsSet stringifies whatever it's handed.
+const _dismissedCodes = () => {
+  const raw = _lsGet('setup_dismissed', '');
+  return String(raw || '').split(',').filter(Boolean);
+};
+const _dismiss = (code) => {
+  const set = new Set(_dismissedCodes());
+  set.add(code);
+  _lsSet('setup_dismissed', Array.from(set).join(','));
+};
+const _undismissAll = () => _lsSet('setup_dismissed', '');
+
+function SetupBanner({ notices, onOpenSetup }) {
+  const [dismissed, setDismissed] = useState(_dismissedCodes);
+  const live = (notices || []).filter(n => !dismissed.includes(n.code));
+  if (!live.length) return null;
+
+  const top = live[0];
+  const meta = sevMeta(top.severity);
+  const rest = live.length - 1;
+
+  return (
+    <div style={{
+      margin: '12px 22px 0', padding: '11px 13px', borderRadius: 8,
+      background: meta.bg, border: '1px solid ' + meta.line,
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      animation: 'slideUp 0.25s',
+    }}>
+      <span style={{ color: meta.color, marginTop: 1, flexShrink: 0 }}>{I.warn}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: 'var(--ink)' }}>{top.title}</div>
+        {top.remediation?.length > 0 && (
+          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 3 }}>
+            {top.remediation[0]}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7, flexWrap: 'wrap' }}>
+          {top.url && (
+            <a href={top.url} target="_blank" rel="noreferrer" className="chip"
+               style={{ color: meta.color, borderColor: meta.line, textDecoration: 'none' }}>
+              Open link ↗
+            </a>
+          )}
+          <button className="chip" onClick={onOpenSetup}
+                  style={{ color: 'var(--ink-2)', cursor: 'pointer' }}>
+            {rest > 0 ? `Details · ${rest} more` : 'Details'}
+          </button>
+          <span className="mono" style={{ fontSize: 9, color: 'var(--ink-4)' }}>{top.code}</span>
+        </div>
+      </div>
+      <button className="btn btn-ghost" title="Dismiss until it happens again"
+              onClick={() => { _dismiss(top.code); setDismissed(_dismissedCodes()); }}
+              style={{ padding: '2px 6px', flexShrink: 0 }}>
+        {I.cancel}
+      </button>
+    </div>
+  );
+}
+
+// Full notice with every remediation step — the Setup tab's unit of display.
+function NoticeCard({ n }) {
+  const meta = sevMeta(n.severity);
+  return (
+    <div style={{
+      padding: '12px 14px', borderRadius: 8, marginBottom: 10,
+      background: meta.bg, border: '1px solid ' + meta.line,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: meta.color }}>{I.warn}</span>
+        <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>{n.title}</span>
+        <div style={{ flex: 1 }}/>
+        <span className="mono" style={{ fontSize: 9, color: meta.color }}>{meta.label}</span>
+      </div>
+      {n.detail && (
+        <pre className="mono" style={{
+          fontSize: 10, color: 'var(--ink-2)', marginTop: 8, whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word', lineHeight: 1.5,
+        }}>{n.detail}</pre>
+      )}
+      {n.remediation?.length > 0 && (
+        <ol style={{ margin: '9px 0 0', paddingLeft: 18, fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.7 }}>
+          {n.remediation.map((r, i) => <li key={i}>{r}</li>)}
+        </ol>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9 }}>
+        {n.url && (
+          <a href={n.url} target="_blank" rel="noreferrer" className="chip"
+             style={{ color: meta.color, borderColor: meta.line, textDecoration: 'none' }}>
+            {n.url.replace(/^https?:\/\//, '').slice(0, 46)} ↗
+          </a>
+        )}
+        <div style={{ flex: 1 }}/>
+        <span className="mono" style={{ fontSize: 9, color: 'var(--ink-4)' }}>
+          {n.subsystem ? n.subsystem + ' · ' : ''}{n.code}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // LEFT RAIL (simplified)
 // ═══════════════════════════════════════════════════════════════════
 function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
@@ -507,8 +639,19 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
   const vramTotal = system?.gpu?.vram_gb;
   const vramFree = system?.gpu?.vram_free_gb;
   const vramUsed = (vramTotal != null && vramFree != null) ? Math.max(0, vramTotal - vramFree) : null;
-  const gpuName = system?.gpu?.name || 'GPU';
-  const torchOk = system?.gpu?.ok ?? null;
+  // system.gpu is CUDA-only, so on Apple Silicon it reports a broken GPU on a
+  // machine where MPS works. system.accelerator is the MPS-aware probe.
+  const acc = system?.accelerator;
+  const gpuName = acc?.name || system?.gpu?.name || 'GPU';
+  const accelOk = acc ? acc.ok !== false : (system?.gpu?.ok ?? null);
+  // The rail's warning state now tracks real problems instead of "no CUDA",
+  // which never cleared and taught everyone to ignore it.
+  const problems = (system?.notices || []).filter(n => n.severity === 'error');
+  const warnings = (system?.notices || []).filter(n => n.severity === 'warn');
+  const issueCount = problems.length + warnings.length;
+  const sysHint = problems.length ? `${problems.length} problem${problems.length > 1 ? 's' : ''}`
+                : warnings.length ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`
+                : 'GPU · models · storage';
 
   return (
     <aside style={{
@@ -540,10 +683,11 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
 
         <div className="caps" style={{ margin: '20px 8px 8px' }}>System</div>
         <NavItem
-          item={{ id: 'system', label: 'System', hint: torchOk === false ? 'Torch broken!' : 'GPU · models · storage', ic: I.system }}
+          item={{ id: 'system', label: 'System', hint: sysHint, ic: I.system,
+                  badge: issueCount > 0 ? String(issueCount) : null }}
           active={view === 'system'}
           onClick={() => setView('system')}
-          warn={torchOk === false}
+          warn={problems.length > 0}
         />
       </div>
 
@@ -555,7 +699,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
               {gpuName.replace(/^NVIDIA /, '').slice(0, 18)}
             </span>
             <div style={{ flex: 1 }}/>
-            <span className="dot" style={{ background: torchOk === false ? 'var(--err)' : 'var(--accent)', boxShadow: torchOk === false ? 'none' : '0 0 6px var(--accent-glow)' }}/>
+            <span className="dot" style={{ background: accelOk === false ? 'var(--err)' : 'var(--accent)', boxShadow: accelOk === false ? 'none' : '0 0 6px var(--accent-glow)' }}/>
           </div>
           {vramTotal ? (
             <>
@@ -567,6 +711,12 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
                 <div style={{ height: '100%', width: `${Math.min(100, (vramUsed / vramTotal) * 100)}%`, background: 'var(--accent)', opacity: 0.7 }}/>
               </div>
             </>
+          ) : acc ? (
+            // No VRAM figure doesn't mean no accelerator — MPS exposes no
+            // total-memory API, and this card used to sit on "Loading…" forever.
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+              {acc.backend ? acc.backend + ' · ' : ''}{acc.ok ? 'ready' : 'CPU only'}
+            </div>
           ) : (
             <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>Loading…</div>
           )}
@@ -619,11 +769,15 @@ function NavItem({ item, active, onClick, warn }) {
 // ═══════════════════════════════════════════════════════════════════
 // TOP BAR
 // ═══════════════════════════════════════════════════════════════════
-function TopBar({ view, runningJob, awaitingReviewCount, onJumpToProcessing, onJumpToReview }) {
+function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProcessing, onJumpToReview, onOpenSetup }) {
   const TITLES = {
     home: 'Home', processing: 'Processing', review: 'Review · wizard pause',
     result: 'Result', history: 'History', batch: 'Batch queue', system: 'System',
+    voices: 'Voices', glossary: 'Glossary',
   };
+  const issues = notices || [];
+  const worst = issues.some(n => n.severity === 'error') ? 'error'
+              : issues.some(n => n.severity === 'warn') ? 'warn' : '';
   const overall = (runningJob?.progress ?? 0) / 100;
   const eta = runningJob?.eta_seconds ?? null;
 
@@ -655,6 +809,15 @@ function TopBar({ view, runningJob, awaitingReviewCount, onJumpToProcessing, onJ
           background: 'oklch(0.78 0.15 60 / 0.1)', cursor: 'pointer',
         }}>
           {I.review} {awaitingReviewCount} awaiting review
+        </button>
+      )}
+
+      {worst && view !== 'system' && (
+        <button onClick={onOpenSetup} className="chip" style={{
+          color: sevMeta(worst).color, borderColor: sevMeta(worst).line,
+          background: sevMeta(worst).bg, cursor: 'pointer',
+        }}>
+          {I.warn} {issues.length} setup {issues.length === 1 ? 'issue' : 'issues'}
         </button>
       )}
     </div>
@@ -1465,9 +1628,426 @@ function BatchSource({ files, setFiles, urls, setUrls }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// STAGE PANEL — per-stage state, artifacts, timings and retry
+// ═══════════════════════════════════════════════════════════════════
+// Mirrors GET /api/dub/{id}/stages. Every stage the backend checkpoints
+// shows up here with what it produced, how long it took, what it cost in
+// CPU/GPU, and a Retry control that re-runs *only* that stage onward.
+const STAGE_STATE_META = {
+  done:    { color: 'var(--accent)', label: 'done' },
+  stale:   { color: 'var(--warn)',   label: 'stale' },
+  failed:  { color: 'var(--err)',    label: 'failed' },
+  running: { color: 'var(--accent)', label: 'running' },
+  pending: { color: 'var(--ink-4)',  label: 'pending' },
+};
+
+const fmtDur = (s) => {
+  if (s === null || s === undefined) return '—';
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s % 60).toString().padStart(2, '0')}s`;
+};
+
+// Compact "what did this stage cost" line. Peaks matter more than averages
+// here — a stage that pins the GPU for 3 of its 40 seconds is a very
+// different problem from one that holds it the whole time, and seeing both
+// numbers side by side is what makes that visible.
+const resSummary = (r) => {
+  if (!r) return [];
+  const out = [];
+  if (r.cpu_proc_pct_avg !== undefined)
+    out.push({ k: 'cpu', v: `${Math.round(r.cpu_proc_pct_avg)}% avg · ${Math.round(r.cpu_proc_pct_peak)}% peak` });
+  if (r.gpu_util_pct_avg !== undefined)
+    out.push({ k: 'gpu', v: `${Math.round(r.gpu_util_pct_avg)}% avg · ${Math.round(r.gpu_util_pct_peak)}% peak` });
+  if (r.gpu_mem_mb_peak !== undefined) {
+    const tot = r.gpu_mem_total_mb;
+    out.push({ k: 'vram', v: `${(r.gpu_mem_mb_peak / 1024).toFixed(1)} GB${tot ? ` / ${(tot / 1024).toFixed(0)} GB` : ''} peak` });
+  }
+  if (r.rss_mb_peak !== undefined)
+    out.push({ k: 'ram', v: `${(r.rss_mb_peak / 1024).toFixed(1)} GB peak` });
+  return out;
+};
+
+function StageDot({ state }) {
+  const meta = STAGE_STATE_META[state] || STAGE_STATE_META.pending;
+  return (
+    <span
+      className="dot"
+      style={{
+        background: meta.color,
+        boxShadow: state === 'running' ? `0 0 8px ${meta.color}` : 'none',
+        animation: state === 'running' ? 'pulse 1.2s ease-in-out infinite' : 'none',
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+// Horizontal breakdown of where wall-clock time actually went. Stages with
+// no recorded duration are skipped rather than drawn as slivers.
+function StageTimeline({ stages, total }) {
+  const timed = stages.filter(s => s.duration_sec > 0);
+  if (!total || timed.length === 0) return null;
+  // Trust the summed durations over the reported total: rounding on the
+  // server can otherwise push a single short stage past 100%.
+  const sum = timed.reduce((a, s) => a + s.duration_sec, 0);
+  const denom = Math.max(sum, total);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-3)' }}>
+        {timed.map((s, i) => (
+          <div
+            key={s.id}
+            title={`${s.label}: ${fmtDur(s.duration_sec)} (${Math.round(s.duration_sec / denom * 100)}%)`}
+            style={{
+              width: `${(s.duration_sec / denom) * 100}%`,
+              background: i % 2 ? 'var(--accent)' : 'var(--accent-glow)',
+              borderRight: '1px solid var(--bg-1)',
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 6 }}>
+        {timed.map(s => (
+          <span key={s.id} className="mono" style={{ color: 'var(--ink-3)', fontSize: 10 }}>
+            {s.label} {Math.round(s.duration_sec / denom * 100)}%
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RetryOption({ opt, value, onChange, models, voicePresets }) {
+  const common = { fontSize: 12 };
+  let control;
+  if (opt.type === 'bool') {
+    control = (
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={!!value}
+          onChange={e => onChange(opt.key, e.target.checked)}
+          style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
+        />
+        <span style={{ color: 'var(--ink-2)', ...common }}>{opt.label}</span>
+      </label>
+    );
+  } else if (opt.type === 'select' || opt.type === 'model' || opt.type === 'voice') {
+    // 'model' and 'voice' are 'select' whose choices come from live server
+    // state rather than being hard-coded in the stage definition.
+    const choices = opt.type === 'model' ? models
+      : opt.type === 'voice' ? voicePresets.map(p => p.id)
+      : (opt.choices || []);
+    control = (
+      <div>
+        <div className="caps" style={{ marginBottom: 4 }}>{opt.label}</div>
+        <select
+          className="field"
+          value={value === undefined ? '' : value}
+          onChange={e => onChange(opt.key, e.target.value || undefined)}
+          style={{ ...common, minWidth: 160 }}
+        >
+          <option value="">— unchanged —</option>
+          {choices.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+    );
+  } else {
+    control = (
+      <div>
+        <div className="caps" style={{ marginBottom: 4 }}>{opt.label}</div>
+        <input
+          className="field"
+          value={value === undefined ? '' : value}
+          placeholder="unchanged"
+          onChange={e => onChange(opt.key, e.target.value || undefined)}
+          style={{ ...common, minWidth: 200 }}
+        />
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {control}
+      {opt.hint && (
+        <div style={{ fontSize: 10.5, color: 'var(--ink-3)', maxWidth: 260, lineHeight: 1.4 }}>
+          {opt.hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StageRow({ stage, allStages, jobId, models, voicePresets, onRetried }) {
+  const [open, setOpen] = useState(false);
+  const [opts, setOpts] = useState({});
+  const [stopAfter, setStopAfter] = useState('');
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState('');
+  const meta = STAGE_STATE_META[stage.state] || STAGE_STATE_META.pending;
+  const res = resSummary(stage.resources);
+  // `notices` lives inside detail too; it renders as its own block below, so
+  // keep it out of the k=v line where it would print as [object Object].
+  const detailPairs = Object.entries(stage.detail || {}).filter(([k]) => k !== 'notices');
+
+  const setOpt = (k, v) => setOpts(o => {
+    const next = { ...o };
+    if (v === undefined || v === '') delete next[k]; else next[k] = v;
+    return next;
+  });
+
+  const submit = async () => {
+    setSending(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('overrides', JSON.stringify(opts));
+      if (stopAfter) fd.append('stop_after', stopAfter);
+      const r = await fetch(`/api/dub/${jobId}/retry_stage/${stage.id}`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); }
+      else { setOpen(false); setOpts({}); setStopAfter(''); onRetried && onRetried(); }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Stopping "after" only makes sense at or beyond this stage.
+  const laterStages = allStages.filter(s => s.index >= stage.index);
+
+  return (
+    <div style={{
+      borderTop: '1px solid var(--line)',
+      padding: '10px 0',
+      opacity: stage.state === 'pending' ? 0.55 : 1,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <StageDot state={stage.state}/>
+        <div style={{ minWidth: 96, fontWeight: 500 }}>{stage.label}</div>
+        <div className="mono" style={{ color: meta.color, minWidth: 58, fontSize: 10.5 }}>
+          {meta.label}
+        </div>
+        {stage.degraded && (
+          <span className="mono" title="Finished, but not the way you'd expect"
+                style={{ fontSize: 10, color: 'var(--warn)' }}>⚠ degraded</span>
+        )}
+        <div className="mono" style={{ minWidth: 62, color: 'var(--ink-2)' }}>
+          {fmtDur(stage.duration_sec)}
+        </div>
+        {stage.attempt > 1 && (
+          <span className="chip" style={{ fontSize: 10, padding: '1px 6px' }}>
+            attempt {stage.attempt}
+          </span>
+        )}
+        <div style={{ flex: 1 }}/>
+        {stage.can_retry && (
+          <button
+            className={'btn btn-ghost'}
+            style={{ padding: '4px 9px', fontSize: 11.5 }}
+            onClick={() => setOpen(o => !o)}
+          >
+            {open ? 'Cancel' : (stage.state === 'failed' ? 'Retry stage' : 'Re-run')}
+          </button>
+        )}
+      </div>
+
+      {/* Resource + artifact strip */}
+      {(res.length > 0 || stage.artifacts.length > 0 || stage.error) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, paddingLeft: 16, alignItems: 'center' }}>
+          {res.map(r => (
+            <span key={r.k} className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+              <span style={{ color: 'var(--ink-4)' }}>{r.k}</span> {r.v}
+            </span>
+          ))}
+          {stage.artifacts.map(a => (
+            a.url ? (
+              <a key={a.label} href={a.url} target="_blank" rel="noreferrer" className="chip"
+                 style={{ fontSize: 10, padding: '1px 7px', textDecoration: 'none' }}>
+                {a.name}{a.is_dir ? ` · ${a.file_count} files` : ''}
+                {a.size_mb !== null ? ` · ${a.size_mb} MB` : ''}
+              </a>
+            ) : (
+              <span key={a.label} className="chip" style={{ fontSize: 10, padding: '1px 7px', opacity: 0.6 }}>
+                {a.name}{a.exists ? '' : ' · missing'}
+              </span>
+            )
+          ))}
+        </div>
+      )}
+      {detailPairs.length > 0 && (
+        <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginTop: 4, paddingLeft: 16 }}>
+          {detailPairs.map(([k, v]) => `${k}=${v}`).join('  ')}
+        </div>
+      )}
+      {/* Degraded: the stage succeeded but not the way the user assumes.
+          Sits above the error box so "done ⚠" reads top-down. */}
+      {(stage.notices || []).map(n => (
+        <div key={n.code} style={{ marginTop: 6, marginLeft: 16, padding: '7px 9px', borderRadius: 5,
+                      background: sevMeta(n.severity).bg,
+                      border: '1px solid ' + sevMeta(n.severity).line,
+                      fontSize: 11, lineHeight: 1.5 }}>
+          <div style={{ color: sevMeta(n.severity).color }}>{n.title}</div>
+          {n.remediation?.length > 0 && (
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 3 }}>
+              {n.remediation[0]}
+            </div>
+          )}
+          {n.url && (
+            <a href={n.url} target="_blank" rel="noreferrer" className="mono"
+               style={{ fontSize: 10, color: sevMeta(n.severity).color, marginTop: 3, display: 'inline-block' }}>
+              {n.url.replace(/^https?:\/\//, '')} ↗
+            </a>
+          )}
+        </div>
+      ))}
+      {stage.error && (
+        <div style={{ marginTop: 6, marginLeft: 16, padding: '6px 8px', borderRadius: 5,
+                      background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)',
+                      color: 'var(--err)', fontSize: 11, lineHeight: 1.45 }}>
+          {stage.error}
+        </div>
+      )}
+
+      {/* Retry form */}
+      {open && (
+        <div style={{
+          marginTop: 10, marginLeft: 16, padding: 12,
+          background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 8,
+          animation: 'slideUp 0.15s ease-out',
+        }}>
+          <div className="caps" style={{ marginBottom: 8 }}>
+            Re-run from “{stage.label}”
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 12, lineHeight: 1.5 }}>
+            Loads the checkpoint from the previous stage and runs forward.
+            Everything before {stage.label.toLowerCase()} is reused as-is.
+          </div>
+          {stage.options.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 12 }}>
+              {stage.options.map(o => (
+                <RetryOption key={o.key} opt={o} value={opts[o.key]} onChange={setOpt}
+                             models={models} voicePresets={voicePresets}/>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div className="caps" style={{ marginBottom: 4 }}>Stop after</div>
+              <select className="field" value={stopAfter} onChange={e => setStopAfter(e.target.value)}
+                      style={{ fontSize: 12, minWidth: 150 }}>
+                <option value="">Run to the end</option>
+                {laterStages.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+              </select>
+            </div>
+            <button className="btn btn-primary" disabled={sending} onClick={submit}>
+              {sending ? 'Queueing…' : 'Run'}
+            </button>
+          </div>
+          {err && (
+            <div style={{ marginTop: 8, color: 'var(--err)', fontSize: 11.5 }}>{err}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StagePanel({ jobId, system, voicePresets, onChanged, defaultOpen = true }) {
+  const [data, setData] = useState(null);
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [loadErr, setLoadErr] = useState('');
+
+  const load = React.useCallback(async () => {
+    if (!jobId) return;
+    try {
+      const r = await fetch(`/api/dub/${jobId}/stages`);
+      if (!r.ok) { setLoadErr(`HTTP ${r.status}`); return; }
+      setData(await r.json());
+      setLoadErr('');
+    } catch (e) { setLoadErr(String(e)); }
+  }, [jobId]);
+
+  // Poll fast while the pipeline owns the job, slowly once it's at rest —
+  // this panel is open on the Result/History screens too, where nothing
+  // changes until the user asks for a retry.
+  useEffect(() => {
+    if (!expanded) return;
+    load();
+    const t = setInterval(load, data && data.busy ? 2000 : 10000);
+    return () => clearInterval(t);
+  }, [load, expanded, data && data.busy]);
+
+  const models = React.useMemo(() => {
+    if (!system) return [];
+    const ollama = (system.ollama && system.ollama.models) || [];
+    const lms = (system.lm_studio && system.lm_studio.models) || [];
+    return Array.from(new Set([...ollama, ...lms]));
+  }, [system]);
+
+  if (!jobId) return null;
+
+  return (
+    <div className="panel" style={{ padding: 16, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+           onClick={() => setExpanded(e => !e)}>
+        <div className="caps">Pipeline stages</div>
+        <div style={{ flex: 1 }}/>
+        {data && (
+          <React.Fragment>
+            <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10.5 }}>
+              total {fmtDur(data.total_duration_sec)}
+            </span>
+            <span className="mono" style={{ color: 'var(--ink-4)', fontSize: 10.5 }}>
+              gpu probe: {data.gpu_backend || 'none'}
+            </span>
+          </React.Fragment>
+        )}
+        <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+      </div>
+
+      {expanded && !data && (
+        <div style={{ color: 'var(--ink-3)', marginTop: 12, fontSize: 12 }}>
+          {loadErr ? `Could not load stages — ${loadErr}` : 'Loading stages…'}
+        </div>
+      )}
+
+      {expanded && data && (
+        <div style={{ marginTop: 4 }}>
+          <StageTimeline stages={data.stages} total={data.total_duration_sec}/>
+          {data.busy && (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--warn)' }}>
+              Job is {data.job_status} — cancel it to re-run a stage.
+            </div>
+          )}
+          <div style={{ marginTop: 8 }}>
+            {data.stages.map(s => (
+              <StageRow
+                key={s.id} stage={s} allStages={data.stages} jobId={jobId}
+                models={models} voicePresets={voicePresets || []}
+                onRetried={() => { load(); onChanged && onChanged(); }}
+              />
+            ))}
+          </div>
+          {data.stages.some(s => s.state === 'stale') && (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--warn)', lineHeight: 1.5 }}>
+              Stages marked <strong>stale</strong> ran before an earlier stage was
+              re-done — their output no longer reflects the current input. Re-run
+              them (or any stage above) to refresh.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // PROCESSING VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
-function ProcessingView({ runningJob, sphereOn, onJobCancelled, onSwitchToHome }) {
+function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCancelled, onSwitchToHome, onRefresh }) {
   if (!runningJob) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 40, background: 'var(--bg)' }}>
@@ -1480,10 +2060,29 @@ function ProcessingView({ runningJob, sphereOn, onJobCancelled, onSwitchToHome }
     );
   }
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 24 }}>Processing: {runningJob.source_label || runningJob.id}</div>
-      <div style={{ marginLeft: 20 }}><StatusBadge status={runningJob.status}/></div>
-      <div style={{ marginLeft: 20, width: 200 }}><LongProgress value={(runningJob.progress || 0) / 100}/></div>
+    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+          <div className="serif" style={{ fontSize: 24 }}>
+            Processing: {runningJob.source_label || runningJob.id}
+          </div>
+          <StatusBadge status={runningJob.status}/>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <LongProgress value={(runningJob.progress || 0) / 100}/>
+          </div>
+        </div>
+        {runningJob.step_detail && (
+          <div className="mono" style={{ color: 'var(--ink-3)' }}>{runningJob.step_detail}</div>
+        )}
+        {runningJob.error && (
+          <div style={{ padding: '10px 12px', borderRadius: 6, color: 'var(--err)', fontSize: 12,
+                        background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)' }}>
+            {runningJob.error}
+          </div>
+        )}
+        <StagePanel jobId={runningJob.id} system={system} voicePresets={voicePresets}
+                    onChanged={onRefresh}/>
+      </div>
     </div>
   );
 }
@@ -1516,7 +2115,7 @@ function ReviewView({ jobs, selectedJobId, voicePresets, onContinued, onCancel, 
 // ═══════════════════════════════════════════════════════════════════
 // RESULT VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
-function ResultView({ jobs, selectedJobId, voicePresets, onPickJob, onSwitchToHome, onSwitchToHistory }) {
+function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPickJob, onSwitchToHome, onSwitchToHistory }) {
   const completedJobs = jobs.filter(j => j.status === 'complete').sort((a, b) => (b.completed_at || b.created || 0) - (a.completed_at || a.created || 0));
   const job = selectedJobId ? jobs.find(j => j.id === selectedJobId) : completedJobs[0];
   
@@ -1532,12 +2131,21 @@ function ResultView({ jobs, selectedJobId, voicePresets, onPickJob, onSwitchToHo
     );
   }
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 24, marginBottom: 20 }}>{job.source_label || job.id}</div>
-      <video src={`/outputs/${job.id}/dubbed_video.mp4`} controls style={{ maxWidth: '80%', maxHeight: '60vh' }}/>
-      <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
-        <a className="btn btn-primary" href={`/outputs/${job.id}/dubbed_video.mp4`} download>Download MP4</a>
-        <button className="btn" onClick={onSwitchToHistory}>Back to History</button>
+    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', gap: 20 }}>
+        <div className="serif" style={{ fontSize: 24 }}>{job.source_label || job.id}</div>
+        <video src={`/outputs/${job.id}/dubbed_video.mp4`} controls
+               style={{ maxWidth: '100%', maxHeight: '55vh' }}/>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <a className="btn btn-primary" href={`/outputs/${job.id}/dubbed_video.mp4`} download>Download MP4</a>
+          <button className="btn" onClick={onSwitchToHistory}>Back to History</button>
+        </div>
+        {/* Stages stay available after completion: this is where you re-run
+            just the translation with a better model, or re-synthesize a
+            voice, without paying for transcription again. */}
+        <StagePanel jobId={job.id} system={system} voicePresets={voicePresets}
+                    onChanged={onRefresh} defaultOpen={false}/>
       </div>
     </div>
   );
@@ -1546,17 +2154,38 @@ function ResultView({ jobs, selectedJobId, voicePresets, onPickJob, onSwitchToHo
 // ═══════════════════════════════════════════════════════════════════
 // HISTORY VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
-function HistoryView({ jobs, onJumpProcessing, onJumpReview, onJumpResult, onRefresh }) {
+function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpReview, onJumpResult, onRefresh }) {
+  // Which job's stage breakdown is expanded. Errored jobs are the main
+  // reason to open this — the panel says which stage died and offers a
+  // retry from exactly there.
+  const [openId, setOpenId] = useState(null);
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
+    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
       <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>History · {jobs.length} jobs</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {jobs.slice(0, 20).map(j => (
-          <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 10, background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
-            <StatusBadge status={j.status}/>
-            <div style={{ flex: 1 }}>{j.source_label || j.source || j.id}</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{j.target_lang}</div>
-            {j.status === 'complete' && <button className="btn" onClick={() => onJumpResult(j.id)}>View</button>}
+          <div key={j.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 10 }}>
+              <StatusBadge status={j.status}/>
+              <div style={{ flex: 1 }}>{j.source_label || j.source || j.id}</div>
+              {j.failed_stage && (
+                <span className="mono" style={{ fontSize: 10.5, color: 'var(--err)' }}>
+                  failed at {j.failed_stage}
+                </span>
+              )}
+              <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{j.target_lang}</div>
+              <button className="btn btn-ghost" style={{ padding: '4px 9px', fontSize: 11.5 }}
+                      onClick={() => setOpenId(openId === j.id ? null : j.id)}>
+                {openId === j.id ? 'Hide stages' : 'Stages'}
+              </button>
+              {j.status === 'complete' && <button className="btn" onClick={() => onJumpResult(j.id)}>View</button>}
+            </div>
+            {openId === j.id && (
+              <div style={{ padding: '0 10px 10px' }}>
+                <StagePanel jobId={j.id} system={system} voicePresets={voicePresets}
+                            onChanged={onRefresh}/>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1580,10 +2209,247 @@ function BatchView({ jobs, onRefresh, onJumpProcessing, onJumpResult, onJumpHome
 // ═══════════════════════════════════════════════════════════════════
 // SYSTEM VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
+// Subsystem pass/fail list. `ok:false` at severity "warn" is amber, not red —
+// no diarization is a real loss but still produces a watchable dub, and
+// colouring it like a missing ffmpeg would flatten the distinction.
+function CheckList({ checks }) {
+  if (!checks?.length) return (
+    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 8 }}>
+      No checks reported.
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 5 }}>
+      {checks.map(c => {
+        const color = c.ok ? 'var(--accent)'
+                    : (c.severity === 'warn' ? 'var(--warn)' : 'var(--err)');
+        return (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 11.5 }}>
+            <span style={{ color, width: 12, flexShrink: 0 }}>{c.ok ? '✓' : '✕'}</span>
+            <span style={{ color: 'var(--ink)', minWidth: 150 }}>{c.label}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)',
+                                            overflow: 'hidden', textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap' }}>
+              {c.detail || c.hint || ''}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SetupTab({ system, onRefreshSystem }) {
+  const [running, setRunning] = useState(false);
+  const [deep, setDeep] = useState(null);
+  const [err, setErr] = useState('');
+  const [token, setToken] = useState('');
+  const [savedToken, setSavedToken] = useState('');
+
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json())
+      .then(d => setSavedToken(d.hf_token || ''))
+      .catch(() => {});
+  }, []);
+
+  // The only network probe in the app. Explicit button, never automatic: a
+  // local-first tool shouldn't phone home on launch, and it has to work offline.
+  const runChecks = async () => {
+    setRunning(true); setErr('');
+    try {
+      const fd = new FormData();
+      const r = await fetch('/api/diagnostics/run', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) setErr(d.error || 'Check failed');
+      else { setDeep(d); _undismissAll(); onRefreshSystem && onRefreshSystem(); }
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setRunning(false); }
+  };
+
+  const saveToken = async () => {
+    setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('body', JSON.stringify({ hf_token: token.trim() }));
+      const r = await fetch('/api/config', { method: 'PATCH', body: fd });
+      const d = await r.json();
+      if (d.error) { setErr(d.error); return; }
+      setSavedToken(d.config?.hf_token || '');
+      setToken('');
+      await runChecks();
+    } catch (e) { setErr(String(e.message || e)); }
+  };
+
+  const notices = deep?.notices || system?.notices || [];
+  const checks = deep?.checks || system?.checks || [];
+  const ranAt = deep?.ran_at || system?.diagnostics_ran_at;
+
+  return (
+    <div style={{ maxWidth: 860 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <button className="btn btn-primary" onClick={runChecks} disabled={running}>
+          {running ? 'Checking…' : 'Run checks'}
+        </button>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>
+          Contacts huggingface.co and your translation backend
+          {ranAt ? ` · last run ${fmtAge(ranAt)}` : ' · never run'}
+        </span>
+        <div style={{ flex: 1 }}/>
+        <button className="btn btn-ghost" onClick={() => { _undismissAll(); onRefreshSystem && onRefreshSystem(); }}>
+          Un-dismiss all
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ padding: '9px 12px', borderRadius: 6, marginBottom: 14,
+                      background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)',
+                      color: 'var(--err)', fontSize: 11.5 }}>{err}</div>
+      )}
+
+      {notices.length === 0 ? (
+        <div style={{ padding: '14px 16px', borderRadius: 8, marginBottom: 18,
+                      background: 'var(--accent-dim)', border: '1px solid var(--line-2)',
+                      fontSize: 12.5, color: 'var(--ink)' }}>
+          ✓ Nothing needs attention.
+        </div>
+      ) : notices.map(n => <NoticeCard key={n.code} n={n}/>)}
+
+      <div style={{ padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                    borderRadius: 8, marginTop: 18 }}>
+        <div className="caps">Hugging Face token</div>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.6 }}>
+          Needed for speaker diarization. Read-scope is enough. Stored in
+          config-user.json and never sent back to this page in full.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+          <input className="field" type="password" placeholder={savedToken ? `saved: ${savedToken}` : 'hf_…'}
+                 value={token} onChange={e => setToken(e.target.value)}
+                 style={{ flex: 1, maxWidth: 340 }}/>
+          <button className="btn" onClick={saveToken} disabled={!token.trim()}>Save &amp; check</button>
+          <a href="https://hf.co/settings/tokens" target="_blank" rel="noreferrer"
+             className="chip" style={{ textDecoration: 'none', color: 'var(--ink-2)' }}>
+            Get a token ↗
+          </a>
+        </div>
+      </div>
+
+      <div style={{ padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                    borderRadius: 8, marginTop: 14 }}>
+        <div className="caps">Subsystems</div>
+        <CheckList checks={checks}/>
+      </div>
+    </div>
+  );
+}
+
+function LogsTab() {
+  const [entries, setEntries] = useState([]);
+  const [level, setLevel] = useState(_lsGet('log_level', ''));
+  const [live, setLive] = useState(true);
+  const [meta, setMeta] = useState({});
+  const boxRef = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/logs?limit=500&level=${encodeURIComponent(level)}`);
+      const d = await r.json();
+      setEntries(d.entries || []);
+      setMeta({ dropped: d.dropped, capacity: d.capacity });
+    } catch (_) {}
+  }, [level]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, [live, load]);
+  useEffect(() => {
+    if (live && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+  }, [entries, live]);
+
+  const levelColor = (lv) => lv === 'ERROR' || lv === 'CRITICAL' ? 'var(--err)'
+                           : lv === 'WARNING' ? 'var(--warn)'
+                           : lv === 'DEBUG' ? 'var(--ink-4)' : 'var(--ink-3)';
+
+  return (
+    <div style={{ maxWidth: 1100 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        {['', 'INFO', 'WARNING', 'ERROR'].map(lv => (
+          <button key={lv || 'all'} className={'tab' + (level === lv ? ' active' : '')}
+                  onClick={() => { setLevel(lv); _lsSet('log_level', lv); }}>
+            {lv ? lv.toLowerCase() : 'all'}
+          </button>
+        ))}
+        <div style={{ flex: 1 }}/>
+        <label className="mono" style={{ fontSize: 10.5, color: 'var(--ink-2)', display: 'flex',
+                                         alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="checkbox" checked={live} onChange={e => setLive(e.target.checked)}/> live
+        </label>
+        <button className="btn btn-ghost" onClick={load}>{I.refresh} Refresh</button>
+        <button className="btn btn-ghost" onClick={() => {
+          const text = entries.map(e => `${fmtClock(e.ts)} ${e.level} ${e.logger} ${e.message}`).join('\n');
+          navigator.clipboard?.writeText(text);
+        }}>{I.copy} Copy</button>
+      </div>
+
+      <div ref={boxRef} className="scroll" style={{
+        height: 'calc(100vh - 260px)', overflow: 'auto', padding: 12,
+        background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 8,
+      }}>
+        {entries.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)' }}>No log lines yet.</div>
+        ) : entries.map(e => (
+          <div key={e.seq} className="mono" style={{
+            fontSize: 10.5, lineHeight: 1.55, display: 'flex', gap: 8,
+            padding: '1px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            <span style={{ color: 'var(--ink-4)', flexShrink: 0 }}>{fmtClock(e.ts)}</span>
+            <span style={{ color: levelColor(e.level), flexShrink: 0, width: 54 }}>{e.level}</span>
+            <span style={{ color: 'var(--ink-4)', flexShrink: 0, width: 118, overflow: 'hidden',
+                           textOverflow: 'ellipsis' }}>{e.logger.replace(/^tachidubb\./, '')}</span>
+            <span style={{ color: 'var(--ink-2)', flex: 1 }}>{e.message}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)', marginTop: 6 }}>
+        in-memory ring · {entries.length} shown · capacity {meta.capacity ?? '—'}
+        {meta.dropped ? ` · ${meta.dropped} older lines evicted` : ''}
+        {' · third-party stdout/stderr included · secrets redacted'}
+      </div>
+    </div>
+  );
+}
+
 function SystemView({ system, onRefreshSystem }) {
+  const [tab, setTab] = useState(_lsGet('system_tab', 'overview'));
+  const pick = (t) => { setTab(t); _lsSet('system_tab', t); };
+  const issues = system?.notices || [];
+  const problems = issues.filter(n => n.severity === 'error').length;
+
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>System</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 18 }}>
+        <div className="serif" style={{ fontSize: 32 }}>System</div>
+        <span className="chip" style={{
+          color: issues.length === 0 ? 'var(--accent)' : sevMeta(problems ? 'error' : 'warn').color,
+          borderColor: issues.length === 0 ? 'var(--line-2)' : sevMeta(problems ? 'error' : 'warn').line,
+        }}>
+          {issues.length === 0 ? 'Ready' : `${issues.length} setup ${issues.length === 1 ? 'issue' : 'issues'}`}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 22 }}>
+        {[['overview', 'Overview'], ['setup', 'Setup'], ['logs', 'Logs']].map(([id, label]) => (
+          <button key={id} className={'tab' + (tab === id ? ' active' : '')} onClick={() => pick(id)}>
+            {label}{id === 'setup' && issues.length > 0 ? ` · ${issues.length}` : ''}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'setup' && <SetupTab system={system} onRefreshSystem={onRefreshSystem}/>}
+      {tab === 'logs' && <LogsTab/>}
+      {tab === 'overview' && (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
         <div style={{ padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 8 }}>
           <div className="caps">Translation Backend</div>
@@ -1608,14 +2474,59 @@ function SystemView({ system, onRefreshSystem }) {
           )}
         </div>
         <div style={{ padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 8 }}>
-          <div className="caps">GPU</div>
-          <div style={{ fontSize: 18, marginTop: 8 }}>{system?.gpu?.name || 'No GPU detected'}</div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>
-            {system?.gpu?.vram_gb ? `${system.gpu.vram_gb} GB VRAM` : 'CPU mode'}
+          <div className="caps">Accelerator</div>
+          {/* system.gpu only knows CUDA; system.accelerator also sees MPS, so
+              an Apple Silicon machine stops being reported as "No GPU". */}
+          <div style={{ fontSize: 18, marginTop: 8 }}>
+            {system?.accelerator?.name || system?.gpu?.name || 'No GPU detected'}
           </div>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>
+            {system?.accelerator?.vram_gb ? `${system.accelerator.vram_gb} GB VRAM · `
+              : (system?.gpu?.vram_gb ? `${system.gpu.vram_gb} GB VRAM · ` : '')}
+            {system?.accelerator?.backend
+              ? `${system.accelerator.backend} backend`
+              : (system?.accelerator ? 'CPU mode' : '')}
+            {system?.accelerator?.torch_version ? ` · torch ${system.accelerator.torch_version}` : ''}
+          </div>
+          {system?.accelerator?.torch_error && (
+            <div className="mono" style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 6 }}>
+              {system.accelerator.torch_error}
+            </div>
+          )}
+        </div>
+        {/* Live resource readout — the same probes that produce the
+            per-stage metrics, so "no GPU telemetry" is visible here
+            rather than silently showing up as blank stage stats. */}
+        <div style={{ padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 8 }}>
+          <div className="caps">Live utilization</div>
+          {system?.resources ? (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-2)', marginTop: 8, lineHeight: 1.8 }}>
+              <div>cpu · {system.resources.cpu_pct ?? '—'}% of {system.resources.cpu_cores ?? '?'} cores</div>
+              <div>ram · {system.resources.ram_used_gb ?? '—'} / {system.resources.ram_total_gb ?? '—'} GB
+                {system.resources.proc_rss_mb ? ` (server ${system.resources.proc_rss_mb} MB)` : ''}
+              </div>
+              {system.resources.gpu ? (
+                <div>
+                  gpu · {system.resources.gpu.util_pct !== undefined ? `${system.resources.gpu.util_pct}% util · ` : ''}
+                  {system.resources.gpu.mem_used_mb !== undefined
+                    ? `${(system.resources.gpu.mem_used_mb / 1024).toFixed(1)} GB used` : ''}
+                  {system.resources.gpu.mem_total_mb
+                    ? ` / ${(system.resources.gpu.mem_total_mb / 1024).toFixed(0)} GB` : ''}
+                </div>
+              ) : (
+                <div style={{ color: 'var(--ink-4)' }}>gpu · no telemetry</div>
+              )}
+              <div style={{ color: 'var(--ink-4)' }}>probe · {system.resources.gpu_backend || 'none'}</div>
+            </div>
+          ) : (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 8 }}>
+              psutil not installed — install it for CPU/RAM metrics
+            </div>
+          )}
         </div>
         <button className="btn" style={{ marginTop: 10 }} onClick={onRefreshSystem}>Refresh</button>
       </div>
+      )}
     </div>
   );
 }
@@ -1693,6 +2604,12 @@ function App() {
     fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || [])).catch(() => {});
   };
 
+  const refreshSystem = () =>
+    fetch('/api/system').then(r => r.json()).then(setSystem).catch(() => {});
+
+  // Every "Details" affordance lands on the same place: System → Setup.
+  const openSetup = () => { _lsSet('system_tab', 'setup'); setView('system'); };
+
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', background: 'var(--bg)' }}>
       <LeftRail
@@ -1707,9 +2624,16 @@ function App() {
           view={view}
           runningJob={runningJob}
           awaitingReviewCount={awaitingReviewCount}
+          notices={system?.notices}
           onJumpToProcessing={() => setView('processing')}
           onJumpToReview={() => setView('review')}
+          onOpenSetup={openSetup}
         />
+
+        {/* Above every view: a setup problem is worth interrupting whatever
+            the user came here to do, because it will otherwise show up as a
+            bad dub they can't explain. */}
+        <SetupBanner notices={system?.notices} onOpenSetup={openSetup}/>
 
         {view === 'home' && (
           <HomeView
@@ -1724,8 +2648,11 @@ function App() {
           <ProcessingView
             runningJob={runningJob}
             sphereOn={sphereOn}
+            system={system}
+            voicePresets={voicePresets}
             onJobCancelled={() => setView('history')}
             onSwitchToHome={() => setView('home')}
+            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
           />
         )}
 
@@ -1745,6 +2672,8 @@ function App() {
             jobs={jobs}
             selectedJobId={selectedResultJobId}
             voicePresets={voicePresets}
+            system={system}
+            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
             onPickJob={setSelectedResultJobId}
             onSwitchToHome={() => setView('home')}
             onSwitchToHistory={() => setView('history')}
@@ -1754,6 +2683,8 @@ function App() {
         {view === 'history' && (
           <HistoryView
             jobs={jobs}
+            system={system}
+            voicePresets={voicePresets}
             onJumpProcessing={() => setView('processing')}
             onJumpReview={(id) => { setSelectedReviewJobId(id); setView('review'); }}
             onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
@@ -1775,7 +2706,7 @@ function App() {
         {view === 'glossary' && <GlossaryEditor/>}
 
         {view === 'system' && (
-          <SystemView system={system} onRefreshSystem={() => fetch('/api/system').then(r => r.json()).then(setSystem)}/>
+          <SystemView system={system} onRefreshSystem={refreshSystem}/>
         )}
       </div>
 

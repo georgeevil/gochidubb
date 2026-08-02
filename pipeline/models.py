@@ -14,6 +14,10 @@ log = logging.getLogger("tachidubb.models")
 # ============================================================
 LM_STUDIO_URL = os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1")
 USE_LM_STUDIO = os.getenv("USE_LM_STUDIO", "1") == "1"
+# LM_STUDIO_URL may be written with or without the "/v1" suffix, so build the
+# endpoint from the normalized host root instead of concatenating onto it.
+# See pipeline/translator.py for why that mattered.
+from .translator import LM_STUDIO_MODELS_ENDPOINT  # noqa: E402
 
 # ============================================================
 # Dynamic Model Catalog from LM Studio
@@ -28,7 +32,7 @@ async def fetch_lm_studio_models() -> List[Dict[str, Any]]:
         import aiohttp
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{LM_STUDIO_URL}/models",
+                LM_STUDIO_MODELS_ENDPOINT,
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
@@ -364,7 +368,7 @@ async def check_translation_backend() -> Dict[str, Any]:
             import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{LM_STUDIO_URL}/models",
+                    LM_STUDIO_MODELS_ENDPOINT,
                     timeout=aiohttp.ClientTimeout(total=3)
                 ) as response:
                     if response.status == 200:

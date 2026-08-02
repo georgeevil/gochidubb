@@ -2,16 +2,73 @@
 
 Returns speaker turns [(start, end, speaker_id)] and per-speaker reference audio.
 Compatible with pyannote.audio 3.x and 4.x (API differences auto-handled).
+
+Every failure mode here is *soft*: diarization is optional, and losing it must
+never cost the caller a transcription they already paid for. The price of that
+is that a broken setup looks like a clean run, so each degradation also appends
+a structured notice (see pipeline/notices.py) to a caller-supplied list. The
+caller decides whether to show it; this module's job is to stop throwing the
+information away.
 """
 import logging
 import os
+import re
 
 import numpy as np
 import soundfile as sf
 
+from .notices import notice
+
 log = logging.getLogger("tachidubb.diarizer")
 
+# Snapshot at import for backwards compatibility. Prefer effective_hf_token(),
+# which also sees a token typed into the Settings UI after startup.
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+
+DIARIZATION_MODELS = (
+    "pyannote/speaker-diarization-3.1",
+    "pyannote/speaker-diarization-community-1",
+)
+
+
+def effective_hf_token() -> str:
+    """The token to actually use: environment first, then persisted config.
+
+    `HF_TOKEN` above is captured at import. `cfg.hf_token` (app/config.py) is
+    written by the Settings UI but was read by nothing, so a token entered in
+    the browser silently did nothing. Import cfg lazily — pipeline/ does not
+    otherwise depend on app/, and this must not become the reason the module
+    fails to import.
+    """
+    # Default to the import-time snapshot rather than "", so an env var that
+    # was never set still finds a token loaded from .env at startup.
+    token = os.environ.get("HF_TOKEN", HF_TOKEN).strip()
+    if token:
+        return token
+    try:
+        from app.config import cfg
+        return (cfg.hf_token or "").strip()
+    except Exception:
+        return ""
+
+
+def _hub_repo_from_error(err: BaseException) -> str:
+    """Which HF repo a download failure was really about.
+
+    pyannote's own message names it (`Could not download Model from
+    pyannote/segmentation-3.0`), but that goes to stdout via print(). The
+    raised HfHubHTTPError carries the same repo inside its URL, which is the
+    only machine-readable copy — and it is usually a *dependency* of the
+    pipeline the user asked for, not the pipeline itself, so it cannot be
+    hardcoded.
+    """
+    text = f"{type(err).__name__}: {err}"
+    m = re.search(
+        r"(?:huggingface\.co|hf\.co)/(?:api/models/)?"
+        r"([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)",
+        text,
+    )
+    return m.group(1) if m else ""
 
 REFERENCE_TARGET = 30.0   # aim for ~30 seconds of clean speech per speaker
 REFERENCE_MIN = 6.0
@@ -19,13 +76,31 @@ MIN_CHUNK = 1.5
 MAX_CHUNK = 12.0
 
 
-def _load_pipeline(token: str):
+def _load_pipeline(token: str, notices: list | None = None):
     """Load pyannote diarization pipeline. Uses the new token= kwarg
-    (pyannote.audio >= 3.0). `use_auth_token` was removed in 4.x."""
+    (pyannote.audio >= 3.0). `use_auth_token` was removed in 4.x.
+
+    Candidates are tried in quality order and the first one that loads wins.
+    Crucially, a *partial* failure — the preferred model is gated but a
+    fallback loads — is reported rather than swallowed: that is the case where
+    the run appears completely normal while quietly using a weaker model.
+    """
+    notices = notices if notices is not None else []
     try:
         from pyannote.audio import Pipeline
     except ImportError:
         log.warning("pyannote.audio not installed - diarization disabled")
+        notices.append(notice(
+            code="pyannote.not_installed",
+            severity="error",
+            subsystem="diarize",
+            title="Speaker diarization is unavailable",
+            detail="pyannote.audio is not installed, so every segment is "
+                   "attributed to a single speaker.",
+            remediation=["pip install pyannote.audio",
+                         "Restart TachiDUBB"],
+            url="https://github.com/pyannote/pyannote-audio",
+        ))
         return None
 
     if not token:
@@ -33,45 +108,133 @@ def _load_pipeline(token: str):
             "HF_TOKEN is empty. Diarization needs a Hugging Face token. "
             "Set it in .env as HF_TOKEN=hf_xxx and install python-dotenv."
         )
+        notices.append(notice(
+            code="pyannote.no_token",
+            severity="error",
+            subsystem="diarize",
+            title="No Hugging Face token — diarization is disabled",
+            detail="pyannote's models are gated, so downloading them needs a "
+                   "token. Without one every speaker is merged into one voice.",
+            remediation=[
+                "Create a read token at https://hf.co/settings/tokens",
+                "Accept the conditions at https://hf.co/pyannote/speaker-diarization-3.1",
+                "Put it in .env as HF_TOKEN=hf_… (or paste it in System → Setup)",
+            ],
+            url="https://hf.co/settings/tokens",
+        ))
         return None
 
-    models = [
-        "pyannote/speaker-diarization-3.1",
-        "pyannote/speaker-diarization-community-1",
-    ]
     errors = []
-    for model in models:
+    for model in DIARIZATION_MODELS:
         try:
             pipe = Pipeline.from_pretrained(model, token=token)
-            if pipe is not None:
-                log.info(f"Diarization pipeline loaded: {model}")
-                return pipe
+            if pipe is None:
+                # from_pretrained returns None instead of raising when the
+                # pipeline config itself is unreadable.
+                errors.append({"model": model, "repo": model,
+                               "error": "from_pretrained returned None"})
+                continue
+            log.info(f"Diarization pipeline loaded: {model}")
+            if errors:
+                _note_fallback(notices, used=model, errors=errors)
+            return pipe
         except Exception as e:
-            errors.append(f"  {model}: {type(e).__name__}: {e}")
+            errors.append({"model": model,
+                           "repo": _hub_repo_from_error(e) or model,
+                           "error": f"{type(e).__name__}: {e}"})
             continue
 
+    joined = "\n".join(f"  {e['model']}: {e['error']}" for e in errors)
     log.warning(
         "Could not load any diarization pipeline. Check that:\n"
         "  1) Your HF_TOKEN is valid: https://huggingface.co/settings/tokens\n"
         "  2) You accepted the model terms at:\n"
         "     - https://huggingface.co/pyannote/speaker-diarization-3.1\n"
         "     - https://huggingface.co/pyannote/speaker-diarization-community-1\n"
-        "Attempt errors:\n" + "\n".join(errors)
+        "Attempt errors:\n" + joined
     )
+    gated = next((e["repo"] for e in errors if e.get("repo")), "")
+    notices.append(notice(
+        code="pyannote.load_failed",
+        severity="error",
+        subsystem="diarize",
+        title="No diarization model could be loaded",
+        detail=f"All candidates failed, so all speech is treated as one "
+               f"speaker.\n{joined}",
+        remediation=[
+            "Run System → Setup → Run checks — it distinguishes a bad token "
+            "from unaccepted conditions from a network failure",
+            f"If access is the problem, accept the conditions at https://hf.co/{gated}"
+            if gated else "Accept the model conditions on huggingface.co",
+            "Or retry the Diarize stage with 'Skip diarization' to continue "
+            "the dub with a single voice",
+        ],
+        url=f"https://hf.co/{gated}" if gated else "https://hf.co/settings/tokens",
+    ))
     return None
+
+
+def _note_fallback(notices: list, used: str, errors: list) -> None:
+    """Record that diarization ran, but not on the model we wanted.
+
+    `pyannote/speaker-diarization-3.1` pulls in `pyannote/segmentation-3.0`,
+    and if either download fails, `community-1` loads happily instead — same
+    return value, quietly worse speaker separation.
+
+    Deliberately neutral about *why*. pyannote prints a "the repository is
+    private or gated" banner for **every** HfHubHTTPError
+    (`pyannote/audio/utils/hf_hub.py:91-104`), including a timeout, a 503 or a
+    rate limit — it is a guess printed as a diagnosis, and repeating it would
+    send users off to accept conditions they already accepted. We report what
+    is certain (the preferred model was unavailable, here is the raw error) and
+    point at the deep check, which asks the Hub directly and can tell the two
+    apart.
+    """
+    repo = next((e["repo"] for e in errors if e.get("repo")), "")
+    failed = ", ".join(e["model"] for e in errors)
+    log.warning(
+        f"[diarize] Fell back to {used} — {failed} unavailable. "
+        f"Run System → Setup → Run checks to see whether this is a permissions "
+        f"problem or a transient download failure."
+    )
+    notices.append(notice(
+        code="pyannote.fallback_model",
+        severity="warn",
+        subsystem="diarize",
+        title=f"Diarization used the fallback model {used.split('/')[-1]}",
+        detail=(f"{failed} could not be downloaded, so speakers were "
+                f"identified with {used} instead. Speaker separation may be "
+                f"less accurate.\n"
+                + "\n".join(f"  {e['model']}: {e['error']}" for e in errors)),
+        remediation=[
+            "Run System → Setup → Run checks — it asks Hugging Face whether "
+            "this is a permissions problem or just a failed download",
+            f"If access is fine, re-run the Diarize stage; the download is "
+            f"usually transient",
+        ],
+        url=f"https://hf.co/{repo}" if repo else f"https://hf.co/{used}",
+    ))
 
 
 def diarize_speakers(audio_path: str,
                      min_speakers: int | None = None,
                      max_speakers: int | None = None,
-                     hf_token: str = "") -> list[tuple]:
-    """Run diarization. Returns list of (start, end, speaker) tuples, or [] on failure."""
-    token = hf_token or HF_TOKEN
+                     hf_token: str = "",
+                     notices: list | None = None) -> list[tuple]:
+    """Run diarization. Returns list of (start, end, speaker) tuples, or [] on failure.
+
+    `notices` is an optional list to append setup notices to. Every failure
+    path here returns [] rather than raising, so this list is the only way a
+    caller can distinguish "one speaker" from "diarization is broken".
+    """
+    token = (hf_token or effective_hf_token()).strip()
+    notices = notices if notices is not None else []
     if not token:
         log.warning("HF_TOKEN not set - diarization skipped (set it in .env)")
+        _load_pipeline("", notices)   # emits pyannote.no_token
         return []
 
-    pipe = _load_pipeline(token)
+    pipe = _load_pipeline(token, notices)
     if pipe is None:
         return []
 
@@ -118,6 +281,17 @@ def diarize_speakers(audio_path: str,
             ann = diarization
         else:
             log.warning(f"Unknown diarization output type: {type(diarization)}")
+            notices.append(notice(
+                code="pyannote.unknown_output",
+                severity="error",
+                subsystem="diarize",
+                title="Diarization returned an unrecognized result",
+                detail=f"pyannote returned {type(diarization).__name__}, which "
+                       f"this version of TachiDUBB cannot read. All speech was "
+                       f"attributed to one speaker.",
+                remediation=["pip install -U pyannote.audio",
+                             "Report the type above if it persists"],
+            ))
             return []
 
         turns = [
@@ -129,11 +303,20 @@ def diarize_speakers(audio_path: str,
         return turns
     except Exception as e:
         log.warning(f"Diarization inference failed: {e}")
+        notices.append(notice(
+            code="pyannote.inference_failed",
+            severity="error",
+            subsystem="diarize",
+            title="Diarization crashed while analysing the audio",
+            detail=f"The model loaded but failed on this file, so all speech "
+                   f"was attributed to one speaker.\n{type(e).__name__}: {e}",
+            remediation=[
+                "Retry the Diarize stage",
+                "If it repeats, retry with 'Skip diarization' to continue the dub",
+            ],
+        ))
         return []
 
-    pipe = _load_pipeline(token)
-    if pipe is None:
-        return []
 
 def assign_speakers_to_segments(segments: list[dict], speaker_turns: list[tuple]) -> list[dict]:
     """Attach a 'speaker' field to each transcript segment by max temporal overlap."""
