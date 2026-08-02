@@ -49,6 +49,16 @@ def download_video(source: str, output_dir: str) -> str:
 
     # Local file
     if os.path.isfile(source):
+        _src_size = os.path.getsize(source)
+        _src_ext = os.path.splitext(source)[1].lower() or "(no ext)"
+        # Log the real on-disk format — ffmpeg/ffprobe are picky about input
+        # containers, and a common silent-failure cause is uploading an image
+        # (e.g. .webp/.jpg) or audio-only file that gets copied to
+        # source_video.mp4 and then fails downstream with no obvious reason.
+        log.info(
+            f"[download] Local file source: {source} "
+            f"(ext={_src_ext}, size={_src_size/1048576:.2f} MB)"
+        )
         if os.path.abspath(source) != os.path.abspath(output_path):
             shutil.copy2(source, output_path)
         log.info(f"Local file ready: {output_path}")

@@ -41,6 +41,7 @@ def _load_pipeline(token: str):
     ]
     errors = []
     for model in models:
+        log.debug(f"[diarize] loading pyannote pipeline: {model}")
         try:
             pipe = Pipeline.from_pretrained(model, token=token)
             if pipe is not None:
@@ -48,6 +49,10 @@ def _load_pipeline(token: str):
                 return pipe
         except Exception as e:
             errors.append(f"  {model}: {type(e).__name__}: {e}")
+            log.warning(
+                f"[diarize] failed to load {model}: {type(e).__name__}: {e} "
+                f"(trying next candidate)"
+            )
             continue
 
     log.warning(
@@ -71,6 +76,7 @@ def diarize_speakers(audio_path: str,
         log.warning("HF_TOKEN not set - diarization skipped (set it in .env)")
         return []
 
+    log.info(f"[diarize] starting on {audio_path}")
     pipe = _load_pipeline(token)
     if pipe is None:
         return []
@@ -126,14 +132,15 @@ def diarize_speakers(audio_path: str,
         ]
         log.info(f"Diarization: {len(turns)} turns, "
                  f"{len(set(s for _,_,s in turns))} speakers")
+        log.debug(
+            f"[diarize] turns: {[(round(t[0],2), round(t[1],2), t[2]) for t in turns[:10]]}"
+            f"{' ...' if len(turns) > 10 else ''}"
+        )
         return turns
     except Exception as e:
-        log.warning(f"Diarization inference failed: {e}")
+        log.warning(f"Diarization inference failed: {type(e).__name__}: {e}")
         return []
 
-    pipe = _load_pipeline(token)
-    if pipe is None:
-        return []
 
 def assign_speakers_to_segments(segments: list[dict], speaker_turns: list[tuple]) -> list[dict]:
     """Attach a 'speaker' field to each transcript segment by max temporal overlap."""

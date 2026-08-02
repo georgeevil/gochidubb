@@ -190,6 +190,19 @@ logging.basicConfig(
 )
 log = logging.getLogger("tachidubb.server")
 
+# Optional debug mode. Set TACHIDUBB_DEBUG=1 in .env or the environment to
+# surface DEBUG-level logs across the tachidubb.* and pipeline.* namespaces.
+# This is the fastest way to diagnose a pipeline run that breaks silently
+# (e.g. an unsupported source format like a .webp image, or an external API
+# that returns an error the code swallows): every external-API call below
+# logs its request URL, payload summary, response status, timing and error
+# detail at DEBUG. Without the flag only INFO+ is shown, so normal runs stay
+# quiet.
+if os.getenv("TACHIDUBB_DEBUG", "0") == "1":
+    for _debug_ns in ("tachidubb", "pipeline"):
+        logging.getLogger(_debug_ns).setLevel(logging.DEBUG)
+    log.info("[debug] TACHIDUBB_DEBUG=1 — DEBUG logging enabled for tachidubb.* and pipeline.*")
+
 
 # Silence extremely repetitive polling endpoints that flood the console
 # (UI polls /api/system and /api/job/<id> every few seconds, httpx logs
@@ -642,6 +655,92 @@ def _latest_checkpoint(job_id: str) -> Optional[dict]:
     return None
 
 
+# ─────────────────────────────────────────────────────────────
+# Modular pipeline step execution
+# ─────────────────────────────────────────────────────────────
+# These handlers allow running individual pipeline steps from checkpoints,
+# enabling retry/resume with different settings.
+
+async def _run_step_extract_audio(job_id: str, overrides: dict) -> dict:
+    """Re-extract audio from the source video."""
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "Job not found", "status": 404}
+    work = OUTPUT_DIR / job_id
+    video_path = job.get("source") or job.get("video_path", "")
+    if not video_path or not Path(video_path).exists():
+        return {"error": "Source video not found", "status": 404}
+    audio_16k = str(work / "audio_16k.wav")
+    try:
+        from pipeline.audio import extract_audio
+        extract_audio(video_path, audio_16k)
+        duration = get_duration(video_path)
+        job["duration"] = round(duration, 1)
+        job["audio_16k"] = audio_16k
+        save_job(job)
+        log.info(f"[step:{job_id}] extract_audio done: {audio_16k}")
+        return {"ok": True, "step": "extract_audio", "audio_path": audio_16k, "duration": duration}
+    except Exception as e:
+        log.error(f"[step:{job_id}] extract_audio failed: {e}")
+        return {"error": str(e), "status": 500}
+
+
+async def _run_step_transcribe(job_id: str, overrides: dict) -> dict:
+    """Re-run transcription from extracted audio."""
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "Job not found", "status": 404}
+    work = OUTPUT_DIR / job_id
+    audio_16k = job.get("audio_16k", str(work / "audio_16k.wav"))
+    if not Path(audio_16k).exists():
+        return {"error": "Audio file not found — run extract_audio first", "status": 404}
+    whisper_model = overrides.get("whisper_model", cfg.whisper_model)
+    source_lang = overrides.get("source_lang", job.get("source_lang", "auto"))
+    diarize = overrides.get("diarize", "true").lower() in ("true", "1", "yes")
+    try:
+        job["status"] = "transcribing"
+        job["step_detail"] = f"Transcribing with {whisper_model}..."
+        save_job(job)
+        segments, detected_lang = transcribe(audio_16k, source_lang, whisper_model)
+        effective_src = detected_lang if source_lang == "auto" else source_lang
+        speaker_turns = []
+        if diarize:
+            try:
+                from pipeline.diarizer import diarize_speakers
+                speaker_turns = diarize_speakers(audio_16k, token=os.getenv("HF_TOKEN", ""))
+            except Exception as e:
+                log.warning(f"[step:{job_id}] diarization failed: {e}")
+        cp_data = {
+            "video_path": job.get("video_path", ""),
+            "audio_16k": audio_16k,
+            "duration": job.get("duration", 0),
+            "effective_src": effective_src,
+            "target_lang": job.get("target_lang", "ru"),
+            "keep_bg": job.get("keep_bg", False),
+            "model": job.get("model", ""),
+            "context_hint": job.get("context_hint", ""),
+            "speaker_mode": "main" if not speaker_turns else "all",
+            "reference_audio": job.get("reference_audio", ""),
+            "voice_style": job.get("voice_style", ""),
+            "voice_preset": job.get("voice_preset", "auto"),
+            "tts_speed": job.get("tts_speed", "balanced"),
+            "segments": [
+                {"idx": i, "start": s["start"], "end": s["end"],
+                 "text": s["text"], "speaker": s.get("speaker", "SPEAKER_00")}
+                for i, s in enumerate(segments)
+            ],
+        }
+        _save_checkpoint(job_id, work, stage="transcription_done", data=cp_data)
+        job["status"] = "transcription_done"
+        job["step_detail"] = f"Transcribed {len(segments)} segments"
+        save_job(job)
+        return {"ok": True, "step": "transcribe", "segment_count": len(segments),
+                "detected_lang": detected_lang, "diarized": bool(speaker_turns)}
+    except Exception as e:
+        log.error(f"[step:{job_id}] transcribe failed: {e}")
+        return {"error": str(e), "status": 500}
+
+
 def get_tts_engine():
     """TTS engine factory. Priority: VoxCPM2 → F5-TTS → Edge-TTS.
 
@@ -995,14 +1094,46 @@ async def run_pipeline(
     try:
         # 1. Acquire video
         update(status="downloading", progress=2, step_detail="Getting video...")
+        log.info(f"[pipeline:{job_id}] stage=download source={source!r}")
         video_path = download_video(source, str(work))
         duration = get_duration(video_path)
+        # Duration is a leading signal for silent failures: a webp/still image
+        # or corrupt upload yields duration=0 and breaks every later stage
+        # (extract_audio → empty WAV → transcription "no speech"). Log it at
+        # INFO so it's visible even without TACHIDUBB_DEBUG.
+        log.info(
+            f"[pipeline:{job_id}] acquired video={video_path} duration={duration:.3f}s"
+        )
+        if duration <= 0:
+            log.warning(
+                f"[pipeline:{job_id}] duration is {duration}s — source may be a "
+                f"still image (webp/jpg/png) or unsupported/corrupt container. "
+                f"Audio extraction and transcription will likely fail."
+            )
         update(duration=round(duration, 1), progress=8)
 
         # 2. Extract audio
         update(status="extracting", progress=10, step_detail="Extracting audio tracks...")
+        log.info(f"[pipeline:{job_id}] stage=extract_audio video={video_path}")
         audio_16k = str(work / "audio_16k.wav")
         extract_audio(video_path, audio_16k)
+        # If the source had no audio stream (image/animated image), the WAV
+        # may be empty or ffmpeg may have errored inside _run. Surface the
+        # resulting file size so a zero-byte WAV is obvious.
+        try:
+            _audio_bytes = os.path.getsize(audio_16k)
+            log.info(
+                f"[pipeline:{job_id}] extracted audio={audio_16k} "
+                f"size={_audio_bytes} bytes"
+            )
+            if _audio_bytes < 1000:
+                log.warning(
+                    f"[pipeline:{job_id}] audio_16k.wav is only {_audio_bytes}B "
+                    f"— source likely had no audio stream (still image?). "
+                    f"Transcription will find no speech."
+                )
+        except OSError as e:
+            log.warning(f"[pipeline:{job_id}] audio_16k.wav missing after extract: {e}")
 
         # 2b. Optional denoise for noisy source audio.
         # BJJ/cooking/sports videos often have mat noise, background music,
@@ -1070,6 +1201,10 @@ async def run_pipeline(
         # forever. We spawn a watchdog that updates step_detail with elapsed
         # seconds so the user can see it's still alive.
         update(status="transcribing", progress=18, step_detail="Transcribing speech...")
+        log.info(
+            f"[pipeline:{job_id}] stage=transcribe model={whisper_model} "
+            f"src={source_lang} audio={audio_16k}"
+        )
         _t_trans_start = time.time()
         _trans_done_flag = {"done": False}
         async def _trans_watchdog():
@@ -1273,6 +1408,10 @@ async def run_pipeline(
 
         # 5. Translate
         update(status="translating", progress=45, step_detail=f"Translating to {target_lang}...")
+        log.info(
+            f"[pipeline:{job_id}] stage=translate model={model} tgt={target_lang} "
+            f"segments={len(segments)} src={effective_src}"
+        )
         def _translate_progress(done, total, eta_sec):
             # Map translation progress into overall pipeline 45→62% range
             pct = 45 + int((done / max(total, 1)) * 17)
@@ -1297,8 +1436,8 @@ async def run_pipeline(
         # untranslated (source-language) text still in translated_text,
         # stop here instead of letting VoxCPM try to speak English with
         # Russian cross-lingual cfg (which crashes the worker). This
-        # happens when Ollama times out on every request and per-line
-        # fallback also fails.
+        # happens when LM Studio/Ollama times out on every request and
+        # per-line fallback also fails.
         untranslated_count = 0
         for s in segments:
             tt = (s.get("translated_text") or "").strip()
@@ -1308,15 +1447,26 @@ async def run_pipeline(
         if untranslated_count == len(segments):
             raise RuntimeError(
                 f"Translation completely failed — all {len(segments)} segments "
-                f"still in source language. Check Ollama: run `ollama ps` and "
-                f"try `ollama run {model} 'hi'` manually. If it hangs, the "
-                f"model may be incompatible with your setup; try "
-                f"`ollama pull qwen2.5:7b` and pick it in the UI."
+                f"still in source language. Check the translation backend "
+                f"({('LM Studio at ' + LM_STUDIO_URL) if USE_LM_STUDIO else 'Ollama'}): "
+                f"make sure it is running and the model '{model}' is loaded. "
+                f"If it times out (large model on CPU), raise LM_STUDIO_TIMEOUT "
+                f"and/or set LM_STUDIO_MAX_CONCURRENT=1 in .env."
             )
         if untranslated_count > len(segments) // 2:
-            log.warning(
-                f"[translate] {untranslated_count}/{len(segments)} segments "
-                f"did not translate successfully — TTS quality may suffer"
+            # More than half untranslated -> TTS will produce half-source/
+            # half-target gibberish (or crash the cross-lingual VoxCPM worker).
+            # Hard-fail the job with an actionable message rather than shipping
+            # a broken dub. The checkpoint (translation_done) is already saved,
+            # so the user can Resume / retranslate with a smaller model.
+            raise RuntimeError(
+                f"Translation mostly failed — {untranslated_count}/{len(segments)} "
+                f"segments still in source language. The translation backend likely "
+                f"timed out (check the [translate_text] timeout warnings above). "
+                f"Fix: use a smaller/faster model, or raise LM_STUDIO_TIMEOUT and "
+                f"set LM_STUDIO_MAX_CONCURRENT=1 in .env (large models on CPU need "
+                f"serial requests + a long timeout). Job saved at checkpoint "
+                f"'translation_done' — click Resume after fixing the backend."
             )
 
         # Unload Ollama model from VRAM before TTS. Without this, Ollama's
@@ -1414,6 +1564,11 @@ async def run_pipeline(
                voice_mode=("upload" if first_pipeline_mode == "file_ref" else
                            ("custom" if first_pipeline_mode == "voice_design"
                             else "source")))
+        log.info(
+            f"[pipeline:{job_id}] stage=synthesize engine={tts.name} "
+            f"mode={first_pipeline_mode} segments={len(segments)} "
+            f"preset={voice_preset} seed={voice_seed}"
+        )
 
         # Apply Voice Design prefix ONLY in voice_design mode
         if first_pipeline_mode == "voice_design" and isinstance(tts, VoxCPMSynthesizer):
@@ -1522,29 +1677,15 @@ async def run_pipeline(
 @app.get("/api/lm_studio/models")
 async def get_lm_studio_models():
     """Proxy to LM Studio API to get available models.
-    
+
     The frontend calls this endpoint (instead of hitting LM Studio directly)
-    to avoid CORS issues and centralize configuration. The actual LM Studio
-    API path is determined by LM_STUDIO_URL env var.
+    to avoid CORS issues and centralize configuration.  Uses
+    ``check_lm_studio(force_refresh=True)`` so the user always gets the
+    latest model list when they open the Settings / Models view.
     """
-    if not USE_LM_STUDIO:
-        return {"models": []}
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{LM_STUDIO_URL}/models",
-                timeout=aiohttp.ClientTimeout(total=5)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    models = [m.get("id", "") for m in data.get("data", [])]
-                    return {"models": models}
-                log.warning(f"LM Studio returned {response.status} from {LM_STUDIO_URL}/models")
-                return {"models": []}
-    except Exception as e:
-        log.warning(f"Failed to fetch LM Studio models: {e}")
-        return {"models": []}
+    from pipeline.translator import check_lm_studio
+    ok, models = await check_lm_studio(force_refresh=True)
+    return {"models": models}
 
 
 @app.get("/api/system")
@@ -1686,6 +1827,19 @@ async def start_dub(
         actual_source = vid_path
         source_type = "upload"
         source_label = video.filename
+        # Log the uploaded file's real name/extension/size. The pipeline
+        # copies whatever the user uploads into source_video.mp4 regardless
+        # of actual format, so a .webp image (no audio/video stream) is a
+        # common "breaks silently" case — this line makes it obvious in the
+        # server log before the job even starts.
+        try:
+            _up_bytes = os.path.getsize(vid_path)
+        except OSError:
+            _up_bytes = -1
+        log.info(
+            f"[dub] upload job={job_id} file={video.filename!r} ext={ext} "
+            f"size={_up_bytes/1048576 if _up_bytes >= 0 else '?'}MB -> {vid_path}"
+        )
     elif source:
         actual_source = source
         source_type = "url" if source.startswith("http") else "path"

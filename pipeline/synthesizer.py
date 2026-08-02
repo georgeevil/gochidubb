@@ -349,6 +349,17 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         speaker_refs = speaker_refs or {}
         speaker_transcripts = speaker_transcripts or {}
         os.makedirs(output_dir, exist_ok=True)
+        total = len(segments)
+        log.info(
+            f"[voxcpm] synthesize_segments: segments={total} out={output_dir} "
+            f"voice_seed={voice_seed} tts_speed={tts_speed} "
+            f"is_cross_lingual={is_cross_lingual} target_lang={target_lang} "
+            f"speaker_refs={list(speaker_refs.keys())}"
+        )
+        log.debug(
+            f"[voxcpm] speaker_refs paths: {speaker_refs} | "
+            f"speaker_transcripts keys: {list(speaker_transcripts.keys())}"
+        )
 
         # ─── REFERENCE AUDIO PREPROCESSING ─────────────────────────────
         # VoxCPM is very sensitive to reference quality. Raw diarization-
@@ -470,7 +481,13 @@ class VoxCPMSynthesizer(BaseTTSEngine):
             "cfg_value": base_cfg,
             "inference_timesteps": base_timesteps,
             "retry_badcase": tts_speed != "fast",
-            "retry_badcase_max_times": speed_retries.get(tts_speed, 1),
+            # VoxCPM2's _generate uses retry_badcase_max_times as the while-loop
+            # condition, NOT as the number of retries.  If it is 0 the loop body
+            # never executes, latent_pred stays unbound, and the decode step
+            # after the loop raises UnboundLocalError.  Clamp to >= 1 so the
+            # loop body always runs at least once (retry_badcase=False already
+            # prevents actual retries in fast mode).
+            "retry_badcase_max_times": max(speed_retries.get(tts_speed, 1), 1),
             "tier_policy": tts_speed,
             "voice_seed": voice_seed,
             "segments": seg_specs,
@@ -929,8 +946,12 @@ class EdgeTTSFallback(BaseTTSEngine):
         os.makedirs(output_dir, exist_ok=True)
         lang = target_lang[:2].lower()
         selected = voice or self.VOICE_MAP.get(lang, "en-US-ChristopherNeural")
-
         total = len(segments)
+        log.info(
+            f"[edge-tts] synthesizing {total} segments to {target_lang} "
+            f"(voice={selected}, out={output_dir})"
+        )
+
         for i, seg in enumerate(segments):
             text = seg.get("translated_text", seg["text"])
             if not text.strip():
@@ -942,11 +963,14 @@ class EdgeTTSFallback(BaseTTSEngine):
                 comm = edge_tts.Communicate(text, selected)
                 await comm.save(out_file)
                 seg["audio_path"] = out_file
+                log.debug(f"[edge-tts] [{i+1}/{total}] ok -> {os.path.basename(out_file)}")
             except Exception as e:
-                log.error(f"edge-tts failed [{i}]: {e}")
+                log.error(f"edge-tts failed [{i}]: {type(e).__name__}: {e}")
                 seg["audio_path"] = None
 
             if progress_callback:
                 progress_callback(i + 1, total)
 
+        ok = sum(1 for s in segments if s.get("audio_path"))
+        log.info(f"[edge-tts] done: {ok}/{total} segments synthesized")
         return segments
