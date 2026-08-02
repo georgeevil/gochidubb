@@ -20,6 +20,23 @@ log = logging.getLogger("tachidubb.synthesizer")
 # Track whether we've logged the full tier-1 traceback once per process
 _TIER1_DIAG_LOGGED = False
 
+# ─── Speed presets ───────────────────────────────────────────────────
+# Inference steps per quality tier. VoxCPM's default is 10; 6 is ~40%
+# faster with minimal quality loss on short text.
+SPEED_TIMESTEPS = {"quality": 10, "balanced": 8, "fast": 6}
+
+# retry_badcase_max_times is a LOOP BOUND inside voxcpm (max attempts), NOT a
+# retry count. voxcpm binds `latent_pred` only inside
+#     while retry_badcase_times < retry_badcase_max_times:
+# and reads it after the loop, so 0 means the loop never runs and EVERY
+# segment dies with:
+#     UnboundLocalError: cannot access local variable 'latent_pred'
+# (voxcpm/model/voxcpm2.py:923-958). Every value here MUST be >= 1 — see
+# tests/test_tts_worker.py. "fast" still makes exactly one pass with no
+# re-rolls because retry_badcase=False makes the loop break after the first
+# attempt; the bound alone is what decides whether it runs at all.
+SPEED_RETRIES = {"quality": 2, "balanced": 1, "fast": 1}
+
 # ─────────────────────────────────────────────────────────────────────
 # Backup speechbrain/k2 stubs — in case this module is imported first
 # (e.g. from a test harness) before server.py has run.
@@ -165,6 +182,22 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         self._worker_proc = None
         self._worker_stderr_fh = None
         self._worker_stderr_path = None
+        # First per-segment error of the most recent run. The worker reports
+        # failures as events rather than raising, so without this the caller
+        # only knows "0 succeeded" and not why.
+        self._last_segment_error = ""
+
+    def last_failure_detail(self) -> str:
+        """Human-readable cause of the last run's segment failures, if any.
+
+        Includes the worker stderr path because the full traceback is written
+        there, not to the server log."""
+        if not self._last_segment_error:
+            return ""
+        detail = self._last_segment_error
+        if self._worker_stderr_path:
+            detail += f" (worker log: {self._worker_stderr_path})"
+        return detail
 
     def load(self):
         if self._model is not None:
@@ -275,15 +308,19 @@ class VoxCPMSynthesizer(BaseTTSEngine):
             "retry_badcase_max_times": 2,
         }
 
-        # Tier 1 — full cloning with reference + prompt transcript
+        # Tier 1 — full cloning with reference + prompt transcript.
+        # prompt_wav_path is attached ONLY alongside a non-empty prompt_text:
+        # voxcpm rejects the pair unless both are set or both are None. See the
+        # matching block in tts_worker.py.
         tier1 = dict(base_kwargs)
-        if prompt_wav_path and os.path.exists(prompt_wav_path):
+        if prompt_text and prompt_wav_path and os.path.exists(prompt_wav_path):
             tier1["prompt_wav_path"] = prompt_wav_path
-            if prompt_text:
-                tier1["prompt_text"] = prompt_text
+            tier1["prompt_text"] = prompt_text
             tier1["reference_wav_path"] = prompt_wav_path
         elif reference_wav_path and os.path.exists(reference_wav_path):
             tier1["reference_wav_path"] = reference_wav_path
+        elif prompt_wav_path and os.path.exists(prompt_wav_path):
+            tier1["reference_wav_path"] = prompt_wav_path
 
         # Tier 2 — reference only (no prompt_text), simpler path
         tier2 = dict(base_kwargs)
@@ -333,7 +370,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         """Run TTS in a SUBPROCESS.
 
         tts_speed: "quality" (tier 1→2→3, slow), "balanced" (2→3, ~3x faster,
-        default), or "fast" (tier 3 only, no cloning but instant).
+        default), or "fast" (2→3 with a single generation pass, no re-rolls).
         is_cross_lingual: If True (source_lang != target_lang), bumps cfg_value
         and inference_timesteps for better adherence to target-language text.
         Cross-lingual cloning needs stronger guidance or VoxCPM drifts toward
@@ -349,17 +386,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         speaker_refs = speaker_refs or {}
         speaker_transcripts = speaker_transcripts or {}
         os.makedirs(output_dir, exist_ok=True)
-        total = len(segments)
-        log.info(
-            f"[voxcpm] synthesize_segments: segments={total} out={output_dir} "
-            f"voice_seed={voice_seed} tts_speed={tts_speed} "
-            f"is_cross_lingual={is_cross_lingual} target_lang={target_lang} "
-            f"speaker_refs={list(speaker_refs.keys())}"
-        )
-        log.debug(
-            f"[voxcpm] speaker_refs paths: {speaker_refs} | "
-            f"speaker_transcripts keys: {list(speaker_transcripts.keys())}"
-        )
+        self._last_segment_error = ""  # fresh diagnosis per run
 
         # ─── REFERENCE AUDIO PREPROCESSING ─────────────────────────────
         # VoxCPM is very sensitive to reference quality. Raw diarization-
@@ -457,9 +484,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
 
         # Speed-dependent inference steps: VoxCPM default is 10, but 6 is
         # ~40% faster with minimal quality loss for short text.
-        speed_timesteps = {"quality": 10, "balanced": 8, "fast": 6}
-        speed_retries = {"quality": 2, "balanced": 1, "fast": 0}
-        base_timesteps = speed_timesteps.get(tts_speed, 8)
+        base_timesteps = SPEED_TIMESTEPS.get(tts_speed, 8)
         base_cfg = self.cfg_value
 
         # Cross-lingual dubbing (e.g. English video → Russian audio) needs
@@ -481,13 +506,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
             "cfg_value": base_cfg,
             "inference_timesteps": base_timesteps,
             "retry_badcase": tts_speed != "fast",
-            # VoxCPM2's _generate uses retry_badcase_max_times as the while-loop
-            # condition, NOT as the number of retries.  If it is 0 the loop body
-            # never executes, latent_pred stays unbound, and the decode step
-            # after the loop raises UnboundLocalError.  Clamp to >= 1 so the
-            # loop body always runs at least once (retry_badcase=False already
-            # prevents actual retries in fast mode).
-            "retry_badcase_max_times": max(speed_retries.get(tts_speed, 1), 1),
+            "retry_badcase_max_times": SPEED_RETRIES.get(tts_speed, 1),
             "tier_policy": tts_speed,
             "voice_seed": voice_seed,
             "segments": seg_specs,
@@ -549,7 +568,13 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                 self._worker_stderr_path, "w", encoding="utf-8", errors="replace"
             )
 
-            log.info(f"Launching persistent TTS worker (daemon mode)")
+            # Log the stderr path up front: every real VoxCPM traceback lands
+            # there, and without this line nothing in the server log points at
+            # the temp dir holding it.
+            log.info(
+                f"Launching persistent TTS worker (daemon mode) — "
+                f"worker stderr: {self._worker_stderr_path}"
+            )
             self._worker_proc = subprocess.Popen(
                 [sys.executable, "-u", worker, "--daemon", job_path],
                 stdin=subprocess.PIPE,
@@ -633,6 +658,10 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                         log.warning(
                             f"[{done}/{total}] FAILED: {evt.get('error')}"
                         )
+                        # Keep the first failure so callers can report the real
+                        # cause instead of a generic "check model/GPU".
+                        if not self._last_segment_error:
+                            self._last_segment_error = str(evt.get("error") or "")
                     if progress_callback:
                         progress_callback(done, total)
                 elif kind == "qa_enabled":

@@ -10,6 +10,8 @@ import os
 import shutil
 import subprocess
 
+from .notices import notice
+
 log = logging.getLogger("tachidubb.audio")
 
 
@@ -134,7 +136,8 @@ def _make_silent_bg(duration: float, output_dir: str) -> str:
     return bg
 
 
-def separate_background(audio_path: str, output_dir: str) -> tuple[str, str]:
+def separate_background(audio_path: str, output_dir: str,
+                        notices: list | None = None) -> tuple[str, str]:
     """Separate vocals from background audio.
 
     Tries in order:
@@ -143,9 +146,16 @@ def separate_background(audio_path: str, output_dir: str) -> tuple[str, str]:
       3. Silent background fallback
 
     Returns (vocals_path, background_path).
+
+    The silent fallback is deliberate — losing the music must not fail a dub —
+    but it is also indistinguishable from success in the output, so it fills
+    `notices` (see pipeline/notices.py) with what to install. The user asked
+    for background preservation and would otherwise just get a quiet video.
     """
     vocals = os.path.join(output_dir, "vocals.wav")
     bg = os.path.join(output_dir, "background.wav")
+    notices = notices if notices is not None else []
+    reasons = []
 
     # Try Demucs first
     try:
@@ -153,18 +163,43 @@ def separate_background(audio_path: str, output_dir: str) -> tuple[str, str]:
     except RuntimeError as e:
         if "not installed" in str(e):
             log.info("Demucs not installed, trying audio-separator...")
+            reasons.append("demucs: not installed")
         else:
             log.warning(f"Demucs failed: {e}, trying audio-separator...")
+            reasons.append(f"demucs: {e}")
     except Exception as e:
         log.warning(f"Demucs error: {e}, trying audio-separator...")
+        reasons.append(f"demucs: {type(e).__name__}: {e}")
 
     # Try audio-separator
     try:
         return _separate_audio_separator(audio_path, output_dir)
     except ImportError:
-        log.warning("Neither demucs nor audio-separator installed — no separation")
+        log.warning(
+            "Neither demucs nor audio-separator installed — background music "
+            "will be dropped. Fix: pip install demucs "
+            "(see System → Setup in the UI)"
+        )
+        reasons.append("audio-separator: not installed")
     except Exception as e:
         log.warning(f"audio-separator failed: {e}")
+        reasons.append(f"audio-separator: {type(e).__name__}: {e}")
+
+    notices.append(notice(
+        code="audio.separation_unavailable",
+        severity="warn",
+        subsystem="extract",
+        title="Background music could not be separated",
+        detail="You asked to keep the background, but no separation backend "
+               "worked, so the dub gets a silent background instead of the "
+               "original music and effects.\n  " + "\n  ".join(reasons),
+        remediation=[
+            "pip install demucs      (best quality, ~2 GB of weights on first use)",
+            "or: pip install audio-separator",
+            "Then re-run the Extract stage on this job",
+        ],
+        url="https://github.com/adefossez/demucs",
+    ))
 
     # Fallback: copy audio as vocals, silent background
     shutil.copy2(audio_path, vocals)

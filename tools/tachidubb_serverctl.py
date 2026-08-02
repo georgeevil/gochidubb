@@ -164,6 +164,11 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
 
     print(f"🚀 Starting TachiDUBB server on port {port}...")
 
+    # server.py takes its port from the environment, not argv — without this
+    # `--port` printed the number above and then started on 8910 anyway.
+    env = dict(os.environ)
+    env["TACHIDUBB_PORT"] = str(port)
+
     if daemon:
         # Start in background: redirect stdout/stderr to log file
         log_fh = open(LOG_FILE, "a")
@@ -173,6 +178,7 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             cwd=str(PROJECT_ROOT),
+            env=env,
             # Create a new process group so we can kill the whole tree
             start_new_session=True,
         )
@@ -190,7 +196,7 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
             _tail_logs(10)
     else:
         # Foreground: replace current process
-        os.execvp(python, cmd)
+        os.execvpe(python, cmd, env)
 
 
 def cmd_stop(force: bool = False) -> None:

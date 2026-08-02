@@ -152,14 +152,22 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     voice_design_mode = (not has_ref) and text.lstrip().startswith("(")
 
     # Tier 1 — full cloning (prompt + ref + prompt_text) -- SLOW + sometimes retries
+    #
+    # voxcpm requires prompt_wav_path and prompt_text to be BOTH set or BOTH
+    # None (core.py: "must both be provided or both be None"), so prompt_wav_path
+    # is only attached when we actually have a transcript. Setting the path with
+    # an empty transcript raised ValueError before any inference — which happened
+    # on every cross-lingual dub, since those deliberately clear
+    # speaker_transcripts to force Controllable Cloning.
     tier1 = dict(base_kwargs, text=text)
-    if prompt and os.path.exists(prompt):
+    if prompt_text and prompt and os.path.exists(prompt):
         tier1["prompt_wav_path"] = prompt
-        if prompt_text:
-            tier1["prompt_text"] = prompt_text
+        tier1["prompt_text"] = prompt_text
         tier1["reference_wav_path"] = prompt
     elif ref and os.path.exists(ref):
         tier1["reference_wav_path"] = ref
+    elif prompt and os.path.exists(prompt):
+        tier1["reference_wav_path"] = prompt
 
     # Tier 2 — reference ONLY (no prompt_text — that triggers retry_badcase
     # which can blow up to 30+ seconds per segment). Reference alone clones
@@ -190,7 +198,11 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
         else:
             tiers = [(2, tier2), (3, tier3)]
     elif tier_policy == "fast":
-        tiers = [(3, tier3)]
+        # Tier 2 (reference only, no prompt_text) IS the cheap cloning path —
+        # it already skips the slow prompt-continuation work. Going straight to
+        # tier 3 threw the extracted speaker refs away entirely and dubbed in an
+        # arbitrary synthetic voice, and left no fallback when a tier errored.
+        tiers = [(2, tier2), (3, tier3)]
     else:
         tiers = [(2, tier2), (3, tier3)]
 
@@ -335,7 +347,11 @@ def _process_job(model, job):
         "cfg_value": job.get("cfg_value", 2.0),
         "inference_timesteps": job.get("inference_timesteps", 10),
         "retry_badcase": job.get("retry_badcase", True),
-        "retry_badcase_max_times": job.get("retry_badcase_max_times", 2),
+        # Clamp to >= 1: voxcpm's `while retry_badcase_times < max` loop never
+        # runs at 0, leaving `latent_pred` unbound and failing every segment.
+        # Guards against old queued job.json files and any other producer.
+        # See SPEED_RETRIES in synthesizer.py.
+        "retry_badcase_max_times": max(1, int(job.get("retry_badcase_max_times", 2))),
     }
     voice_seed = job.get("voice_seed")
     tier_policy = job.get("tier_policy", "balanced")

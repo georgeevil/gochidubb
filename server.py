@@ -77,6 +77,32 @@ except ImportError:
     pass  # dotenv optional
 
 
+# Fallback .env loader for installs without python-dotenv.
+#
+# This MUST run before the `from pipeline...` imports further down: those
+# modules capture their configuration (LM_STUDIO_URL, LM_STUDIO_MODEL,
+# request timeouts, HF_TOKEN) into module-level constants at import time.
+# The loader used to sit below those imports, so on any machine without
+# python-dotenv every one of those settings silently kept its built-in
+# default and the user's .env was ignored.
+def _load_dotenv_simple():
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+_load_dotenv_simple()
+
+
 # ─────────────────────────────────────────────────────────────
 # Windows: help torchcodec find FFmpeg DLLs
 # ─────────────────────────────────────────────────────────────
@@ -146,35 +172,28 @@ from pipeline.audio import extract_audio, extract_audio_hq, separate_background,
 from pipeline.transcriber import transcribe
 from pipeline.diarizer import (
     diarize_speakers, assign_speakers_to_segments,
-    extract_speaker_audio, extract_fallback_reference,
+    extract_speaker_audio, extract_fallback_reference, effective_hf_token,
 )
 from pipeline.translator import translate_segments, check_ollama, ollama_pull_stream, unload_ollama_model
 from pipeline.synthesizer import VoxCPMSynthesizer, F5TTSEngine, EdgeTTSFallback
 from pipeline.assembler import assemble_dubbed_audio, merge_audio_video, write_srt
-from pipeline.models import get_system_status, MODEL_CATALOG, USE_LM_STUDIO, LM_STUDIO_URL
+from pipeline.models import (
+    get_system_status, MODEL_CATALOG, USE_LM_STUDIO,
+    LM_STUDIO_MODELS_ENDPOINT,
+)
 from pipeline.vad import apply_vad_filter
+from pipeline.metrics import (
+    stage_timer, load_metrics, gpu_backend, gpu_snapshot,
+)
+from pipeline import diagnostics as diag
+from pipeline.notices import (
+    mask_secret, merge_notices, worst_severity, notice as pnotice,
+)
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
+from app import logbuf
 
-
-# Load .env manually (no python-dotenv dependency) so HF_TOKEN etc. are picked up
-def _load_dotenv_simple():
-    env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip().strip('"').strip("'")
-        if k and k not in os.environ:
-            os.environ[k] = v
-
-
-_load_dotenv_simple()
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
 try:
@@ -190,18 +209,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("tachidubb.server")
 
-# Optional debug mode. Set TACHIDUBB_DEBUG=1 in .env or the environment to
-# surface DEBUG-level logs across the tachidubb.* and pipeline.* namespaces.
-# This is the fastest way to diagnose a pipeline run that breaks silently
-# (e.g. an unsupported source format like a .webp image, or an external API
-# that returns an error the code swallows): every external-API call below
-# logs its request URL, payload summary, response status, timing and error
-# detail at DEBUG. Without the flag only INFO+ is shown, so normal runs stay
-# quiet.
-if os.getenv("TACHIDUBB_DEBUG", "0") == "1":
-    for _debug_ns in ("tachidubb", "pipeline"):
-        logging.getLogger(_debug_ns).setLevel(logging.DEBUG)
-    log.info("[debug] TACHIDUBB_DEBUG=1 — DEBUG logging enabled for tachidubb.* and pipeline.*")
+# Mirror everything into an in-memory ring so GET /api/logs can show it. This
+# has to happen right after basicConfig and before the pipeline does any work:
+# it rebinds the console handler to the real stderr before teeing stdio, which
+# is what stops every log line being captured twice. See app/logbuf.py.
+logbuf.install()
 
 
 # Silence extremely repetitive polling endpoints that flood the console
@@ -474,7 +486,18 @@ async def _job_queue_worker():
             # Queue stores args as a dict keyword, not positional tuple — so we
             # can add new pipeline params without breaking old enqueue sites
             if isinstance(pipeline_args, dict):
-                await run_pipeline(job_id, **pipeline_args)
+                # Stage retries ride the same queue as full runs so they
+                # can't collide with another job on the GPU, and so they
+                # inherit the cancel / post-success handling below.
+                retry = pipeline_args.get("__stage_retry__")
+                if retry:
+                    await run_pipeline_stages(
+                        job_id, retry["ctx"],
+                        start_stage=retry["start_stage"],
+                        stop_after=retry.get("stop_after", ""),
+                    )
+                else:
+                    await run_pipeline(job_id, **pipeline_args)
             else:
                 # Legacy positional tuple (kept for back-compat with older queued jobs)
                 await run_pipeline(job_id, *pipeline_args[:12],
@@ -561,8 +584,10 @@ def _job_checkpoint_info(job_id: str) -> dict:
     if not work_dir.exists():
         return {"has_checkpoint": False, "latest_checkpoint_stage": None}
     # Check most-advanced first so 'latest' reflects how far the
-    # pipeline got before stopping.
-    for stage in ("tts_done", "translation_done", "transcription_done"):
+    # pipeline got before stopping. CHECKPOINT_ORDER_DESC covers every
+    # stage in PIPELINE_STAGES (newest → oldest), including the fine-grained
+    # download/extract/transcribe checkpoints added for per-stage retry.
+    for stage in CHECKPOINT_ORDER_DESC:
         if (work_dir / f"checkpoint_{stage}.json").exists():
             return {"has_checkpoint": True, "latest_checkpoint_stage": stage}
     # Legacy single-file pipeline state
@@ -648,97 +673,11 @@ def _load_checkpoint(job_id: str, stage: str) -> Optional[dict]:
 
 def _latest_checkpoint(job_id: str) -> Optional[dict]:
     """Return the most advanced checkpoint available for a job."""
-    for stage in ("tts_done", "translation_done", "transcription_done"):
+    for stage in CHECKPOINT_ORDER_DESC:
         cp = _load_checkpoint(job_id, stage)
         if cp:
             return cp
     return None
-
-
-# ─────────────────────────────────────────────────────────────
-# Modular pipeline step execution
-# ─────────────────────────────────────────────────────────────
-# These handlers allow running individual pipeline steps from checkpoints,
-# enabling retry/resume with different settings.
-
-async def _run_step_extract_audio(job_id: str, overrides: dict) -> dict:
-    """Re-extract audio from the source video."""
-    job = jobs.get(job_id)
-    if not job:
-        return {"error": "Job not found", "status": 404}
-    work = OUTPUT_DIR / job_id
-    video_path = job.get("source") or job.get("video_path", "")
-    if not video_path or not Path(video_path).exists():
-        return {"error": "Source video not found", "status": 404}
-    audio_16k = str(work / "audio_16k.wav")
-    try:
-        from pipeline.audio import extract_audio
-        extract_audio(video_path, audio_16k)
-        duration = get_duration(video_path)
-        job["duration"] = round(duration, 1)
-        job["audio_16k"] = audio_16k
-        save_job(job)
-        log.info(f"[step:{job_id}] extract_audio done: {audio_16k}")
-        return {"ok": True, "step": "extract_audio", "audio_path": audio_16k, "duration": duration}
-    except Exception as e:
-        log.error(f"[step:{job_id}] extract_audio failed: {e}")
-        return {"error": str(e), "status": 500}
-
-
-async def _run_step_transcribe(job_id: str, overrides: dict) -> dict:
-    """Re-run transcription from extracted audio."""
-    job = jobs.get(job_id)
-    if not job:
-        return {"error": "Job not found", "status": 404}
-    work = OUTPUT_DIR / job_id
-    audio_16k = job.get("audio_16k", str(work / "audio_16k.wav"))
-    if not Path(audio_16k).exists():
-        return {"error": "Audio file not found — run extract_audio first", "status": 404}
-    whisper_model = overrides.get("whisper_model", cfg.whisper_model)
-    source_lang = overrides.get("source_lang", job.get("source_lang", "auto"))
-    diarize = overrides.get("diarize", "true").lower() in ("true", "1", "yes")
-    try:
-        job["status"] = "transcribing"
-        job["step_detail"] = f"Transcribing with {whisper_model}..."
-        save_job(job)
-        segments, detected_lang = transcribe(audio_16k, source_lang, whisper_model)
-        effective_src = detected_lang if source_lang == "auto" else source_lang
-        speaker_turns = []
-        if diarize:
-            try:
-                from pipeline.diarizer import diarize_speakers
-                speaker_turns = diarize_speakers(audio_16k, token=os.getenv("HF_TOKEN", ""))
-            except Exception as e:
-                log.warning(f"[step:{job_id}] diarization failed: {e}")
-        cp_data = {
-            "video_path": job.get("video_path", ""),
-            "audio_16k": audio_16k,
-            "duration": job.get("duration", 0),
-            "effective_src": effective_src,
-            "target_lang": job.get("target_lang", "ru"),
-            "keep_bg": job.get("keep_bg", False),
-            "model": job.get("model", ""),
-            "context_hint": job.get("context_hint", ""),
-            "speaker_mode": "main" if not speaker_turns else "all",
-            "reference_audio": job.get("reference_audio", ""),
-            "voice_style": job.get("voice_style", ""),
-            "voice_preset": job.get("voice_preset", "auto"),
-            "tts_speed": job.get("tts_speed", "balanced"),
-            "segments": [
-                {"idx": i, "start": s["start"], "end": s["end"],
-                 "text": s["text"], "speaker": s.get("speaker", "SPEAKER_00")}
-                for i, s in enumerate(segments)
-            ],
-        }
-        _save_checkpoint(job_id, work, stage="transcription_done", data=cp_data)
-        job["status"] = "transcription_done"
-        job["step_detail"] = f"Transcribed {len(segments)} segments"
-        save_job(job)
-        return {"ok": True, "step": "transcribe", "segment_count": len(segments),
-                "detected_lang": detected_lang, "diarized": bool(speaker_turns)}
-    except Exception as e:
-        log.error(f"[step:{job_id}] transcribe failed: {e}")
-        return {"error": str(e), "status": 500}
 
 
 def get_tts_engine():
@@ -1044,6 +983,1005 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 # ─────────────────────────────────────────────────────────────
 # Pipeline Orchestrator
 # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Pipeline stage registry
+# ─────────────────────────────────────────────────────────────
+# The pipeline is a linear list of stages. Each stage reads from and writes
+# to a single mutable context dict (`ctx`), and the driver snapshots that
+# ctx to `checkpoint_<name>.json` after the stage succeeds.
+#
+# That single rule is what makes every stage independently retryable: to
+# re-run stage N you only need the checkpoint written by stage N-1. The
+# retry endpoint loads it, applies the caller's overrides on top, and runs
+# forward from there — no earlier stage is recomputed.
+#
+# "checkpoint" names are deliberately NOT all `<id>_done`: diarize/translate
+# write `transcription_done` / `translation_done` because the older wizard,
+# retry-TTS, redub and showcase endpoints read those exact filenames. The
+# payload is a superset of what they used to contain, so they keep working.
+PIPELINE_STAGES = [
+    {
+        "id": "download", "label": "Acquire video",
+        "hint": "Download or copy the source media",
+        "checkpoint": "download_done", "status": "downloading",
+        "progress": (2, 8), "artifacts": ["video_path"],
+    },
+    {
+        "id": "extract", "label": "Extract audio",
+        "hint": "Demux, denoise, VAD-filter, split background",
+        "checkpoint": "extract_done", "status": "extracting",
+        "progress": (10, 16), "artifacts": ["audio_16k", "bg_audio_path"],
+        "artifact_files": ["audio_16k.wav"],
+    },
+    {
+        "id": "transcribe", "label": "Transcribe",
+        "hint": "WhisperX speech-to-text",
+        "checkpoint": "transcribe_done", "status": "transcribing",
+        "progress": (18, 35), "artifacts": [],
+    },
+    {
+        "id": "diarize", "label": "Diarize",
+        "hint": "Identify speakers and cut voice references",
+        "checkpoint": "transcription_done", "status": "diarizing",
+        "progress": (38, 43), "artifacts": [], "artifact_dir": "speaker_refs",
+    },
+    {
+        "id": "translate", "label": "Translate",
+        "hint": "LLM translation of every segment",
+        "checkpoint": "translation_done", "status": "translating",
+        "progress": (45, 62), "artifacts": ["srt_path"],
+        "artifact_files": ["subtitles.srt"],
+    },
+    {
+        "id": "tts", "label": "Synthesize",
+        "hint": "Voice-clone each segment",
+        "checkpoint": "tts_done", "status": "synthesizing",
+        "progress": (65, 85), "artifacts": [], "artifact_dir": "tts_segments",
+    },
+    {
+        "id": "assemble", "label": "Assemble",
+        "hint": "Time-align and loudness-normalize the dub track",
+        "checkpoint": "assemble_done", "status": "assembling",
+        "progress": (88, 92), "artifacts": ["dubbed_wav"],
+        "artifact_files": ["dubbed_audio.wav"],
+    },
+    {
+        "id": "merge", "label": "Render",
+        "hint": "Mux the dubbed audio back onto the video",
+        "checkpoint": "merge_done", "status": "merging",
+        "progress": (93, 100), "artifacts": ["output_mp4"],
+        "artifact_files": ["dubbed_video.mp4"],
+    },
+]
+
+STAGE_ORDER = [s["id"] for s in PIPELINE_STAGES]
+STAGE_BY_ID = {s["id"]: s for s in PIPELINE_STAGES}
+# Checkpoint filenames newest-first — used to find "how far did this job get".
+CHECKPOINT_ORDER_DESC = [s["checkpoint"] for s in reversed(PIPELINE_STAGES)]
+
+
+def _stage_index(stage_id: str) -> int:
+    try:
+        return STAGE_ORDER.index(stage_id)
+    except ValueError:
+        return -1
+
+
+# Keys that must never be written to a checkpoint: transient handles and
+# internal control flags that would otherwise be replayed on resume.
+_CTX_PRIVATE_PREFIX = "_"
+
+
+def _ctx_for_checkpoint(ctx: dict) -> dict:
+    """JSON-safe snapshot of the pipeline context."""
+    out = {}
+    for k, v in ctx.items():
+        if k.startswith(_CTX_PRIVATE_PREFIX):
+            continue
+        try:
+            json.dumps(v)
+        except (TypeError, ValueError):
+            continue
+        out[k] = v
+    return out
+
+
+def _serialize_segments(segments: list) -> list:
+    """Normalize segments for checkpointing — stable idx, known fields only."""
+    out = []
+    for i, s in enumerate(segments):
+        item = {
+            "idx": s.get("idx", i),
+            "start": s.get("start", 0.0),
+            "end": s.get("end", 0.0),
+            "text": s.get("text", ""),
+            "speaker": s.get("speaker", "SPEAKER_00"),
+        }
+        for opt in ("translated_text", "audio_path", "qa_score", "tts_tier"):
+            if s.get(opt) is not None:
+                item[opt] = s.get(opt)
+        out.append(item)
+    return out
+
+
+def _stage_input_state(job_id: str, stage_id: str) -> Optional[dict]:
+    """Load the checkpoint that a given stage needs as its input.
+
+    Walks backwards from the stage's predecessor until a checkpoint exists,
+    so a job that never wrote (say) `extract_done` because it predates this
+    feature can still be retried from `translate` using `transcription_done`.
+    """
+    idx = _stage_index(stage_id)
+    if idx <= 0:
+        return None
+    for prev in reversed(PIPELINE_STAGES[:idx]):
+        cp = _load_checkpoint(job_id, prev["checkpoint"])
+        if cp:
+            return cp
+    return None
+
+
+def _resolve_voice_into_ctx(job: dict, ctx: dict) -> None:
+    """(Re-)resolve the voice preset/style/seed and stash it on the ctx.
+
+    Called on every pipeline run — including retries — so that a retry which
+    overrides `voice_preset` picks up that preset's reference file and style
+    instead of the one baked into the checkpoint.
+    """
+    eff_style, voice_seed, preset_ref_file = resolve_voice_config(
+        ctx.get("voice_preset", "auto"), ctx.get("voice_style", ""), job["id"],
+    )
+    ctx["voice_style_effective"] = eff_style
+    ctx["voice_seed"] = voice_seed
+    if preset_ref_file and os.path.exists(preset_ref_file):
+        log.info(f"[ref] File-preset selected: {preset_ref_file}")
+        ctx["reference_audio"] = preset_ref_file
+    job.update(
+        voice_preset=ctx.get("voice_preset", "auto"),
+        voice_style_effective=eff_style,
+        voice_seed=voice_seed,
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Stage implementations
+# ─────────────────────────────────────────────────────────────
+# Every handler has the same shape:
+#     async def _stage_x(job, work, ctx, update, perf) -> None
+# `perf` is the stage_timer's detail dict — anything put in it lands in
+# metrics.json next to the timing, which is what makes a slow stage
+# diagnosable after the fact (how many segments? which model? which device?).
+
+
+async def _blocking(fn, *args, **kwargs):
+    """Run a synchronous pipeline call off the event loop.
+
+    Handlers are `async def`, but yt-dlp, ffmpeg, WhisperX and pyannote are all
+    plain blocking calls. Awaiting nothing while they run pins the single
+    asyncio thread for minutes at a time, and *every* HTTP request queues behind
+    it — so during a job the UI could not fetch /api/jobs or
+    /api/dub/{id}/stages at all. The panel sat on "Loading stages…", a freshly
+    submitted job did not appear as running until whatever stage was in flight
+    finished, and even this file's own transcribe watchdog (an asyncio task
+    that reports elapsed time) never got scheduled.
+
+    Only the blocking call moves to the worker thread. Everything that touches
+    `ctx`, `job` or `perf` stays on the loop, so there is no new shared state.
+    Jobs remain serialized by the queue worker, which awaits this.
+    """
+    return await asyncio.to_thread(lambda: fn(*args, **kwargs))
+
+
+async def _stage_download(job, work, ctx, update, perf):
+    update(step_detail="Getting video...")
+    video_path = await _blocking(download_video, ctx["source"], str(work))
+    duration = await _blocking(get_duration, video_path)
+    ctx["video_path"] = video_path
+    ctx["duration"] = duration
+    perf["media_sec"] = round(duration, 1)
+    try:
+        perf["size_mb"] = round(os.path.getsize(video_path) / 1024 / 1024, 1)
+    except OSError:
+        pass
+    update(duration=round(duration, 1), progress=8)
+
+
+async def _stage_extract(job, work, ctx, update, perf):
+    update(step_detail="Extracting audio tracks...")
+    audio_16k = str(work / "audio_16k.wav")
+    await _blocking(extract_audio, ctx["video_path"], audio_16k)
+
+    # Optional denoise for noisy source audio.
+    # BJJ/cooking/sports videos often have mat noise, background music,
+    # crowd, or equipment hum that WhisperX mistakes for words. We
+    # apply an ffmpeg filter chain to clean the audio WITHOUT removing
+    # voice quality. Filter chain reasoning:
+    #   - afftdn: FFT-based noise reduction (safe, preserves speech)
+    #   - highpass=80: drop sub-bass rumble (room noise, AC)
+    #   - lowpass=10000: drop tweeter noise (mic hiss, digital artifacts)
+    # This is conservative; aggressive denoise can hurt Whisper accuracy.
+    perf["denoise"] = bool(ctx.get("auto_denoise", True))
+    if ctx.get("auto_denoise", True):
+        try:
+            import subprocess
+            denoise_start = time.time()
+            audio_clean = str(work / "audio_16k_clean.wav")
+            update(progress=12, step_detail="Cleaning audio...")
+            await _blocking(
+                subprocess.run,
+                ["ffmpeg", "-y", "-i", audio_16k,
+                 "-af", "afftdn=nr=10:nf=-25,highpass=f=80,lowpass=f=10000",
+                 "-ar", "16000", "-ac", "1", "-acodec", "pcm_s16le",
+                 audio_clean],
+                check=True, capture_output=True, timeout=180,
+            )
+            log.info(
+                f"[perf] · denoise took {time.time()-denoise_start:.1f}s "
+                f"(audio_16k_clean.wav) — feeding to WhisperX"
+            )
+            audio_16k = audio_clean
+        except Exception as e:
+            log.warning(f"Denoise failed (using raw audio): {e}")
+            perf["denoise"] = "failed"
+
+    bg_audio_path = ""
+    if ctx.get("keep_bg"):
+        try:
+            bg_start = time.time()
+            audio_hq = str(work / "audio_hq.wav")
+            update(step_detail="Separating background audio...")
+            await _blocking(extract_audio_hq, ctx["video_path"], audio_hq)
+            # separate_background() falls back to a *silent* background rather
+            # than failing, which looks identical to success in the output —
+            # so it reports what it could not do instead of only logging it.
+            sep_notices = []
+            _, bg_audio_path = await _blocking(
+                separate_background, audio_hq, str(work), notices=sep_notices)
+            log.info(f"[perf] · bg separation took {time.time()-bg_start:.1f}s")
+            perf["bg_separated"] = not sep_notices
+            if sep_notices:
+                perf["notices"] = sep_notices
+                diag.record_runtime_notices(sep_notices, job_id=job["id"])
+        except Exception as e:
+            log.warning(f"BG separation skipped: {e}")
+            perf["bg_separated"] = "failed"
+    ctx["bg_audio_path"] = bg_audio_path
+    update(progress=15)
+
+    # VAD filtering — strip long silence/music before Whisper.
+    # silero-vad is optional (graceful fallback to full audio).
+    if cfg.vad_enabled:
+        try:
+            vad_start = time.time()
+            vad_out = str(work / "audio_16k_vad.wav")
+            update(progress=16, step_detail="Filtering non-speech regions...")
+            audio_16k, speech_ratio = await _blocking(
+                apply_vad_filter, audio_16k, vad_out,
+                threshold=cfg.vad_threshold,
+            )
+            perf["speech_ratio"] = round(speech_ratio, 3)
+            log.info(
+                f"[perf] · vad took {time.time()-vad_start:.1f}s "
+                f"(speech ratio {speech_ratio:.0%})"
+            )
+            if speech_ratio < 0.15:
+                log.warning(
+                    f"[vad] Low speech ratio ({speech_ratio:.0%}) — "
+                    f"consider disabling VAD or checking audio source"
+                )
+        except Exception as e:
+            log.warning(f"VAD skipped: {e}")
+            perf["vad"] = "failed"
+
+    ctx["audio_16k"] = audio_16k
+
+
+async def _stage_transcribe(job, work, ctx, update, perf):
+    # WhisperX doesn't expose internal progress, so during long transcription
+    # (e.g. 20-min podcasts take 5-6min) the UI would just show "Transcribing..."
+    # forever. We spawn a watchdog that updates step_detail with elapsed
+    # seconds so the user can see it's still alive.
+    duration = ctx.get("duration", 0.0)
+    whisper_model = ctx.get("whisper_model") or cfg.whisper_model
+    source_lang = ctx.get("source_lang", "auto")
+    update(step_detail="Transcribing speech...")
+    _t_start = time.time()
+    _done_flag = {"done": False}
+
+    async def _trans_watchdog():
+        while not _done_flag["done"]:
+            elapsed = int(time.time() - _t_start)
+            if elapsed > 10:  # only show after 10s to avoid noise on short videos
+                mins, secs = divmod(elapsed, 60)
+                hint = f"Transcribing ({duration:.0f}s audio)... elapsed {mins}m{secs:02d}s"
+                if elapsed > 120:
+                    hint += " · try smaller whisper model for faster transcribe"
+                update(step_detail=hint)
+            await asyncio.sleep(5)
+
+    _watchdog_task = asyncio.create_task(_trans_watchdog())
+    try:
+        segments, detected_lang = await _blocking(
+            transcribe, ctx["audio_16k"], source_lang, whisper_model,
+        )
+    finally:
+        _done_flag["done"] = True
+        _watchdog_task.cancel()
+        try:
+            await _watchdog_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    took = max(time.time() - _t_start, 0.001)
+    log.info(
+        f"[perf] · transcribe {duration:.0f}s audio in {took:.1f}s "
+        f"({duration / took:.1f}x realtime, model={whisper_model})"
+    )
+    if not segments:
+        raise RuntimeError("No speech detected in video")
+
+    effective_src = detected_lang if source_lang == "auto" else source_lang
+    ctx["segments"] = _serialize_segments(segments)
+    ctx["effective_src"] = effective_src
+    ctx["source_lang_detected"] = detected_lang
+    ctx["whisper_model"] = whisper_model
+    perf.update(
+        segments=len(segments), whisper_model=whisper_model,
+        realtime_x=round(duration / took, 2), lang=detected_lang,
+    )
+    update(
+        source_lang_detected=detected_lang,
+        segment_count=len(segments),
+        progress=35,
+    )
+
+
+async def _stage_diarize(job, work, ctx, update, perf):
+    """Assign speakers and cut per-speaker voice references.
+
+    `skip_diarization` is the escape hatch for the common failure mode:
+    pyannote needs an HF_TOKEN and a working model download, and when it
+    fails there's nothing wrong with the transcript. Retrying this stage
+    with skip_diarization=true drops straight to the single-speaker
+    fallback reference (Case C) and the run continues.
+    """
+    segments = [dict(s) for s in ctx["segments"]]
+    audio_16k = ctx["audio_16k"]
+    effective_src = ctx.get("effective_src", "en")
+    target_lang = ctx.get("target_lang", "ru")
+    reference_audio = ctx.get("reference_audio", "")
+    speaker_mode = ctx.get("speaker_mode", "main")
+    skip = bool(ctx.get("skip_diarization"))
+
+    update(step_detail=("Skipping diarization (single speaker)..." if skip
+                        else "Identifying speakers..."))
+
+    speaker_turns = []
+    if skip:
+        log.info("[diarize] Skipped by request — using single-speaker fallback")
+        perf["skipped"] = True
+    else:
+        hf_token = effective_hf_token()
+        # diarize_speakers never raises — it returns [] for everything from
+        # "no token" to "one speaker in the video". `notices` is how it tells
+        # the difference, and without it a broken setup is indistinguishable
+        # from a monologue.
+        notices = []
+        try:
+            speaker_turns = await _blocking(
+                diarize_speakers, audio_16k, hf_token=hf_token,
+                notices=notices,
+            )
+            segments = assign_speakers_to_segments(segments, speaker_turns)
+            perf["speaker_turns"] = len(speaker_turns)
+        except Exception as e:
+            # Diarization is genuinely optional — a failure here must not
+            # cost the caller the transcription they already paid for. We
+            # fall through to the Case C single-speaker reference and
+            # record the reason so the UI can offer a targeted retry.
+            log.warning(f"[diarize] Failed ({e}) — falling back to single speaker")
+            perf["diarize_error"] = str(e)[:300]
+            notices.append(pnotice(
+                code="pyannote.crashed",
+                severity="error",
+                subsystem="diarize",
+                title="Diarization crashed",
+                detail=f"{type(e).__name__}: {e}",
+                remediation=["Retry the Diarize stage",
+                             "Or retry with 'Skip diarization' to continue"],
+            ))
+            speaker_turns = []
+        if notices:
+            perf["notices"] = notices
+            diag.record_runtime_notices(notices, job_id=job.get("id", ""))
+
+    # Store raw transcript preview for UI
+    ctx["transcript_raw"] = [
+        {
+            "idx": i,
+            "start": s["start"], "end": s["end"],
+            "text": s["text"],
+            "speaker": s.get("speaker", ""),
+        }
+        for i, s in enumerate(segments)
+    ]
+    update(transcript_raw=ctx["transcript_raw"])
+
+    speaker_refs = {}
+    speaker_transcripts = {}
+    # Always-preserved copy of refs extracted from the SOURCE video.
+    # Even when user picks a preset/upload (which overrides speaker_refs),
+    # we still stash the original source refs here so that "retry TTS"
+    # without re-choosing a ref can go back to the source voice.
+    source_speaker_refs = {}
+
+    # Case A: user uploaded a reference voice -> use it for ALL speakers.
+    # Pure Controllable Cloning: just reference_wav_path, nothing else.
+    if reference_audio and os.path.exists(reference_audio):
+        log.info(f"[ref] Using USER-UPLOADED reference: {reference_audio}")
+        unique_speakers = {s.get("speaker", "SPEAKER_00") for s in segments}
+        for sp in unique_speakers:
+            speaker_refs[sp] = reference_audio
+            # NOT populating speaker_transcripts — we want clean Controllable
+            # Cloning (reference_wav_path only), not Ultimate Cloning which
+            # needs an exact transcript of the reference audio.
+            speaker_transcripts[sp] = ""
+        if speaker_turns:
+            try:
+                refs_dir = str(work / "speaker_refs")
+                source_speaker_refs = await _blocking(
+                    extract_speaker_audio,
+                    audio_16k, speaker_turns, refs_dir, main_only=False,
+                ) or {}
+                log.info(f"[ref] Also extracted {len(source_speaker_refs)} "
+                         f"source-voice refs for potential retry use")
+            except Exception as e:
+                log.warning(f"[ref] Source-ref extraction failed (ok to skip): {e}")
+
+    # Case B: diarization worked -> per-speaker refs from the source
+    elif speaker_turns:
+        log.info("[ref] No user upload; extracting speaker refs from source video")
+        refs_dir = str(work / "speaker_refs")
+        main_only = speaker_mode == "main"
+        speaker_refs = await _blocking(
+            extract_speaker_audio,
+            audio_16k, speaker_turns, refs_dir, main_only=main_only,
+        )
+        source_speaker_refs = dict(speaker_refs)
+        if speaker_refs:
+            # Populate speaker_transcripts (enables Tier 1 Ultimate Cloning)
+            # ONLY for same-language dubbing. Cross-lingual Tier 1 makes
+            # VoxCPM "continue" the source-language phonetics, so Russian
+            # text comes out with English phonemes = gibberish.
+            if effective_src == target_lang:
+                for spk in speaker_refs:
+                    texts = [s["text"] for s in segments if s.get("speaker") == spk]
+                    if texts:
+                        speaker_transcripts[spk] = " ".join(texts[:3])
+            else:
+                log.info(f"[ref] Cross-lingual dub ({effective_src}→{target_lang}); "
+                         f"clearing prompt_text to force Controllable Cloning")
+                for spk in speaker_refs:
+                    speaker_transcripts[spk] = ""
+
+        # If main_only: remap EVERY segment to the sole extracted speaker
+        if main_only and speaker_refs:
+            primary = next(iter(speaker_refs))
+            for s in segments:
+                s["speaker"] = primary
+
+    # Case C: diarization failed/skipped -> ONE clean reference from long segments
+    if not speaker_refs:
+        log.info("[ref] No user upload + diarization unavailable - "
+                 "building fallback single-speaker reference from source")
+        fb_path = str(work / "speaker_refs" / "ref_fallback.wav")
+        (work / "speaker_refs").mkdir(exist_ok=True)
+        fb = await _blocking(extract_fallback_reference,
+                             audio_16k, segments, fb_path, duration=30.0)
+        if fb:
+            speaker_refs["SPEAKER_00"] = fb
+            source_speaker_refs["SPEAKER_00"] = fb
+            if effective_src == target_lang:
+                speaker_transcripts["SPEAKER_00"] = " ".join(
+                    s["text"] for s in segments[:5]
+                )
+            else:
+                speaker_transcripts["SPEAKER_00"] = ""
+            for s in segments:
+                s["speaker"] = "SPEAKER_00"
+        perf["fallback_ref"] = bool(fb)
+
+    # ─── POST-PROCESS SEGMENTS ───────────────────────────────
+    # WhisperX cuts on VAD (breath) boundaries, not sentence boundaries,
+    # so natural sentences often get split at pauses. The resulting
+    # micro-fragments give TTS too little context to clone voice correctly.
+    # See pipeline/segment_post.py for details.
+    before = len(segments)
+    try:
+        from pipeline.segment_post import postprocess_segments
+        segments = await _blocking(postprocess_segments, segments)
+        perf["segments_merged"] = before - len(segments)
+    except Exception as e:
+        log.warning(f"Segment postprocess failed (continuing with raw): {e}")
+
+    n_speakers = len(set(s.get("speaker", "?") for s in segments))
+    ctx["segments"] = _serialize_segments(segments)
+    ctx["speaker_refs"] = dict(speaker_refs)
+    ctx["source_speaker_refs"] = dict(source_speaker_refs)
+    ctx["speaker_transcripts"] = dict(speaker_transcripts)
+    perf.update(speakers=n_speakers, segments=len(segments))
+    update(speaker_count=n_speakers, segment_count=len(segments), progress=42)
+
+
+def _is_untranslated(seg: dict) -> bool:
+    """A segment counts as untranslated when the LLM gave us nothing new."""
+    tt = (seg.get("translated_text") or "").strip()
+    src = (seg.get("text") or "").strip()
+    return (not tt) or tt == src
+
+
+async def _stage_translate(job, work, ctx, update, perf):
+    target_lang = ctx.get("target_lang", "ru")
+    model = ctx.get("model") or cfg.translation_model
+    context_hint = ctx.get("context_hint", "")
+    segments = [dict(s) for s in ctx["segments"]]
+
+    # ─── PARTIAL RETRY ────────────────────────────────────────────────
+    # `translate_failed_only` is the answer to "the model died halfway and
+    # I want to finish the job with a different one": we keep every segment
+    # that already has a real translation and re-submit only the ones that
+    # came back empty or identical to the source.
+    prior_by_idx = {}
+    if ctx.get("translate_failed_only"):
+        prev = _load_checkpoint(job["id"], "translation_done") or {}
+        candidates = {
+            s.get("idx"): s for s in prev.get("segments", [])
+            if not _is_untranslated(s)
+        }
+        # Carry the good translations onto our working copy — but only where
+        # the SOURCE text still matches. If transcription was re-run since,
+        # segment N is not the same sentence any more, and pasting the old
+        # translation onto it would silently mistranslate the line.
+        mismatched = 0
+        for s in segments:
+            good = candidates.get(s.get("idx"))
+            if not good:
+                continue
+            if (good.get("text") or "").strip() != (s.get("text") or "").strip():
+                mismatched += 1
+                continue
+            s["translated_text"] = good.get("translated_text", "")
+            prior_by_idx[s["idx"]] = good
+        if mismatched:
+            log.info(
+                f"[translate] {mismatched} prior translation(s) discarded — "
+                f"source text changed since they were made"
+            )
+        todo = [s for s in segments if _is_untranslated(s)]
+        log.info(
+            f"[translate] Partial retry: keeping {len(prior_by_idx)} good "
+            f"segment(s), re-translating {len(todo)} with model={model}"
+        )
+        if not todo:
+            log.info("[translate] Nothing left to translate — all segments OK")
+            perf.update(model=model, translated=0, reused=len(prior_by_idx))
+            ctx["segments"] = _serialize_segments(segments)
+            _finalize_translation(job, work, ctx, update, perf)
+            return
+    else:
+        todo = segments
+
+    update(step_detail=f"Translating to {target_lang} with {model}...")
+    total_todo = len(todo)
+
+    def _translate_progress(done, total, eta_sec):
+        # Map translation progress into the overall pipeline 45→62% range
+        pct = 45 + int((done / max(total, 1)) * 17)
+        eta_str = f" · ~{eta_sec // 60}m{eta_sec % 60}s left" if eta_sec > 30 else ""
+        update(
+            progress=min(pct, 62),
+            step_detail=f"Translating batch {done}/{total}{eta_str}",
+        )
+
+    # translate_segments(segments, target_lang, model, ...)
+    # NOT (segments, source_lang, target_lang, model) — the translator
+    # infers the source language from the prompt internally.
+    t0 = time.time()
+    translated = await translate_segments(
+        todo, target_lang, model,
+        context_hint=context_hint,
+        progress_callback=_translate_progress,
+    )
+    log.info(
+        f"[perf] · translate {total_todo} segment(s) in {time.time()-t0:.1f}s "
+        f"({total_todo / max(time.time()-t0, 0.001):.2f} seg/s, model={model})"
+    )
+
+    # Merge results back (identity for the full-run case, real merge for retries)
+    by_idx = {s.get("idx"): s for s in segments}
+    for s in translated:
+        tgt = by_idx.get(s.get("idx"))
+        if tgt is not None:
+            tgt.update(s)
+        else:
+            by_idx[s.get("idx")] = s
+    segments = [by_idx[k] for k in sorted(by_idx.keys())]
+
+    # Sanity check: if a significant fraction of segments are still in the
+    # source language, stop here instead of letting VoxCPM try to speak
+    # English with Russian cross-lingual cfg (which crashes the worker).
+    untranslated_count = sum(1 for s in segments if _is_untranslated(s))
+    perf.update(
+        model=model, translated=total_todo, reused=len(prior_by_idx),
+        untranslated=untranslated_count, segments=len(segments),
+    )
+    if untranslated_count == len(segments):
+        raise RuntimeError(
+            f"Translation completely failed — all {len(segments)} segments "
+            f"still in source language. Check Ollama: run `ollama ps` and "
+            f"try `ollama run {model} 'hi'` manually. If it hangs, the "
+            f"model may be incompatible with your setup; try "
+            f"`ollama pull qwen2.5:7b` and retry this stage with that model."
+        )
+    if untranslated_count:
+        log.warning(
+            f"[translate] {untranslated_count}/{len(segments)} segments did not "
+            f"translate — retry the 'translate' stage with a different model "
+            f"and 'only failed segments' to fix just those"
+        )
+
+    # Unload the LLM from VRAM before TTS. Without this, Ollama's 9+ GB model
+    # sits in VRAM during TTS, leaving too little room for VoxCPM (~4 GB).
+    try:
+        await unload_ollama_model(model)
+    except Exception as e:
+        log.warning(f"Failed to unload Ollama model (non-fatal): {e}")
+
+    ctx["segments"] = _serialize_segments(segments)
+    ctx["model"] = model
+    _finalize_translation(job, work, ctx, update, perf)
+
+
+def _finalize_translation(job, work, ctx, update, perf) -> None:
+    """Shared tail of the translate stage: UI preview + subtitle file."""
+    segments = ctx["segments"]
+    job_id = job["id"]
+    transcript_preview = [
+        {
+            "start": s["start"], "end": s["end"],
+            "text": s["text"],
+            "translated": s.get("translated_text", ""),
+            "speaker": s.get("speaker", ""),
+        }
+        for s in segments
+    ]
+    srt_path = str(work / "subtitles.srt")
+    write_srt(segments, srt_path)
+    ctx["srt_path"] = srt_path
+    update(
+        transcript=transcript_preview, progress=62,
+        srt_url=f"/outputs/{job_id}/subtitles.srt",
+    )
+
+
+async def _stage_tts(job, work, ctx, update, perf):
+    tts = get_tts_engine()
+    tts_dir = str(work / "tts_segments")
+    segments = [dict(s) for s in ctx["segments"]]
+    effective_src = ctx.get("effective_src", "en")
+    target_lang = ctx.get("target_lang", "ru")
+    eff_style = ctx.get("voice_style_effective", "")
+    voice_seed = ctx.get("voice_seed")
+    reference_audio = ctx.get("reference_audio", "")
+    speaker_refs = dict(ctx.get("speaker_refs") or {})
+    speaker_transcripts = dict(ctx.get("speaker_transcripts") or {})
+
+    # ─── VOICE MODE ROUTING ──────────────────────────────────────────
+    # VoxCPM has 3 mutually-exclusive modes; pick one based on the user's
+    # choice. NEVER mix style prefix with speaker refs — the model will
+    # literally read the style description out loud in the cloned voice.
+    has_ref = any(speaker_refs.values())
+    if reference_audio and os.path.exists(reference_audio):
+        mode = "file_ref"          # user uploaded / file preset
+    elif eff_style and eff_style.strip() and not has_ref:
+        mode = "voice_design"
+    elif eff_style and eff_style.strip() and has_ref:
+        # User picked a style preset but we already extracted refs from the
+        # source video. They presumably want a fresh designed voice.
+        log.info("[pipeline] Style preset + source refs → dropping refs "
+                 "for Voice Design")
+        speaker_refs = {}
+        speaker_transcripts = {}
+        mode = "voice_design"
+    else:
+        mode = "source_refs"
+
+    # On a retry, prefer the ORIGINAL source refs over whatever preset the
+    # previous run baked into speaker_refs — otherwise "retry with source
+    # voice" would silently keep using the last preset forever.
+    if mode == "source_refs" and ctx.get("_is_retry"):
+        stash = ctx.get("source_speaker_refs") or {}
+        if stash:
+            log.info(f"[tts] Retry: restoring ORIGINAL source refs: {list(stash)}")
+            speaker_refs = dict(stash)
+            speaker_transcripts = {sp: "" for sp in speaker_refs}
+        # Re-seed so identical inputs don't yield byte-identical audio —
+        # otherwise "click retry" would appear to do nothing.
+        voice_seed = int(time.time() * 1000) % 2_147_483_647
+        ctx["voice_seed"] = voice_seed
+        log.info(f"[tts] Retry: rolled fresh voice_seed={voice_seed}")
+
+    update(
+        step_detail=f"Generating speech (mode={mode}, "
+                    f"preset={ctx.get('voice_preset', 'auto')}, seed={voice_seed})...",
+        voice_mode=("upload" if mode == "file_ref" else
+                    ("custom" if mode == "voice_design" else "source")),
+        voice_seed=voice_seed,
+    )
+
+    # Apply Voice Design prefix ONLY in voice_design mode
+    if mode == "voice_design" and isinstance(tts, VoxCPMSynthesizer):
+        style = eff_style.strip().strip("()")
+        for s in segments:
+            base = s.get("translated_text") or s.get("text", "")
+            if base and not base.startswith("("):
+                s["translated_text"] = f"({style}){base}"
+
+    # Keep already-rendered segments when this is a partial retry
+    if ctx.get("tts_keep_existing"):
+        # A retry of `tts` starts from the translation checkpoint, whose
+        # segments carry no audio_path — so recover the previously rendered
+        # files from the tts checkpoint. Reuse is keyed on the translated
+        # text as well as the index: a line that was re-translated or edited
+        # must be re-synthesized, not left speaking the old words.
+        if not any(s.get("audio_path") for s in segments):
+            prev = _load_checkpoint(job["id"], "tts_done") or {}
+            prev_by_idx = {s.get("idx"): s for s in prev.get("segments", [])}
+            recovered = 0
+            for s in segments:
+                old = prev_by_idx.get(s.get("idx"))
+                if not old or not old.get("audio_path"):
+                    continue
+                if (old.get("translated_text") or "").strip() != \
+                        (s.get("translated_text") or "").strip():
+                    continue
+                if os.path.exists(old["audio_path"]):
+                    s["audio_path"] = old["audio_path"]
+                    recovered += 1
+            log.info(f"[tts] Recovered {recovered} rendered segment(s) from "
+                     f"the previous TTS checkpoint")
+        todo = [s for s in segments
+                if not (s.get("audio_path") and os.path.exists(s["audio_path"]))]
+        log.info(f"[tts] Partial retry: keeping {len(segments)-len(todo)} "
+                 f"existing segment(s), synthesizing {len(todo)}")
+    else:
+        todo = segments
+
+    def synth_progress(done, total):
+        pct = 65 + int((done / max(total, 1)) * 20)
+        update(progress=min(pct, 85), step_detail=f"Synthesizing: {done}/{total}")
+
+    t0 = time.time()
+    if todo:
+        if isinstance(tts, VoxCPMSynthesizer):
+            todo = tts.synthesize_segments(
+                todo, tts_dir,
+                speaker_refs=speaker_refs,
+                speaker_transcripts=speaker_transcripts,
+                progress_callback=synth_progress,
+                voice_seed=voice_seed,
+                tts_speed=ctx.get("tts_speed", "balanced"),
+                is_cross_lingual=(effective_src != target_lang),
+                target_lang=target_lang,
+            )
+        else:
+            todo = await tts.synthesize_segments_async(
+                todo, tts_dir, target_lang,
+                progress_callback=synth_progress,
+            )
+        # Merge back (no-op when todo IS segments)
+        by_idx = {s.get("idx"): s for s in segments}
+        for s in todo:
+            if s.get("idx") in by_idx:
+                by_idx[s["idx"]].update(s)
+        segments = [by_idx[k] for k in sorted(by_idx.keys())]
+
+    synth_ok = sum(1 for s in segments if s.get("audio_path"))
+    took = time.time() - t0
+    log.info(
+        f"[perf] · tts {synth_ok}/{len(segments)} segments in {took:.1f}s "
+        f"({took / max(synth_ok, 1):.2f}s/segment, engine={type(tts).__name__}, "
+        f"mode={mode})"
+    )
+    perf.update(
+        engine=type(tts).__name__, mode=mode, seed=voice_seed,
+        synthesized=synth_ok, failed=len(segments) - synth_ok,
+        sec_per_segment=round(took / max(synth_ok, 1), 2),
+    )
+    if synth_ok == 0:
+        # The worker reports per-segment failures as events rather than
+        # raising, so name the actual cause here — "check model/GPU" sent us
+        # hunting the GPU for what was a bad generation parameter.
+        detail = ""
+        if hasattr(tts, "last_failure_detail"):
+            detail = tts.last_failure_detail()
+        if detail:
+            perf["failure"] = detail[:500]
+        raise RuntimeError(
+            f"All {len(segments)} TTS segments failed"
+            + (f": {detail}" if detail else " - check model/GPU")
+        )
+
+    ctx["segments"] = _serialize_segments(segments)
+    ctx["sample_rate"] = getattr(tts, "sample_rate", 48000)
+    ctx.pop("tts_keep_existing", None)
+    update(progress=85, step_detail=f"Synthesized {synth_ok}/{len(segments)}")
+
+
+async def _stage_assemble(job, work, ctx, update, perf):
+    update(step_detail="Assembling dubbed audio...")
+    segments = [dict(s) for s in ctx["segments"]]
+    dubbed_wav = str(work / "dubbed_audio.wav")
+    await _blocking(
+        assemble_dubbed_audio,
+        segments, ctx["duration"], dubbed_wav,
+        ctx.get("sample_rate", 48000), apply_loudnorm=True,
+    )
+    _save_placements(work, segments)
+    ctx["dubbed_wav"] = dubbed_wav
+    try:
+        perf["wav_mb"] = round(os.path.getsize(dubbed_wav) / 1024 / 1024, 1)
+    except OSError:
+        pass
+    update(progress=92)
+
+
+async def _stage_merge(job, work, ctx, update, perf):
+    update(step_detail="Rendering final video...")
+    output_mp4 = str(work / "dubbed_video.mp4")
+    await _blocking(
+        merge_audio_video,
+        ctx["video_path"], ctx["dubbed_wav"], output_mp4,
+        ctx.get("bg_audio_path", "") if ctx.get("keep_bg") else "",
+    )
+    ctx["output_mp4"] = output_mp4
+    try:
+        perf["mp4_mb"] = round(os.path.getsize(output_mp4) / 1024 / 1024, 1)
+    except OSError:
+        pass
+    update(
+        status="complete",
+        progress=100,
+        output_url=f"/outputs/{job['id']}/dubbed_video.mp4?v={int(time.time())}",
+        completed_at=time.time(),
+        step_detail="Done!",
+    )
+    log.info(f"Pipeline complete: {output_mp4}")
+
+
+STAGE_HANDLERS = {
+    "download": _stage_download,
+    "extract": _stage_extract,
+    "transcribe": _stage_transcribe,
+    "diarize": _stage_diarize,
+    "translate": _stage_translate,
+    "tts": _stage_tts,
+    "assemble": _stage_assemble,
+    "merge": _stage_merge,
+}
+
+
+# ─────────────────────────────────────────────────────────────
+# Pipeline driver
+# ─────────────────────────────────────────────────────────────
+def _wizard_pause_after(stage_id: str, ctx: dict) -> Optional[tuple]:
+    """Return (status, detail, checkpoint) if the wizard pauses after a stage."""
+    mode = ctx.get("wizard_mode", "auto")
+    if stage_id == "diarize" and mode == "review_transcript":
+        return ("awaiting_transcript_review",
+                "Review transcription — edit or approve to continue",
+                "transcription_done")
+    if stage_id == "translate" and mode == "review_translation":
+        return ("awaiting_translation_review",
+                "Review translation — edit, retranslate, or approve to continue",
+                "translation_done")
+    return None
+
+
+async def run_pipeline_stages(
+    job_id: str,
+    ctx: dict,
+    start_stage: str = "download",
+    stop_after: str = "",
+) -> None:
+    """Run the pipeline from `start_stage` through to the end (or `stop_after`).
+
+    Each stage is timed and resource-sampled, then its output context is
+    checkpointed. A failure marks the job as errored but leaves every prior
+    checkpoint intact, so the failed stage — and only the failed stage — can
+    be retried via /api/dub/{id}/retry_stage/{stage}.
+    """
+    job = jobs[job_id]
+    work = OUTPUT_DIR / job_id
+    work.mkdir(exist_ok=True)
+
+    def update(**kwargs):
+        # Check the cancel flag at every stage transition. Any pipeline
+        # path that calls update() will raise JobCancelled within ~1
+        # instruction of the user clicking Cancel, and the outer handler
+        # in _job_queue_worker will mark status=cancelled cleanly.
+        if job.get("cancel_requested"):
+            _maybe_terminate_tts_worker()
+            raise JobCancelled(f"Job {job_id} cancelled by user")
+        job.update(kwargs)
+        save_job(job)
+
+    _resolve_voice_into_ctx(job, ctx)
+    start_i = max(_stage_index(start_stage), 0)
+    stop_i = _stage_index(stop_after) if stop_after else len(PIPELINE_STAGES) - 1
+    if stop_i < 0:
+        stop_i = len(PIPELINE_STAGES) - 1
+
+    run_t0 = time.time()
+    log.info(
+        f"[pipeline] job={job_id} running stages "
+        f"{STAGE_ORDER[start_i]}→{STAGE_ORDER[stop_i]} "
+        f"({stop_i - start_i + 1} of {len(PIPELINE_STAGES)})"
+    )
+
+    try:
+        for i in range(start_i, stop_i + 1):
+            spec = PIPELINE_STAGES[i]
+            sid = spec["id"]
+            lo, hi = spec["progress"]
+            update(
+                status=spec["status"], progress=lo, stage_id=sid,
+                step_detail=spec["hint"],
+            )
+            with stage_timer(work, job_id, sid) as perf:
+                await STAGE_HANDLERS[sid](job, work, ctx, update, perf)
+
+            _save_checkpoint(job_id, work, stage=spec["checkpoint"],
+                             data=_ctx_for_checkpoint(ctx))
+
+            pause = _wizard_pause_after(sid, ctx)
+            if pause:
+                status, detail, cp_name = pause
+                update(status=status, progress=hi, step_detail=detail,
+                       checkpoint_stage=cp_name)
+                log.info(f"[wizard] Paused after '{sid}' for job {job_id}")
+                return
+
+        # A partial run (stop_after set, or a stage list that doesn't reach
+        # `merge`) must land on a terminal status. Without this the job keeps
+        # the last stage's in-flight status — "diarizing" forever — which
+        # reads as a hung job and blocks further stage retries.
+        if stop_i < len(PIPELINE_STAGES) - 1:
+            last = STAGE_ORDER[stop_i]
+            update(
+                status="paused",
+                step_detail=f"Stopped after '{STAGE_BY_ID[last]['label']}' — "
+                            f"review the result, then retry or continue",
+                stage_id=None,
+                checkpoint_stage=PIPELINE_STAGES[stop_i]["checkpoint"],
+            )
+
+        log.info(
+            f"[perf] ═ pipeline job={job_id} finished "
+            f"{STAGE_ORDER[start_i]}→{STAGE_ORDER[stop_i]} "
+            f"in {time.time() - run_t0:.1f}s total"
+        )
+    except JobCancelled:
+        # Re-raise so _job_queue_worker marks the job as 'cancelled'
+        # rather than 'error'. Logging is handled upstream.
+        log.info(f"Pipeline cancelled for {job_id}")
+        raise
+    except Exception as e:
+        job["failed_stage"] = job.get("stage_id", "")
+        update(status="error", error=str(e))
+        log.exception(f"Pipeline failed at stage '{job.get('stage_id')}': {e}")
+
+
 async def run_pipeline(
     job_id: str,
     source: str,
@@ -1061,613 +1999,31 @@ async def run_pipeline(
     wizard_mode: str = "auto",  # "auto" | "review_translation" | "review_transcript"
     auto_denoise: bool = True,  # apply ffmpeg denoise before WhisperX
 ):
-    """Main dubbing pipeline. When wizard_mode != 'auto', pauses at the
-    specified checkpoint with status='awaiting_review' so the user can
-    inspect/edit intermediate results before continuing."""
+    """Main dubbing pipeline entry point.
+
+    Builds the initial stage context from the request and runs every stage.
+    When wizard_mode != 'auto' the driver pauses at the matching checkpoint
+    with status='awaiting_review' so the user can inspect/edit intermediate
+    results before continuing."""
     job = jobs[job_id]
-    work = OUTPUT_DIR / job_id
-    work.mkdir(exist_ok=True)
     job["wizard_mode"] = wizard_mode
-
-    # Resolve final voice config once, store on job so UI can display it
-    eff_style, voice_seed, preset_ref_file = resolve_voice_config(voice_preset, voice_style, job_id)
-    job["voice_preset"] = voice_preset
-    job["voice_style_effective"] = eff_style
-    job["voice_seed"] = voice_seed
-
-    # If a file-based preset was selected, it acts like user-uploaded reference
-    if preset_ref_file and os.path.exists(preset_ref_file):
-        log.info(f"[ref] File-preset selected: {preset_ref_file}")
-        reference_audio = preset_ref_file
-
-    def update(**kwargs):
-        # Check the cancel flag at every stage transition. Any pipeline
-        # path that calls update() will raise JobCancelled within ~1
-        # instruction of the user clicking Cancel, and the outer handler
-        # in _job_queue_worker will mark status=cancelled cleanly.
-        if job.get("cancel_requested"):
-            _maybe_terminate_tts_worker()
-            raise JobCancelled(f"Job {job_id} cancelled by user")
-        job.update(kwargs)
-        save_job(job)
-
-    try:
-        # 1. Acquire video
-        update(status="downloading", progress=2, step_detail="Getting video...")
-        log.info(f"[pipeline:{job_id}] stage=download source={source!r}")
-        video_path = download_video(source, str(work))
-        duration = get_duration(video_path)
-        # Duration is a leading signal for silent failures: a webp/still image
-        # or corrupt upload yields duration=0 and breaks every later stage
-        # (extract_audio → empty WAV → transcription "no speech"). Log it at
-        # INFO so it's visible even without TACHIDUBB_DEBUG.
-        log.info(
-            f"[pipeline:{job_id}] acquired video={video_path} duration={duration:.3f}s"
-        )
-        if duration <= 0:
-            log.warning(
-                f"[pipeline:{job_id}] duration is {duration}s — source may be a "
-                f"still image (webp/jpg/png) or unsupported/corrupt container. "
-                f"Audio extraction and transcription will likely fail."
-            )
-        update(duration=round(duration, 1), progress=8)
-
-        # 2. Extract audio
-        update(status="extracting", progress=10, step_detail="Extracting audio tracks...")
-        log.info(f"[pipeline:{job_id}] stage=extract_audio video={video_path}")
-        audio_16k = str(work / "audio_16k.wav")
-        extract_audio(video_path, audio_16k)
-        # If the source had no audio stream (image/animated image), the WAV
-        # may be empty or ffmpeg may have errored inside _run. Surface the
-        # resulting file size so a zero-byte WAV is obvious.
-        try:
-            _audio_bytes = os.path.getsize(audio_16k)
-            log.info(
-                f"[pipeline:{job_id}] extracted audio={audio_16k} "
-                f"size={_audio_bytes} bytes"
-            )
-            if _audio_bytes < 1000:
-                log.warning(
-                    f"[pipeline:{job_id}] audio_16k.wav is only {_audio_bytes}B "
-                    f"— source likely had no audio stream (still image?). "
-                    f"Transcription will find no speech."
-                )
-        except OSError as e:
-            log.warning(f"[pipeline:{job_id}] audio_16k.wav missing after extract: {e}")
-
-        # 2b. Optional denoise for noisy source audio.
-        # BJJ/cooking/sports videos often have mat noise, background music,
-        # crowd, or equipment hum that WhisperX mistakes for words. We
-        # apply an ffmpeg filter chain to clean the audio WITHOUT removing
-        # voice quality. Enabled via auto_denoise flag (default True on
-        # high-duration videos where noise can compound error rate).
-        # Filter chain reasoning:
-        #   - afftdn: FFT-based noise reduction (safe, preserves speech)
-        #   - highpass=80: drop sub-bass rumble (room noise, AC)
-        #   - lowpass=10000: drop tweeter noise (mic hiss, digital artifacts)
-        # This is conservative; aggressive denoise can hurt Whisper accuracy.
-        if auto_denoise:
-            try:
-                import subprocess
-                denoise_start = time.time()
-                audio_clean = str(work / "audio_16k_clean.wav")
-                update(progress=12, step_detail="Cleaning audio...")
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", audio_16k,
-                     "-af", "afftdn=nr=10:nf=-25,highpass=f=80,lowpass=f=10000",
-                     "-ar", "16000", "-ac", "1", "-acodec", "pcm_s16le",
-                     audio_clean],
-                    check=True, capture_output=True, timeout=180,
-                )
-                log.info(
-                    f"[audio] Denoised in {time.time()-denoise_start:.1f}s "
-                    f"(audio_16k_clean.wav) — feeding to WhisperX"
-                )
-                audio_16k = audio_clean
-            except Exception as e:
-                log.warning(f"Denoise failed (using raw audio): {e}")
-
-        bg_audio_path = ""
-        if keep_bg:
-            try:
-                audio_hq = str(work / "audio_hq.wav")
-                extract_audio_hq(video_path, audio_hq)
-                _, bg_audio_path = separate_background(audio_hq, str(work))
-            except Exception as e:
-                log.warning(f"BG separation skipped: {e}")
-        update(progress=15)
-
-        # 2c. VAD filtering — strip long silence/music before Whisper.
-        # silero-vad is optional (graceful fallback to full audio).
-        if cfg.vad_enabled:
-            try:
-                vad_out = str(work / "audio_16k_vad.wav")
-                update(progress=16, step_detail="Filtering non-speech regions...")
-                audio_16k, speech_ratio = apply_vad_filter(
-                    audio_16k, vad_out, threshold=cfg.vad_threshold
-                )
-                if speech_ratio < 0.15:
-                    log.warning(
-                        f"[vad] Low speech ratio ({speech_ratio:.0%}) — "
-                        f"consider disabling VAD or checking audio source"
-                    )
-            except Exception as e:
-                log.warning(f"VAD skipped: {e}")
-
-        # 3. Transcribe
-        # 3. Transcribe with elapsed-time progress hint.
-        # WhisperX doesn't expose internal progress, so during long transcription
-        # (e.g. 20-min podcasts take 5-6min) the UI would just show "Transcribing..."
-        # forever. We spawn a watchdog that updates step_detail with elapsed
-        # seconds so the user can see it's still alive.
-        update(status="transcribing", progress=18, step_detail="Transcribing speech...")
-        log.info(
-            f"[pipeline:{job_id}] stage=transcribe model={whisper_model} "
-            f"src={source_lang} audio={audio_16k}"
-        )
-        _t_trans_start = time.time()
-        _trans_done_flag = {"done": False}
-        async def _trans_watchdog():
-            while not _trans_done_flag["done"]:
-                elapsed = int(time.time() - _t_trans_start)
-                if elapsed > 10:  # only show after 10s to avoid noise on short videos
-                    mins, secs = divmod(elapsed, 60)
-                    hint = f"Transcribing ({duration:.0f}s audio)... elapsed {mins}m{secs:02d}s"
-                    if elapsed > 120:
-                        hint += " · try smaller whisper model for faster transcribe"
-                    update(step_detail=hint)
-                await asyncio.sleep(5)
-        _watchdog_task = asyncio.create_task(_trans_watchdog())
-        try:
-            segments, detected_lang = transcribe(audio_16k, source_lang, whisper_model)
-        finally:
-            _trans_done_flag["done"] = True
-            _watchdog_task.cancel()
-            try:
-                await _watchdog_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        log.info(
-            f"[transcribe] Completed in {time.time() - _t_trans_start:.1f}s "
-            f"({duration:.0f}s audio, ratio {duration / max(time.time() - _t_trans_start, 1):.1f}x realtime)"
-        )
-        effective_src = detected_lang if source_lang == "auto" else source_lang
-        update(
-            source_lang_detected=detected_lang,
-            segment_count=len(segments),
-            progress=35,
-        )
-
-        if not segments:
-            raise RuntimeError("No speech detected in video")
-
-        # 4. Diarize
-        update(status="diarizing", progress=38, step_detail="Identifying speakers...")
-        hf_token = os.getenv("HF_TOKEN", "")
-        speaker_turns = diarize_speakers(audio_16k, hf_token=hf_token)
-        segments = assign_speakers_to_segments(segments, speaker_turns)
-
-        # Store raw transcript preview for UI
-        transcript_preview_raw = [
-            {
-                "idx": i,
-                "start": s["start"], "end": s["end"],
-                "text": s["text"],
-                "speaker": s.get("speaker", ""),
-            }
-            for i, s in enumerate(segments)
-        ]
-        update(transcript_raw=transcript_preview_raw)
-
-        speaker_refs = {}
-        speaker_transcripts = {}
-        # Always-preserved copy of refs extracted from the SOURCE video.
-        # Even when user picks a preset/upload (which overrides speaker_refs),
-        # we still stash the original source refs here so that "retry TTS"
-        # without re-choosing a ref can go back to the source voice. Without
-        # this, the uploaded preset got baked into the checkpoint and retry
-        # would silently reuse it forever.
-        source_speaker_refs = {}
-
-        # Case A: user uploaded a reference voice -> use it for ALL speakers.
-        # Pure Controllable Cloning: just reference_wav_path, nothing else.
-        # VoxCPM2 README: "Clone any voice from a short reference clip".
-        if reference_audio and os.path.exists(reference_audio):
-            log.info(f"[ref] Using USER-UPLOADED reference: {reference_audio}")
-            unique_speakers = {s.get("speaker", "SPEAKER_00") for s in segments}
-            for sp in unique_speakers:
-                speaker_refs[sp] = reference_audio
-                # NOT populating speaker_transcripts — we want clean Controllable
-                # Cloning (reference_wav_path only), not Ultimate Cloning which
-                # needs an exact transcript of the reference audio and is
-                # stricter about audio continuation.
-                speaker_transcripts[sp] = ""
-            # Also extract source refs for potential retry-with-source-voice
-            if speaker_turns:
-                try:
-                    refs_dir = str(work / "speaker_refs")
-                    source_speaker_refs = extract_speaker_audio(
-                        audio_16k, speaker_turns, refs_dir, main_only=False,
-                    ) or {}
-                    log.info(f"[ref] Also extracted {len(source_speaker_refs)} "
-                             f"source-voice refs for potential retry use")
-                except Exception as e:
-                    log.warning(f"[ref] Source-ref extraction failed (ok to skip): {e}")
-
-        # Case B: diarization worked -> per-speaker refs from the source
-        elif speaker_turns:
-            log.info("[ref] No user upload; extracting speaker refs from source video")
-            refs_dir = str(work / "speaker_refs")
-            main_only = speaker_mode == "main"
-            speaker_refs = extract_speaker_audio(
-                audio_16k, speaker_turns, refs_dir, main_only=main_only,
-            )
-            # Source refs = speaker_refs in this case (same origin)
-            source_speaker_refs = dict(speaker_refs)
-            if speaker_refs:
-                # Populate speaker_transcripts (enables Tier 1 Ultimate Cloning)
-                # ONLY for same-language dubbing. Cross-lingual Tier 1 makes
-                # VoxCPM "continue" the source-language phonetics, so Russian
-                # text comes out with English phonemes = gibberish. For
-                # cross-lingual we want Tier 2 Controllable Cloning which just
-                # clones timbre without audio-continuation.
-                same_lang = (effective_src == target_lang)
-                if same_lang:
-                    for spk in speaker_refs:
-                        texts = [s["text"] for s in segments
-                                 if s.get("speaker") == spk]
-                        if texts:
-                            speaker_transcripts[spk] = " ".join(texts[:3])
-                else:
-                    log.info(f"[ref] Cross-lingual dub ({effective_src}→{target_lang}); "
-                             f"clearing prompt_text to force Controllable Cloning")
-                    for spk in speaker_refs:
-                        speaker_transcripts[spk] = ""
-
-            # If main_only: remap EVERY segment to the sole extracted speaker
-            if main_only and speaker_refs:
-                primary = next(iter(speaker_refs))
-                for s in segments:
-                    s["speaker"] = primary
-
-        # Case C: diarization failed -> build ONE clean reference from long segments
-        if not speaker_refs:
-            log.info("[ref] No user upload + diarization unavailable - "
-                     "building fallback single-speaker reference from source")
-            fb_path = str(work / "speaker_refs" / "ref_fallback.wav")
-            (work / "speaker_refs").mkdir(exist_ok=True)
-            fb = extract_fallback_reference(audio_16k, segments, fb_path, duration=30.0)
-            if fb:
-                speaker_refs["SPEAKER_00"] = fb
-                source_speaker_refs["SPEAKER_00"] = fb  # same source as above
-                # Same cross-lingual guard as Case B
-                if effective_src == target_lang:
-                    speaker_transcripts["SPEAKER_00"] = " ".join(
-                        s["text"] for s in segments[:5]
-                    )
-                else:
-                    speaker_transcripts["SPEAKER_00"] = ""
-                for s in segments:
-                    s["speaker"] = "SPEAKER_00"
-
-        # ─── POST-PROCESS SEGMENTS ───────────────────────────────
-        # WhisperX cuts on VAD (breath) boundaries, not sentence boundaries,
-        # so natural sentences often get split at pauses. The resulting
-        # micro-fragments (10-20 chars, <2s) give TTS too little context to
-        # clone voice correctly and produce "кашка" output. This pass
-        # merges continuations, absorbs orphan fragments, and splits
-        # monster segments. See pipeline/segment_post.py for details.
-        try:
-            from pipeline.segment_post import postprocess_segments
-            segments = postprocess_segments(segments)
-        except Exception as e:
-            log.warning(f"Segment postprocess failed (continuing with raw): {e}")
-
-        n_speakers = len(set(s.get("speaker", "?") for s in segments))
-        update(speaker_count=n_speakers, progress=42)
-
-        # ─── CHECKPOINT 1: after transcription+diarization+speaker_refs ──
-        # Speaker refs are built now, so /continue from this checkpoint has
-        # everything it needs to run translate → TTS → merge.
-        _save_checkpoint(job_id, work, stage="transcription_done", data={
-            "video_path": video_path,
-            "audio_16k": audio_16k,
-            "bg_audio_path": bg_audio_path,
-            "duration": duration,
-            "effective_src": effective_src,
-            "target_lang": target_lang,
-            "keep_bg": keep_bg,
-            "model": model,
-            "context_hint": context_hint,
-            "speaker_mode": speaker_mode,
-            "reference_audio": reference_audio,
-            "voice_style": voice_style,
-            "voice_preset": voice_preset,
-            "tts_speed": tts_speed,
-            "speaker_refs": {k: v for k, v in speaker_refs.items()},
-            "source_speaker_refs": {k: v for k, v in source_speaker_refs.items()},
-            "speaker_transcripts": {k: v for k, v in speaker_transcripts.items()},
-            "segments": [
-                {
-                    "idx": i, "start": s["start"], "end": s["end"],
-                    "text": s["text"],
-                    "speaker": s.get("speaker", "SPEAKER_00"),
-                }
-                for i, s in enumerate(segments)
-            ],
-        })
-
-        if wizard_mode == "review_transcript":
-            update(
-                status="awaiting_transcript_review", progress=43,
-                step_detail="Review transcription — edit or approve to continue",
-                checkpoint_stage="transcription_done",
-            )
-            log.info(f"[wizard] Paused at transcript review for job {job_id}")
-            return
-
-        # 5. Translate
-        update(status="translating", progress=45, step_detail=f"Translating to {target_lang}...")
-        log.info(
-            f"[pipeline:{job_id}] stage=translate model={model} tgt={target_lang} "
-            f"segments={len(segments)} src={effective_src}"
-        )
-        def _translate_progress(done, total, eta_sec):
-            # Map translation progress into overall pipeline 45→62% range
-            pct = 45 + int((done / max(total, 1)) * 17)
-            eta_str = f" · ~{eta_sec // 60}m{eta_sec % 60}s left" if eta_sec > 30 else ""
-            update(
-                progress=min(pct, 62),
-                step_detail=f"Translating batch {done}/{total}{eta_str}",
-            )
-        # translate_segments(segments, target_lang, model, max_concurrent=5,
-        #                     context_hint=..., progress_callback=...)
-        # NOTE: effective_src is NOT passed here — the translator uses
-        # source_lang from the prompt internally. The positional args are:
-        #   segments, target_lang, model
-        # NOT segments, source_lang, target_lang, model
-        segments = await translate_segments(
-            segments, target_lang, model,
-            context_hint=context_hint,
-            progress_callback=_translate_progress,
-        )
-
-        # Sanity check: if a significant fraction of segments have
-        # untranslated (source-language) text still in translated_text,
-        # stop here instead of letting VoxCPM try to speak English with
-        # Russian cross-lingual cfg (which crashes the worker). This
-        # happens when LM Studio/Ollama times out on every request and
-        # per-line fallback also fails.
-        untranslated_count = 0
-        for s in segments:
-            tt = (s.get("translated_text") or "").strip()
-            src_text = (s.get("text") or "").strip()
-            if not tt or tt == src_text:
-                untranslated_count += 1
-        if untranslated_count == len(segments):
-            raise RuntimeError(
-                f"Translation completely failed — all {len(segments)} segments "
-                f"still in source language. Check the translation backend "
-                f"({('LM Studio at ' + LM_STUDIO_URL) if USE_LM_STUDIO else 'Ollama'}): "
-                f"make sure it is running and the model '{model}' is loaded. "
-                f"If it times out (large model on CPU), raise LM_STUDIO_TIMEOUT "
-                f"and/or set LM_STUDIO_MAX_CONCURRENT=1 in .env."
-            )
-        if untranslated_count > len(segments) // 2:
-            # More than half untranslated -> TTS will produce half-source/
-            # half-target gibberish (or crash the cross-lingual VoxCPM worker).
-            # Hard-fail the job with an actionable message rather than shipping
-            # a broken dub. The checkpoint (translation_done) is already saved,
-            # so the user can Resume / retranslate with a smaller model.
-            raise RuntimeError(
-                f"Translation mostly failed — {untranslated_count}/{len(segments)} "
-                f"segments still in source language. The translation backend likely "
-                f"timed out (check the [translate_text] timeout warnings above). "
-                f"Fix: use a smaller/faster model, or raise LM_STUDIO_TIMEOUT and "
-                f"set LM_STUDIO_MAX_CONCURRENT=1 in .env (large models on CPU need "
-                f"serial requests + a long timeout). Job saved at checkpoint "
-                f"'translation_done' — click Resume after fixing the backend."
-            )
-
-        # Unload Ollama model from VRAM before TTS. Without this, Ollama's
-        # 9+ GB model sits in VRAM during TTS, leaving too little room for
-        # VoxCPM (also ~4 GB). On 12 GB cards this causes VoxCPM to swap
-        # to system RAM → slow inference. keep_alive=0 tells Ollama to
-        # drop the model immediately after the next request; we pair it
-        # with a cheap 1-token request to actually trigger the unload.
-        try:
-            await unload_ollama_model(model)
-        except Exception as e:
-            log.warning(f"Failed to unload Ollama model (non-fatal): {e}")
-
-        transcript_preview = [
-            {
-                "start": s["start"], "end": s["end"],
-                "text": s["text"],
-                "translated": s.get("translated_text", ""),
-                "speaker": s.get("speaker", ""),
-            }
-            for s in segments
-        ]
-        update(transcript=transcript_preview, progress=62)
-
-        # ─── CHECKPOINT 2: after translation ──────────────────────────
-        # Full state dump — retry_tts can load this and skip stages 1-5.
-        srt_path = str(work / "subtitles.srt")
-        write_srt(segments, srt_path)
-        update(srt_url=f"/outputs/{job_id}/subtitles.srt")
-
-        _save_checkpoint(job_id, work, stage="translation_done", data={
-            "video_path": video_path,
-            "audio_16k": audio_16k,
-            "bg_audio_path": bg_audio_path,
-            "duration": duration,
-            "effective_src": effective_src,
-            "target_lang": target_lang,
-            "keep_bg": keep_bg,
-            "speaker_refs": {k: v for k, v in speaker_refs.items()},
-            "source_speaker_refs": {k: v for k, v in source_speaker_refs.items()},
-            "speaker_transcripts": {k: v for k, v in speaker_transcripts.items()},
-            "reference_audio": reference_audio,
-            "voice_style": voice_style,
-            "voice_preset": voice_preset,
-            "tts_speed": tts_speed,
-            "segments": [
-                {
-                    "idx": i, "start": s["start"], "end": s["end"],
-                    "text": s["text"],
-                    "translated_text": s.get("translated_text", ""),
-                    "speaker": s.get("speaker", "SPEAKER_00"),
-                }
-                for i, s in enumerate(segments)
-            ],
-        })
-
-        if wizard_mode == "review_translation":
-            update(
-                status="awaiting_translation_review",
-                progress=63,
-                step_detail="Review translation — edit, retranslate, or approve to continue",
-                checkpoint_stage="translation_done",
-            )
-            log.info(f"[wizard] Paused at translation review for job {job_id}")
-            return
-
-        # 6. Synthesize
-        tts = get_tts_engine()
-        tts_dir = str(work / "tts_segments")
-
-        # ─── VOICE MODE ROUTING (see _run_tts_and_merge_stage) ──────────
-        # VoxCPM has 3 mutually-exclusive modes; pick one based on user's
-        # choice. NEVER mix style prefix with speaker refs — the model will
-        # literally read the style description out loud in the cloned voice.
-        has_ref = any(speaker_refs.values())
-        if reference_audio and os.path.exists(reference_audio):
-            first_pipeline_mode = "file_ref"   # user uploaded / file preset
-        elif eff_style and eff_style.strip() and not has_ref:
-            first_pipeline_mode = "voice_design"
-        elif eff_style and eff_style.strip() and has_ref:
-            # User picked a style preset but we already extracted refs from
-            # the source video. The user presumably wants a fresh designed
-            # voice — drop the source refs.
-            log.info("[pipeline] Style preset + source refs → dropping refs "
-                     "for Voice Design")
-            speaker_refs = {}
-            speaker_transcripts = {}
-            first_pipeline_mode = "voice_design"
-        else:
-            first_pipeline_mode = "source_refs"
-
-        update(status="synthesizing", progress=65,
-               step_detail=f"Generating speech (mode={first_pipeline_mode}, "
-                           f"preset={voice_preset}, seed={voice_seed})...",
-               voice_mode=("upload" if first_pipeline_mode == "file_ref" else
-                           ("custom" if first_pipeline_mode == "voice_design"
-                            else "source")))
-        log.info(
-            f"[pipeline:{job_id}] stage=synthesize engine={tts.name} "
-            f"mode={first_pipeline_mode} segments={len(segments)} "
-            f"preset={voice_preset} seed={voice_seed}"
-        )
-
-        # Apply Voice Design prefix ONLY in voice_design mode
-        if first_pipeline_mode == "voice_design" and isinstance(tts, VoxCPMSynthesizer):
-            style = eff_style.strip().strip("()")
-            for s in segments:
-                base = s.get("translated_text") or s.get("text", "")
-                if base and not base.startswith("("):
-                    s["translated_text"] = f"({style}){base}"
-
-        def synth_progress(done, total):
-            pct = 65 + int((done / max(total, 1)) * 20)
-            update(progress=min(pct, 85), step_detail=f"Synthesizing: {done}/{total}")
-
-        if isinstance(tts, VoxCPMSynthesizer):
-            segments = tts.synthesize_segments(
-                segments, tts_dir,
-                speaker_refs=speaker_refs,
-                speaker_transcripts=speaker_transcripts,
-                progress_callback=synth_progress,
-                voice_seed=voice_seed,
-                tts_speed=tts_speed,
-                is_cross_lingual=(effective_src != target_lang),
-                target_lang=target_lang,
-            )
-        else:
-            segments = await tts.synthesize_segments_async(
-                segments, tts_dir, target_lang,
-                progress_callback=synth_progress,
-            )
-
-        synth_ok = sum(1 for s in segments if s.get("audio_path"))
-        update(progress=85, step_detail=f"Synthesized {synth_ok}/{len(segments)}")
-
-        if synth_ok == 0:
-            raise RuntimeError("All TTS synthesis failed - check model/GPU")
-
-        # ─── CHECKPOINT 3: after TTS (for per-segment regen) ──────────
-        # Each segment now has an audio_path; store that so /regenerate_segment
-        # can pick up where we left off without re-synthesizing everything.
-        # QA score and tier are surfaced so the UI can flag problematic
-        # segments with coloured badges in the review panel.
-        _save_checkpoint(job_id, work, stage="tts_done", data={
-            "video_path": video_path,
-            "audio_16k": audio_16k,
-            "bg_audio_path": bg_audio_path,
-            "duration": duration,
-            "effective_src": effective_src,
-            "target_lang": target_lang,
-            "keep_bg": keep_bg,
-            "speaker_refs": {k: v for k, v in speaker_refs.items()},
-            "speaker_transcripts": {k: v for k, v in speaker_transcripts.items()},
-            "reference_audio": reference_audio,
-            "voice_style": voice_style,
-            "voice_preset": voice_preset,
-            "tts_speed": tts_speed,
-            "sample_rate": tts.sample_rate if hasattr(tts, "sample_rate") else 48000,
-            "segments": [
-                {
-                    "idx": i, "start": s["start"], "end": s["end"],
-                    "text": s["text"],
-                    "translated_text": s.get("translated_text", ""),
-                    "speaker": s.get("speaker", "SPEAKER_00"),
-                    "audio_path": s.get("audio_path", ""),
-                    "qa_score": s.get("qa_score"),
-                    "tts_tier": s.get("tts_tier"),
-                }
-                for i, s in enumerate(segments)
-            ],
-        })
-
-        # 7. Assemble (with loudness normalization)
-        update(status="assembling", progress=88, step_detail="Assembling dubbed audio...")
-        dubbed_wav = str(work / "dubbed_audio.wav")
-        assemble_dubbed_audio(segments, duration, dubbed_wav, tts.sample_rate, apply_loudnorm=True)
-        _save_placements(work, segments)
-
-        # 8. Merge with video
-        update(status="merging", progress=93, step_detail="Rendering final video...")
-        output_mp4 = str(work / "dubbed_video.mp4")
-        merge_audio_video(video_path, dubbed_wav, output_mp4, bg_audio_path)
-
-        update(
-            status="complete",
-            progress=100,
-            output_url=f"/outputs/{job_id}/dubbed_video.mp4",
-            completed_at=time.time(),
-            step_detail="Done!",
-        )
-        log.info(f"Pipeline complete: {output_mp4}")
-
-    except JobCancelled:
-        # Re-raise so _job_queue_worker marks the job as 'cancelled'
-        # rather than 'error'. Keep the exception on the stack — logging
-        # is handled upstream.
-        log.info(f"Pipeline cancelled for {job_id}")
-        raise
-    except Exception as e:
-        update(status="error", error=str(e))
-        log.exception(f"Pipeline failed: {e}")
+    ctx = {
+        "source": source,
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "model": model,
+        "keep_bg": keep_bg,
+        "whisper_model": whisper_model,
+        "reference_audio": reference_audio,
+        "speaker_mode": speaker_mode,
+        "context_hint": context_hint,
+        "voice_style": voice_style,
+        "voice_preset": voice_preset,
+        "tts_speed": tts_speed,
+        "wizard_mode": wizard_mode,
+        "auto_denoise": auto_denoise,
+    }
+    await run_pipeline_stages(job_id, ctx, start_stage="download")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1679,13 +2035,29 @@ async def get_lm_studio_models():
     """Proxy to LM Studio API to get available models.
 
     The frontend calls this endpoint (instead of hitting LM Studio directly)
-    to avoid CORS issues and centralize configuration.  Uses
-    ``check_lm_studio(force_refresh=True)`` so the user always gets the
-    latest model list when they open the Settings / Models view.
+    to avoid CORS issues and centralize configuration. Queries LM Studio
+    directly on every call so the model list is current when the user opens
+    Settings / Models — this is not on a polling path, so it costs one request
+    per visit.
     """
-    from pipeline.translator import check_lm_studio
-    ok, models = await check_lm_studio(force_refresh=True)
-    return {"models": models}
+    if not USE_LM_STUDIO:
+        return {"models": []}
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                LM_STUDIO_MODELS_ENDPOINT,
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    models = [m.get("id", "") for m in data.get("data", [])]
+                    return {"models": models}
+                log.warning(f"LM Studio returned {response.status} from {LM_STUDIO_MODELS_ENDPOINT}")
+                return {"models": []}
+    except Exception as e:
+        log.warning(f"Failed to fetch LM Studio models: {e}")
+        return {"models": []}
 
 
 @app.get("/api/system")
@@ -1697,7 +2069,37 @@ async def system_status():
         "models": ollama_models,
         "binary": status["ollama_binary"]["ok"],
     }
+    # check_ollama() delegates to LM Studio when that's the configured
+    # backend, but the UI reads `system.lm_studio` — a key nothing ever set,
+    # so the System panel reported "Not connected" even while LM Studio was
+    # happily serving models. Publish both spellings from the one probe.
+    status["lm_studio"] = {
+        "ok": ollama_ok if USE_LM_STUDIO else False,
+        "models": ollama_models if USE_LM_STUDIO else [],
+        "url": LM_STUDIO_MODELS_ENDPOINT,
+    }
     status["catalog"] = MODEL_CATALOG
+
+    # Live resource snapshot — the same probes the per-stage sampler uses,
+    # so the System panel and the stage metrics always agree on what's
+    # being measured (and on whether GPU telemetry is available at all).
+    live = {"gpu_backend": gpu_backend()}
+    gpu_now = gpu_snapshot()
+    if gpu_now:
+        live["gpu"] = {k: round(v, 1) for k, v in gpu_now.items()}
+    try:
+        import psutil as _ps
+        live["cpu_pct"] = _ps.cpu_percent(interval=None)
+        live["cpu_cores"] = _ps.cpu_count(logical=True)
+        vm = _ps.virtual_memory()
+        live["ram_used_gb"] = round(vm.used / 1024**3, 1)
+        live["ram_total_gb"] = round(vm.total / 1024**3, 1)
+        live["proc_rss_mb"] = round(
+            _ps.Process(os.getpid()).memory_info().rss / 1024 / 1024, 1
+        )
+    except Exception:
+        pass
+    status["resources"] = live
 
     tts_ready = status["voxcpm"]["ok"] or status["edge_tts"]["ok"]
     ready = (
@@ -1710,7 +2112,53 @@ async def system_status():
         len(ollama_models) > 0
     )
     status["ready"] = ready
+
+    # Setup notices ride along on the poll the UI already runs, so the banner
+    # needs no second timer. Passive checks only — nothing here touches the
+    # network; the deep probe is behind POST /api/diagnostics/run.
+    try:
+        passive = diag.passive_checks(status)
+        status["accelerator"] = passive["accelerator"]
+        status["checks"] = passive["checks"]
+        status["notices"] = diag.current_notices(status)
+        status["notice_severity"] = worst_severity(status["notices"])
+        last = diag.last_deep()
+        status["diagnostics_ran_at"] = (last or {}).get("ran_at")
+    except Exception as e:
+        # Diagnostics must never be the reason the System panel breaks.
+        log.debug(f"[system] diagnostics failed: {e}")
+        status["notices"] = []
     return status
+
+
+@app.post("/api/diagnostics/run")
+async def run_diagnostics(token: str = Form("")):
+    """Deep environment check — the only place that touches the network.
+
+    Asks Hugging Face whether the gated pyannote repos are really accessible,
+    which is the one question that distinguishes "you never accepted the
+    conditions" from "the download failed today". pyannote itself prints
+    "private or gated" for any HTTP error, so its message cannot be trusted to
+    tell them apart.
+    """
+    try:
+        report = await diag.deep_checks(token or effective_hf_token())
+        return {"ok": True, **report}
+    except Exception as e:
+        log.warning(f"[diagnostics] deep check failed: {e}")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, 500)
+
+
+@app.get("/api/logs")
+async def get_logs(level: str = "", limit: int = 300, since_seq: int = 0):
+    """Recent server log lines, including third-party stdout/stderr.
+
+    Secrets are scrubbed on the way *into* the buffer (app/logbuf.py), not
+    here — TACHIDUBB_HOST can expose this server to the network, and a token
+    that reached the deque would already be readable there.
+    """
+    return logbuf.snapshot(level=level, limit=max(1, min(int(limit or 300), 2000)),
+                           since_seq=int(since_seq or 0))
 
 
 @app.post("/api/models/pull")
@@ -4170,6 +4618,418 @@ async def get_checkpoint(job_id: str, stage: str):
     }
 
 
+# ─────────────────────────────────────────────────────────────
+# API: Per-stage retry & observability
+# ─────────────────────────────────────────────────────────────
+# The pipeline checkpoints its context after every stage, so any stage can
+# be re-run in isolation:
+#
+#   POST /api/dub/{id}/retry_stage/diarize   {"skip_diarization": true}
+#       → reloads the transcribe checkpoint, skips speaker detection,
+#         continues through translate/tts/merge. Nothing before diarize
+#         is recomputed.
+#
+#   POST /api/dub/{id}/retry_stage/translate
+#        {"model": "qwen2.5:14b", "translate_failed_only": true}
+#       → keeps every segment that already translated cleanly and
+#         re-submits only the failures to the new model.
+#
+# GET /api/dub/{id}/stages returns the same picture the UI renders: which
+# stages are done/stale/failed, what each produced, how long it took, and
+# what CPU/GPU it burned while doing it.
+
+# Only these ctx keys may be set by a retry request. Anything else in the
+# override payload is ignored — the ctx also holds resolved artifact paths
+# (video_path, audio_16k, speaker_refs…) and letting a client overwrite
+# those would point the pipeline at arbitrary files on disk.
+_RETRY_OVERRIDE_KEYS = {
+    "source_lang", "target_lang", "model", "keep_bg", "whisper_model",
+    "speaker_mode", "context_hint", "voice_style", "voice_preset",
+    "tts_speed", "auto_denoise", "wizard_mode", "reference_audio",
+    "skip_diarization", "translate_failed_only", "tts_keep_existing",
+}
+
+# Declarative retry controls, rendered generically by the UI so a new
+# knob only has to be added here (plus honoured in the stage handler).
+STAGE_RETRY_OPTIONS = {
+    "extract": [
+        {"key": "auto_denoise", "type": "bool", "label": "Denoise audio",
+         "hint": "FFT noise reduction before transcription"},
+        {"key": "keep_bg", "type": "bool", "label": "Keep background",
+         "hint": "Separate and re-mix music/SFX"},
+    ],
+    "transcribe": [
+        {"key": "whisper_model", "type": "select", "label": "Whisper model",
+         "choices": ["large-v3", "large-v2", "medium", "small", "base", "tiny"],
+         "hint": "Smaller = faster, less accurate"},
+        {"key": "source_lang", "type": "select", "label": "Source language",
+         "choices": ["auto", "en", "ru", "es", "fr", "de", "it", "pt", "ja",
+                     "ko", "zh", "ar", "hi", "tr", "pl", "uk"]},
+    ],
+    "diarize": [
+        {"key": "skip_diarization", "type": "bool", "label": "Skip diarization",
+         "hint": "Use one fallback voice reference — the fix when pyannote "
+                 "has no HF_TOKEN or fails to load"},
+        {"key": "speaker_mode", "type": "select", "label": "Speakers",
+         "choices": ["main", "all"], "hint": "main = dub everyone as the "
+         "dominant speaker"},
+    ],
+    "translate": [
+        {"key": "model", "type": "model", "label": "Translation model",
+         "hint": "Swap the LLM without redoing transcription"},
+        {"key": "translate_failed_only", "type": "bool",
+         "label": "Only failed segments",
+         "hint": "Keep good translations, retry the ones that came back empty"},
+        {"key": "context_hint", "type": "text", "label": "Context hint",
+         "hint": "Domain/terminology guidance for the model"},
+    ],
+    "tts": [
+        {"key": "voice_preset", "type": "voice", "label": "Voice preset"},
+        {"key": "tts_speed", "type": "select", "label": "Quality",
+         "choices": ["fast", "balanced", "quality"]},
+        {"key": "tts_keep_existing", "type": "bool",
+         "label": "Only missing segments",
+         "hint": "Keep rendered audio, synthesize just the gaps"},
+    ],
+    "assemble": [],
+    "merge": [],
+    "download": [],
+}
+
+# Statuses that mean "the pipeline currently owns this job" — retrying
+# under them would race the running stage over the same files.
+_BUSY_STATUSES = {
+    "queued", "running", "resuming", "downloading", "extracting",
+    "transcribing", "diarizing", "translating", "synthesizing",
+    "assembling", "merging",
+}
+
+
+def _artifact_entry(job_id: str, work: Path, path: str, label: str = "") -> Optional[dict]:
+    """Describe one artifact file: size, mtime, and a URL when servable."""
+    if not path:
+        return None
+    p = Path(path)
+    exists = p.exists()
+    entry = {
+        "label": label or p.name,
+        "name": p.name,
+        "exists": exists,
+        "size_mb": None,
+        "url": None,
+    }
+    if exists:
+        try:
+            entry["size_mb"] = round(p.stat().st_size / 1024 / 1024, 2)
+            entry["modified"] = p.stat().st_mtime
+        except OSError:
+            pass
+        # Files inside the job's work dir are already served by the
+        # /outputs static mount; anything else (uploads) stays server-side.
+        try:
+            rel = p.resolve().relative_to(work.resolve())
+            entry["url"] = f"/outputs/{job_id}/{rel.as_posix()}"
+        except (ValueError, OSError):
+            pass
+    return entry
+
+
+def _stage_artifacts(job_id: str, work: Path, spec: dict, cp: Optional[dict]) -> list:
+    """Artifacts a stage produced, read out of its own checkpoint."""
+    out = []
+    seen = set()
+    if cp:
+        for key in spec.get("artifacts", []):
+            e = _artifact_entry(job_id, work, cp.get(key) or "", label=key)
+            if e:
+                out.append(e)
+                seen.add(e["name"])
+    # Well-known output filenames. Jobs created before stage checkpoints
+    # existed have no `srt_path`/`dubbed_wav` key in their checkpoint, but
+    # the files are sitting right there in the work dir — find them by name
+    # so the panel isn't empty for every pre-existing job.
+    for fname in spec.get("artifact_files", []):
+        if fname in seen:
+            continue
+        p = work / fname
+        if p.exists():
+            e = _artifact_entry(job_id, work, str(p))
+            if e:
+                out.append(e)
+                seen.add(fname)
+    # Directory artifacts (speaker refs, per-segment TTS wavs) are summarized
+    # rather than listed — a 400-segment job would otherwise return 400 rows.
+    dirname = spec.get("artifact_dir")
+    if dirname:
+        d = work / dirname
+        if d.is_dir():
+            files = [f for f in d.iterdir() if f.is_file()]
+            total = sum(f.stat().st_size for f in files if f.exists())
+            out.append({
+                "label": dirname,
+                "name": dirname,
+                "exists": True,
+                "is_dir": True,
+                "file_count": len(files),
+                "size_mb": round(total / 1024 / 1024, 2),
+                "url": f"/outputs/{job_id}/{dirname}/",
+            })
+    return out
+
+
+def build_stage_report(job_id: str) -> dict:
+    """Per-stage status, artifacts and timings for one job.
+
+    Stage state is derived from three sources that can disagree, in this
+    priority order:
+      1. the job's live status  → "running" for the stage in flight
+      2. metrics.json           → "failed" if the last attempt errored
+      3. checkpoint on disk     → "done", else "pending"
+
+    A "stale" state is reported when a stage's checkpoint is older than an
+    upstream one: retrying `translate` alone leaves the previous `tts_done`
+    file on disk, and it would be misleading to show that as current.
+    """
+    job = jobs.get(job_id, {})
+    work = OUTPUT_DIR / job_id
+    metrics = load_metrics(work)
+    stage_metrics = metrics.get("stages", {})
+    live_stage = job.get("stage_id")
+    job_status = job.get("status", "")
+    is_busy = job_status in _BUSY_STATUSES
+
+    stages = []
+    newest_upstream = 0.0
+    for i, spec in enumerate(PIPELINE_STAGES):
+        sid = spec["id"]
+        cp = _load_checkpoint(job_id, spec["checkpoint"])
+        m = stage_metrics.get(sid) or {}
+        saved_at = (cp or {}).get("saved_at") or 0.0
+
+        if cp:
+            # Within one run, checkpoints are always written in stage order,
+            # so a downstream timestamp that predates an upstream one can only
+            # mean the upstream stage was re-run on its own afterwards.
+            state = "stale" if saved_at < newest_upstream else "done"
+        else:
+            state = "pending"
+        if m.get("status") == "error" and not cp:
+            state = "failed"
+        if job.get("failed_stage") == sid and job_status == "error":
+            state = "failed"
+        if is_busy and live_stage == sid:
+            state = "running"
+        newest_upstream = max(newest_upstream, saved_at)
+
+        # Retryable = we have (or don't need) the input state for this stage.
+        if i == 0:
+            can_retry = bool(job.get("source"))
+        else:
+            can_retry = _stage_input_state(job_id, sid) is not None
+
+        detail = m.get("detail", {}) or {}
+        # A stage can succeed and still not have done what the user assumes —
+        # diarization falling back to a weaker model is the motivating case.
+        # `degraded` is what lets the UI say "done, but…" without inventing a
+        # fourth value for `state` that every existing consumer would have to
+        # learn.
+        st_notices = [n for n in detail.get("notices", []) if isinstance(n, dict)]
+        stages.append({
+            "id": sid,
+            "label": spec["label"],
+            "hint": spec["hint"],
+            "index": i,
+            "checkpoint": spec["checkpoint"],
+            "state": state,
+            "has_checkpoint": bool(cp),
+            "saved_at": saved_at or None,
+            "can_retry": can_retry and not is_busy,
+            "options": STAGE_RETRY_OPTIONS.get(sid, []),
+            "artifacts": _stage_artifacts(job_id, work, spec, cp),
+            "duration_sec": m.get("duration_sec"),
+            "attempt": m.get("attempt"),
+            "last_status": m.get("status"),
+            "last_run_at": m.get("finished_at"),
+            "error": m.get("error"),
+            "resources": m.get("resources", {}),
+            "detail": detail,
+            "notices": st_notices,
+            "degraded": bool(st_notices) and state in ("done", "stale"),
+        })
+
+    total = sum(s["duration_sec"] or 0 for s in stages)
+    return {
+        "job_id": job_id,
+        "job_status": job_status,
+        "busy": is_busy,
+        "current_stage": live_stage,
+        "failed_stage": job.get("failed_stage"),
+        "total_duration_sec": round(total, 3),
+        "gpu_backend": gpu_backend(),
+        "stages": stages,
+        "notices": merge_notices(*[s["notices"] for s in stages]),
+    }
+
+
+@app.get("/api/dub/{job_id}/stages")
+async def get_job_stages(job_id: str):
+    """Stage-by-stage state, artifacts, timings and resource usage."""
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    return build_stage_report(job_id)
+
+
+@app.get("/api/dub/{job_id}/metrics")
+async def get_job_metrics(job_id: str):
+    """Raw metrics.json — latest run per stage plus the full attempt history.
+
+    Useful for answering "why was this run 3 minutes slower than the last
+    one" without re-instrumenting anything: every attempt keeps its own
+    duration and CPU/GPU sample summary.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    data = load_metrics(OUTPUT_DIR / job_id)
+    stages = data.get("stages", {})
+    ordered = [
+        {"stage": sid, **stages[sid]} for sid in STAGE_ORDER if sid in stages
+    ]
+    total = sum(s.get("duration_sec") or 0 for s in ordered)
+    return {
+        "job_id": job_id,
+        "total_duration_sec": round(total, 3),
+        "gpu_backend": gpu_backend(),
+        "gpu_now": gpu_snapshot(),
+        "stages": ordered,
+        "history": data.get("history", []),
+    }
+
+
+@app.post("/api/dub/{job_id}/retry_stage/{stage}")
+async def retry_stage(
+    job_id: str,
+    stage: str,
+    overrides: str = Form("{}"),
+    stop_after: str = Form(""),
+    reference: Optional[UploadFile] = File(None),
+):
+    """Re-run one stage (and everything after it) from the previous
+    stage's checkpoint.
+
+    `overrides` is a JSON object of pipeline settings to change for this
+    run — see STAGE_RETRY_OPTIONS for what each stage accepts. `stop_after`
+    optionally halts the run at a later stage instead of going to the end,
+    so the user can inspect the result before paying for TTS.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    if stage not in STAGE_ORDER:
+        return JSONResponse(
+            {"error": f"Unknown stage '{stage}'. Valid: {', '.join(STAGE_ORDER)}"},
+            400,
+        )
+    job = jobs[job_id]
+    if job.get("status") in _BUSY_STATUSES:
+        return JSONResponse(
+            {"error": f"Job is {job['status']} — cancel it before retrying a stage"},
+            409,
+        )
+    if stop_after and stop_after not in STAGE_ORDER:
+        return JSONResponse({"error": f"Unknown stop_after '{stop_after}'"}, 400)
+    if stop_after and _stage_index(stop_after) < _stage_index(stage):
+        return JSONResponse(
+            {"error": f"stop_after '{stop_after}' comes before '{stage}'"}, 400
+        )
+
+    try:
+        ov = json.loads(overrides or "{}")
+        if not isinstance(ov, dict):
+            raise ValueError("overrides must be a JSON object")
+    except Exception as e:
+        return JSONResponse({"error": f"Bad overrides JSON: {e}"}, 400)
+
+    # Build the input context: the checkpoint written by the previous
+    # stage, or the original request for a from-scratch re-run.
+    if _stage_index(stage) == 0:
+        ctx = {
+            "source": job.get("source", ""),
+            "source_lang": job.get("source_lang", "auto"),
+            "target_lang": job.get("target_lang", "ru"),
+            "model": job.get("model") or cfg.translation_model,
+            "keep_bg": bool(job.get("keep_bg")),
+            "whisper_model": job.get("whisper_model") or cfg.whisper_model,
+            "reference_audio": "",
+            "speaker_mode": job.get("speaker_mode", "main"),
+            "context_hint": job.get("context_hint", ""),
+            "voice_style": job.get("voice_style", ""),
+            "voice_preset": job.get("voice_preset", "auto"),
+            "tts_speed": job.get("tts_speed", "balanced"),
+            "auto_denoise": bool(job.get("auto_denoise", True)),
+        }
+        if not ctx["source"]:
+            return JSONResponse({"error": "Job has no source to re-download"}, 409)
+    else:
+        state = _stage_input_state(job_id, stage)
+        if not state:
+            return JSONResponse({
+                "error": f"No checkpoint before '{stage}' — this job predates "
+                         f"stage checkpoints or never got that far. "
+                         f"Re-run from an earlier stage."
+            }, 409)
+        ctx = dict(state)
+        # `stage`/`job_id`/`saved_at` are checkpoint bookkeeping, not context.
+        for k in ("stage", "job_id", "saved_at"):
+            ctx.pop(k, None)
+
+    # A retry always runs to the end unless told otherwise, so drop any
+    # wizard pause inherited from the original run.
+    ctx["wizard_mode"] = "auto"
+    for k, v in ov.items():
+        if k in _RETRY_OVERRIDE_KEYS:
+            ctx[k] = v
+        else:
+            log.warning(f"[retry] Ignoring non-overridable key '{k}'")
+
+    if reference and reference.filename:
+        ref_ext = Path(reference.filename).suffix or ".wav"
+        ref_path = str(UPLOAD_DIR / f"{job_id}_retry{stage}_ref{ref_ext}")
+        with open(ref_path, "wb") as f:
+            shutil.copyfileobj(reference.file, f)
+        ctx["reference_audio"] = ref_path
+
+    # Marks this as a re-run for the TTS stage: fresh voice seed + restore
+    # the original source refs instead of a previously-baked preset.
+    ctx["_is_retry"] = True
+
+    job.pop("error", None)
+    job.pop("failed_stage", None)
+    job.pop("stale_from_restart", None)
+    job.pop("cancel_requested", None)
+    job["status"] = "queued"
+    job["step_detail"] = f"Queued — retrying from '{stage}'"
+    # Surface the changed settings on the job so History/Result reflect them.
+    for k in ("model", "target_lang", "voice_preset", "voice_style",
+              "tts_speed", "whisper_model", "context_hint", "speaker_mode"):
+        if k in ov:
+            job[k] = ov[k]
+    save_job(job)
+
+    log.info(
+        f"[retry] job={job_id} stage='{stage}'"
+        + (f" → '{stop_after}'" if stop_after else " → end")
+        + (f" overrides={ {k: v for k, v in ov.items() if k in _RETRY_OVERRIDE_KEYS} }"
+           if ov else "")
+    )
+
+    await enqueue_job(job_id, {"__stage_retry__": {
+        "ctx": ctx, "start_stage": stage, "stop_after": stop_after,
+    }})
+    return {
+        "ok": True, "job_id": job_id,
+        "retry_from": stage, "stop_after": stop_after or None,
+    }
+
+
 @app.post("/api/dub/{job_id}/edit_translations")
 async def edit_translations(job_id: str, edits: str = Form(...)):
     """Update the translated_text for one or more segments in the saved
@@ -4655,62 +5515,66 @@ async def continue_pipeline(
     return {"ok": True, "job_id": job_id, "resuming_from": cp.get("stage")}
 
 
+def _stage_after_checkpoint(checkpoint_name: str) -> str:
+    """Which stage should run next, given the checkpoint we're resuming from.
+
+    Returns "" when the checkpoint is the final one (nothing left to do).
+    Unknown/legacy names fall back to `tts` — the old behaviour, where
+    `pipeline_state.json` was assumed to hold a post-translation state.
+    """
+    for i, spec in enumerate(PIPELINE_STAGES):
+        if spec["checkpoint"] == checkpoint_name:
+            return STAGE_ORDER[i + 1] if i + 1 < len(STAGE_ORDER) else ""
+    return "tts"
+
+
 async def _continue_from_checkpoint(
     job_id: str, cp: dict,
     voice_style: str, voice_preset: str, tts_speed: str, ref_path: str,
 ):
-    """Dispatch to the right stage(s) depending on which checkpoint we have."""
+    """Resume the pipeline from wherever the wizard (or a crash) left it.
+
+    Runs through the same stage driver as a fresh job, so the resumed part
+    of the run is timed and checkpointed exactly like the original."""
     job = jobs.get(job_id)
     if not job:
         return
-    work = OUTPUT_DIR / job_id
-    def update(**kwargs):
-        if job.get("cancel_requested"):
-            _maybe_terminate_tts_worker()
-            raise JobCancelled(f"Job {job_id} cancelled by user")
-        job.update(kwargs); save_job(job)
 
     stage = cp.get("stage", "")
-    log.info(f"[continue] Resuming job {job_id} from stage '{stage}'")
-    try:
-        if stage == "transcription_done":
-            # Need to translate first, then TTS
-            update(status="translating", progress=45,
-                   step_detail="Translating approved transcript...")
-            effective_src = cp.get("effective_src", "en")
-            target_lang = cp.get("target_lang", "ru")
-            model = cp.get("model", "gemma4:e4b")
-            context_hint = cp.get("context_hint", "")
-            # translate_segments(segments, target_lang, model, ...)
-            # NOT (segments, source_lang, target_lang, model)
-            segments = await translate_segments(
-                cp["segments"], target_lang, model,
-                context_hint=context_hint,
-            )
-            # Save translation_done checkpoint
-            _save_checkpoint(job_id, work, stage="translation_done", data={
-                **cp,
-                "segments": [
-                    {
-                        "idx": i, "start": s["start"], "end": s["end"],
-                        "text": s["text"],
-                        "translated_text": s.get("translated_text", ""),
-                        "speaker": s.get("speaker", "SPEAKER_00"),
-                    }
-                    for i, s in enumerate(segments)
-                ],
-            })
-            cp = _load_checkpoint(job_id, "translation_done")
+    next_stage = _stage_after_checkpoint(stage)
+    if not next_stage:
+        log.info(f"[continue] Job {job_id} is already at the final stage")
+        job.update(status="complete", progress=100); save_job(job)
+        return
 
-        # Now run TTS+merge from translation_done checkpoint
-        await _run_tts_and_merge_stage(
-            job, work, cp,
-            voice_style=voice_style, voice_preset=voice_preset,
-            tts_speed=tts_speed, ref_path_override=ref_path,
-        )
+    ctx = dict(cp)
+    for k in ("stage", "job_id", "saved_at"):
+        ctx.pop(k, None)
+    # Voice settings from the review screen override the checkpointed ones.
+    if voice_style:
+        ctx["voice_style"] = voice_style
+    if voice_preset:
+        ctx["voice_preset"] = voice_preset
+    if tts_speed:
+        ctx["tts_speed"] = tts_speed
+    if ref_path:
+        ctx["reference_audio"] = ref_path
+    # The user just approved this checkpoint — don't pause on it again.
+    ctx["wizard_mode"] = "auto"
+
+    log.info(
+        f"[continue] Resuming job {job_id} from checkpoint '{stage}' "
+        f"→ stage '{next_stage}'"
+    )
+    try:
+        await run_pipeline_stages(job_id, ctx, start_stage=next_stage)
+    except JobCancelled:
+        log.info(f"[continue] Job {job_id} cancelled")
+        job.update(status="cancelled"); job.pop("cancel_requested", None)
+        save_job(job)
     except Exception as e:
         log.error(f"[continue] Failed: {e}", exc_info=True)
-        update(status="error", error=str(e))
+        job.update(status="error", error=str(e)); save_job(job)
 
 
 @app.post("/api/dub/{job_id}/retranslate")
@@ -5171,10 +6035,25 @@ async def set_preferences(prefs: str = Form(...)):
         return JSONResponse({"error": str(e)}, 500)
 
 
+# Config fields that must never leave the process verbatim. The Settings UI
+# only needs to know *whether* a value is set, so it gets a stub. This matters
+# because TACHIDUBB_HOST can expose this server beyond loopback (see
+# uvicorn.run at the bottom of this file), and /api/config has no auth.
+_SECRET_CONFIG_KEYS = ("hf_token",)
+
+
+def _redacted_config() -> dict:
+    d = cfg.to_dict()
+    for k in _SECRET_CONFIG_KEYS:
+        if d.get(k):
+            d[k] = mask_secret(d[k])
+    return d
+
+
 @app.get("/api/config")
 async def get_config():
     """Return current UserConfig as JSON. Editable fields shown in Settings tab."""
-    return cfg.to_dict()
+    return _redacted_config()
 
 
 @app.patch("/api/config")
@@ -5186,9 +6065,20 @@ async def patch_config(body: str = Form(...)):
             raise ValueError("body must be a JSON object")
     except Exception as e:
         return JSONResponse({"error": f"Invalid JSON: {e}"}, 400)
+    # A masked value is what GET handed out — writing it back would replace a
+    # working token with the literal string "hf_a…".
+    for k in _SECRET_CONFIG_KEYS:
+        v = updates.get(k)
+        if isinstance(v, str) and v.endswith("…"):
+            updates.pop(k)
     try:
         cfg.update(**updates)
-        return {"ok": True, "config": cfg.to_dict()}
+        if "hf_token" in updates:
+            # diarizer reads the env first; keep the two in step so a token
+            # saved here takes effect without a restart.
+            os.environ["HF_TOKEN"] = cfg.hf_token or ""
+            diag.clear_runtime(list(diag.REVALIDATES["hf"]))
+        return {"ok": True, "config": _redacted_config()}
     except Exception as e:
         return JSONResponse({"error": str(e)}, 500)
 
@@ -5648,11 +6538,25 @@ if __name__ == "__main__":
     # ── Parse --reload flag for development ──────────────────────────
     _reload = "--reload" in sys.argv
 
+    # Loopback by default. This server has no authentication of any kind: any
+    # caller can start jobs, read every transcript, delete jobs and reach
+    # /api/logs and /api/config. Binding 0.0.0.0 offered all of that to every
+    # device on the network — including cafe and hotel wifi — as the default
+    # for a tool most people run on a laptop.
+    #
+    # Exposing it deliberately (dubbing box in the corner, phone on the couch)
+    # is still one env var away, and now it's a decision rather than a surprise.
+    _host = os.getenv("TACHIDUBB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    _port = int(os.getenv("TACHIDUBB_PORT", "") or cfg.server_port or 8910)
+
     print("")
     print("+====================================================+")
     print("|  TachiDUBB Studio - AI Video Dubbing               |")
-    print("|  http://localhost:8910                             |")
+    print(f"|  http://localhost:{_port}                             |")
     print("|  Press Ctrl+C to stop                              |")
     print("+====================================================+")
+    if _host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[warn] Listening on {_host} — this server has no authentication.")
+        print("[warn] Anyone who can reach this port can read and delete your jobs.")
     print("")
-    uvicorn.run(app, host="0.0.0.0", port=8910, log_level="info", reload=_reload)
+    uvicorn.run(app, host=_host, port=_port, log_level="info", reload=_reload)

@@ -210,6 +210,100 @@ YouTube URL or local file
 
 Every step is modular, swappable, and runs on your hardware.
 
+### Stages are checkpointed and independently retryable
+
+The pipeline runs as eight discrete stages, and each one snapshots its full
+state to `outputs/<job>/checkpoint_<stage>.json` when it finishes:
+
+| Stage | Produces | Checkpoint |
+|---|---|---|
+| `download` | source video | `download_done` |
+| `extract` | 16 kHz audio (denoise, VAD, background split) | `extract_done` |
+| `transcribe` | segments + word timings | `transcribe_done` |
+| `diarize` | speaker labels + per-speaker voice refs | `transcription_done` |
+| `translate` | translated segments + `subtitles.srt` | `translation_done` |
+| `tts` | one cloned-voice wav per segment | `tts_done` |
+| `assemble` | time-aligned, loudness-normalized dub track | `assemble_done` |
+| `merge` | final MP4 | `merge_done` |
+
+Because a stage only needs the *previous* stage's checkpoint, any stage can
+be re-run on its own — nothing before it is recomputed:
+
+```bash
+# Diarization failed (no HF_TOKEN?) — redo it without speaker detection.
+# Transcription is NOT redone.
+curl -X POST localhost:8910/api/dub/$JOB/retry_stage/diarize \
+     -F 'overrides={"skip_diarization": true}'
+
+# Translation came back half-empty — finish it with a different model,
+# keeping the segments that already translated cleanly.
+curl -X POST localhost:8910/api/dub/$JOB/retry_stage/translate \
+     -F 'overrides={"model": "qwen2.5:14b", "translate_failed_only": true}'
+
+# Re-synthesize voices only, and stop before rendering the video.
+curl -X POST localhost:8910/api/dub/$JOB/retry_stage/tts \
+     -F 'overrides={"voice_preset": "zhirik"}' -F 'stop_after=tts'
+```
+
+The **Pipeline stages** panel in the UI (Processing, Result, and History
+views) shows the same thing: per-stage state, the artifacts each produced,
+and a Retry control with the settings that stage accepts. Stages whose
+output predates a later re-run of an earlier stage are flagged `stale`.
+
+### Where the time went
+
+Every stage is timed and resource-sampled while it runs. Logs carry a
+`[perf]` line per stage:
+
+```
+[perf] ▶ stage='transcribe' job=1fd8736a started
+[perf] ■ stage='transcribe' job=1fd8736a status=ok took=10.66s ·
+       cpu 22%avg/76%peak · rss 777MB · gpu 88%avg/99%peak · vram 6100MB/12288MB ·
+       segments=13 · whisper_model=tiny · realtime_x=10.55
+```
+
+The same data is persisted to `outputs/<job>/metrics.json` (latest run per
+stage plus a capped history of every attempt) and served by:
+
+- `GET /api/dub/{id}/stages` — state, artifacts, timings, resource usage
+- `GET /api/dub/{id}/metrics` — raw per-attempt history
+- `GET /api/system` → `resources` — live CPU/RAM/GPU snapshot
+
+GPU telemetry works through `pynvml` → `torch.cuda` → `nvidia-smi` →
+`torch.mps`, whichever is available; with none of them, stages are still
+timed and CPU/RAM sampled.
+
+### Setup problems come to you
+
+A stage can finish successfully and still not have done what you assume. The
+motivating case: `pyannote/speaker-diarization-3.1` fails to download, the
+loader falls back to `speaker-diarization-community-1`, the run completes
+normally — and your multi-speaker video is diarized by a weaker model with no
+sign anything happened. Nothing in the API said so, and the only hint was a
+line on a terminal nobody reads.
+
+So stages now emit **notices**: `{code, severity, title, detail, remediation,
+url}`, where `code` is a stable slug (`pyannote.fallback_model`,
+`ffmpeg.missing`, `tts_qa.device_unavailable`). They surface in four places —
+a banner under the top bar, a chip in the top bar and left rail, a **⚠ degraded**
+marker on the affected stage row, and **System → Setup**.
+
+```bash
+# Passive: no network, rides the poll the UI already makes
+curl -s localhost:8910/api/system | jq '.notices, .checks, .accelerator'
+
+# Deep: validates the HF token, asks the Hub whether the gated pyannote repos
+# are really accessible, pings the translation backend. On demand only.
+curl -X POST localhost:8910/api/diagnostics/run | jq '.notices'
+
+# Server log ring, including third-party stdout/stderr, secrets scrubbed
+curl -s 'localhost:8910/api/logs?level=WARNING&limit=100' | jq '.entries'
+```
+
+A confirmed deep check retires findings it disproves — if the Hub says your
+access is fine, a past download failure was transient and its warning clears
+instead of nagging forever.
+
 ---
 
 ## 🌍 Supported languages
@@ -285,6 +379,7 @@ Copy `.env.example` to `.env` and edit as needed:
 
 ```bash
 # Speaker diarization (multi-speaker videos)
+# Also settable from System → Setup, which applies it without a restart.
 HF_TOKEN=hf_xxxxx                  # from huggingface.co/settings/tokens
 
 # TTS model selection
@@ -293,12 +388,44 @@ VOXCPM_CFG=2.0                     # 1.5-3.0, higher = closer to reference voice
 VOXCPM_STEPS=10                    # 5-20, lower = faster
 
 # Translation backend
-OLLAMA_URL=http://localhost:11434
+OLLAMA_URL=http://localhost:11434  # used when USE_LM_STUDIO=0
+
+# LM Studio (default translation backend)
+USE_LM_STUDIO=1
+LM_STUDIO_URL=http://localhost:1234   # with or without /v1 — both work
+LM_STUDIO_MODEL=                      # empty = auto-pick an installed model
+LM_STUDIO_TIMEOUT=300                 # seconds per segment (cold model load is slow)
+LM_STUDIO_MAX_OUTPUT_TOKENS=4096      # must exceed the model's reasoning budget
+LM_STUDIO_REASONING=off               # off|low|medium|high|on — off is much faster
+LM_STUDIO_MAX_CONCURRENT=1            # LM Studio serves one model at a time
 
 # UI behavior
 TACHIDUBB_OPEN_BROWSER=1           # 0 to disable auto-open
 TACHIDUBB_QA_THRESHOLD=0.4         # stricter (lower) = more re-rolls on bad TTS
 ```
+
+### Thinking models and translation speed
+
+Reasoning models (`qwen3.x`, `qwq`, `deepseek-r1`, `gpt-oss`) spend most of
+their output budget thinking before writing a word of the answer. Measured on
+`qwen/qwen3.6-27b`, one 8-word sentence produced **1606 reasoning tokens and 14
+tokens of translation**. Two consequences:
+
+- `LM_STUDIO_MAX_OUTPUT_TOKENS` must comfortably exceed the reasoning budget.
+  If it doesn't, the response gets truncated mid-thought and comes back with no
+  answer at all — which shows up as segments that "failed to translate" with no
+  other symptom.
+- `LM_STUDIO_REASONING=off` is requested by default. Some models honour it;
+  `qwen3.6-27b` accepts the field and reasons anyway, so for Qwen models we also
+  append Qwen's in-prompt `/no_think` switch, which does work — the same four
+  segments went from **171.7s to 8.6s**. When a model ignores the setting
+  entirely you'll get one warning in the log; a non-thinking model
+  (`gemma`, `qwen2.5`) is the better choice for bulk translation.
+
+If translation fails wholesale, the log line to look for is LM Studio's
+`Unexpected endpoint or method` — it means the request went to the wrong path.
+TachiDUBB normalizes `LM_STUDIO_URL` itself, so this should only appear if
+something else is pointed at the server.
 
 ### Optional dependencies
 
@@ -326,6 +453,27 @@ Works with any MCP-compatible agent — Cursor, Cline, Continue, custom agents. 
 ---
 
 ## 🛟 Troubleshooting
+
+**Start at System → Setup.** It lists every subsystem with pass/fail and, for
+anything broken, the exact link or command that fixes it. **Run checks** does the
+network work — validates your Hugging Face token, asks the Hub whether the gated
+pyannote repos are actually accessible, and pings your translation backend. It is
+the only thing in the app that touches the network on its own, and only when you
+press it.
+
+**System → Logs** shows the last 2000 server lines *including third-party output*
+that never goes through Python logging (pyannote, for one, prints its "accept user
+conditions" banner with a bare `print()`). Credentials are scrubbed before anything
+is stored. This is the fastest way to see what actually happened during a run
+without a terminal.
+
+> **A pyannote message worth knowing about.** pyannote prints
+> *"Could not download … It might be because the repository is private or gated"*
+> for **any** HTTP failure — a timeout, a 503 and a rate limit all produce that same
+> text (`pyannote/audio/utils/hf_hub.py`). It is a guess, not a diagnosis. If you
+> see it, run **System → Setup → Run checks**: that asks the Hub directly and tells
+> you whether it is really a permissions problem or just a failed download you can
+> retry.
 
 <details>
 <summary><b>Ollama shows a red dot in the UI</b></summary>
@@ -378,7 +526,25 @@ Normal. The model downloads ~5 GB on first use; progress is in the terminal. Sub
 <details>
 <summary><b>Hugging Face 401 / "access denied"</b></summary>
 
-You need to (1) create a token at https://huggingface.co/settings/tokens, (2) accept terms at https://huggingface.co/pyannote/speaker-diarization-3.1 (and https://huggingface.co/pyannote/segmentation-3.0), (3) put `HF_TOKEN=hf_…` in `.env`.
+You need to (1) create a token at https://huggingface.co/settings/tokens, (2) accept terms at https://huggingface.co/pyannote/speaker-diarization-3.1 (and https://huggingface.co/pyannote/segmentation-3.0), (3) put `HF_TOKEN=hf_…` in `.env`, or paste it into **System → Setup** (it takes effect immediately, no restart).
+
+**System → Setup → Run checks** tells you which of those three is missing instead of making you guess.
+
+</details>
+
+<details>
+<summary><b>The dub sounds like one voice even though the video has several speakers</b></summary>
+
+Check the **Diarize** row in the job's stage panel. If it says **⚠ degraded**, diarization ran on the fallback model (`speaker-diarization-community-1`) because the preferred `speaker-diarization-3.1` could not be downloaded — the run still succeeds, just with weaker speaker separation, which is why it used to be invisible. The row names the reason and links to the fix; re-run the Diarize stage afterwards.
+
+If it says **done** with `speaker_turns=0`, the video genuinely has one speaker, or `skip_diarization` was set on a retry.
+
+</details>
+
+<details>
+<summary><b>Every segment logs <code>qa=0.00</code></b></summary>
+
+Whisper-roundtrip QA (used on cross-lingual dubs) requests its model on CUDA (`pipeline/tts_qa.py`), so on Apple Silicon or CPU-only machines it never loads and scores everything as perfect — while the log still says "QA: Whisper roundtrip enabled". `qa=0.00` there means *not measured*, not *good*. The Setup tab reports this as `tts_qa.device_unavailable`. Judge the output by listening.
 
 </details>
 
@@ -438,7 +604,15 @@ We don't play audio — these are warnings from a transitive dep. Ignore unless 
 <details>
 <summary><b>How do I run it headless / on a server?</b></summary>
 
-`python server.py --host 0.0.0.0 --port 8910` and point your browser (or CLI / MCP) at it. Make sure port 8910 is accessible. There's no auth out of the box — put it behind nginx/Tailscale/Cloudflare Tunnel if exposed publicly.
+The server binds `127.0.0.1` by default. To reach it from another machine:
+
+```bash
+TACHIDUBB_HOST=0.0.0.0 TACHIDUBB_PORT=8910 python server.py
+```
+
+(`server.py` does not parse `--host`/`--port` flags — these env vars are the supported way.)
+
+**There is no authentication of any kind.** Anyone who can reach the port can start jobs, read every transcript, browse `/api/logs` and delete your work. Only open it beyond loopback on a network you trust, and put it behind Tailscale / a Cloudflare Tunnel / nginx-with-auth if it's reachable from the internet. The server prints a warning at startup when it binds anything other than loopback.
 
 </details>
 
