@@ -69,6 +69,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `_serialize_segments` additionally re-keys and loudly logs any duplicate it
     still sees, so no future source can drop a line quietly.
 
+### Fixed
+- **The UI was unusable on a phone.** The shell was a fixed 232px rail beside a
+  flex column inside `#root { width: 100vw }` with `body { overflow: hidden }`.
+  On a 390px screen that left ~158px of content, so every label wrapped one
+  word per line, chips turned into circles, and the page could only be read by
+  scrolling sideways.
+  - Below 860px the rail becomes an off-canvas drawer with a scrim, opened from
+    a hamburger in the top bar and closed on selection or on tapping away.
+  - View padding routes through a `--pad` custom property so one media query
+    retunes every screen; headings use `clamp()` instead of fixed sizes.
+  - `100vw` → `100%` (100vw includes the scrollbar gutter, forcing a permanent
+    horizontal overflow) and `100vh` → `100dvh` so the app is not cut off by
+    the mobile URL bar.
+  - `min-width: 0` on the content column — a flex child defaults to
+    `min-width: auto`, which is what stopped long URLs from wrapping and pushed
+    the page wider than the screen.
+  - The floating sphere pill is hidden on narrow screens, where it sat on top
+    of the content. Its "1-6 views · ⇧G sphere" hint was removed outright:
+    there is no keydown handler anywhere in the app, so it advertised shortcuts
+    that never existed.
+  - Verified with headless Chrome at 320/360/390/430/768/1024/1440px:
+    `scrollWidth == viewport` and zero overflowing elements at every width.
+
 ### Changed
 - **The server binds `127.0.0.1` instead of `0.0.0.0`.** It has no
   authentication of any kind, so the old default offered job control, every

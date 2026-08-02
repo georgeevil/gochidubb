@@ -40,8 +40,21 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow: hidden;
+    /* Nothing should ever be reachable only by scrolling sideways. */
+    overflow-x: hidden;
   }
-  #root { width: 100vw; height: 100vh; }
+  /* 100vw includes the scrollbar gutter and causes a permanent horizontal
+     overflow on desktop; 100dvh tracks the mobile URL bar collapsing, where
+     100vh leaves the bottom of the app under it. */
+  #root { width: 100%; height: 100vh; height: 100dvh; }
+
+  /* View padding is set inline all over the app; routing it through a custom
+     property is what lets one media query retune every screen at once. */
+  :root { --pad: 40px; --gutter: 22px; --rail-w: 232px; }
+
+  /* Long URLs (a YouTube source is the common case) must wrap instead of
+     forcing the whole column wider than the viewport. */
+  .wrap-any { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
 
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -106,6 +119,10 @@
     color: var(--ink-2);
     font-size: 11px;
     font-weight: 500;
+    /* Without this a pill in a narrow column wraps its label one word per
+       line and the border-radius turns it into a circle. */
+    white-space: nowrap;
+    max-width: 100%;
   }
   .chip.accent { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
 
@@ -151,6 +168,32 @@
   }
   .dropzone:hover { border-color: var(--accent-dim); background: var(--bg-2); }
   .dropzone.dragging { border-color: var(--accent); background: var(--accent-dim); }
+
+  /* ── Phones / narrow windows ──────────────────────────────────────
+     The desktop shell is a fixed 232px rail beside a flex column. At 390px
+     that leaves ~158px of content, which is why every label wrapped one word
+     per line. Below this breakpoint the rail becomes an off-canvas drawer
+     (see LeftRail/useIsNarrow in the app) and the content takes the full
+     width. Keep this in sync with NARROW_QUERY in the script below. */
+  @media (max-width: 860px) {
+    :root { --pad: 16px; --gutter: 14px; }
+
+    /* Tables, timelines and code blocks scroll inside their own box rather
+       than widening the page. */
+    .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* Touch targets: 12px labels are legible but 24px buttons are not
+       tappable. Only pad the interactive ones. */
+    .btn { padding: 9px 14px; }
+    .tab { padding: 10px 4px; }
+  }
+
+  /* Backdrop behind the mobile nav drawer. */
+  .scrim {
+    position: fixed; inset: 0; z-index: 55;
+    background: rgba(0, 0, 0, 0.55);
+    animation: fadeIn 0.15s;
+  }
 </style>
 </head>
 <body>
@@ -277,6 +320,33 @@ const fmtAge = (ts) => {
   const dt = new Date(ts * 1000);
   return dt.toLocaleDateString();
 };
+
+// Keep in sync with the @media block in the stylesheet above — the CSS
+// retunes spacing, this drives the structural change (rail becomes a drawer).
+const NARROW_QUERY = '(max-width: 860px)';
+
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => {
+    try { return window.matchMedia(query).matches; } catch (_) { return false; }
+  });
+  useEffect(() => {
+    let mq;
+    try { mq = window.matchMedia(query); } catch (_) { return; }
+    const on = (e) => setMatches(e.matches);
+    setMatches(mq.matches);
+    // addListener is the pre-Safari-14 spelling; phones are exactly where the
+    // old API still shows up.
+    if (mq.addEventListener) mq.addEventListener('change', on);
+    else if (mq.addListener) mq.addListener(on);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', on);
+      else if (mq.removeListener) mq.removeListener(on);
+    };
+  }, [query]);
+  return matches;
+}
+
+const useIsNarrow = () => useMediaQuery(NARROW_QUERY);
 
 // Wall-clock only — the log viewer shows one session, so the date is noise.
 const fmtClock = (ts) => {
@@ -624,7 +694,8 @@ function NoticeCard({ n }) {
 // ═══════════════════════════════════════════════════════════════════
 // LEFT RAIL (simplified)
 // ═══════════════════════════════════════════════════════════════════
-function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
+function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
+                    narrow = false, open = false, onClose }) {
   const sections = [
     { id: 'home',        label: 'Home',         hint: 'Upload · queue',       ic: I.home },
     { id: 'processing',  label: 'Processing',   hint: runningJob ? 'Live job' : 'Idle', ic: I.processing, badge: runningJob ? '●' : null },
@@ -653,11 +724,23 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
                 : warnings.length ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`
                 : 'GPU · models · storage';
 
+  // On a phone the rail cannot hold a column of its own — 232px of a 390px
+  // viewport left the content ~158px wide, which is what wrapped every label
+  // one word per line. Off-canvas instead: same markup, taken out of flow.
+  const go = (id) => { setView(id); if (narrow && onClose) onClose(); };
+
   return (
     <aside style={{
-      width: 232, background: 'var(--bg)',
+      width: narrow ? 'min(280px, 84vw)' : 'var(--rail-w)',
+      background: 'var(--bg)',
       borderRight: '1px solid var(--line)',
       display: 'flex', flexDirection: 'column', flexShrink: 0,
+      ...(narrow ? {
+        position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 60,
+        transform: open ? 'translateX(0)' : 'translateX(-100%)',
+        transition: 'transform 0.22s ease',
+        boxShadow: open ? '0 0 40px rgba(0,0,0,0.6)' : 'none',
+      } : {}),
     }}>
       <div style={{ padding: '20px 20px 18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -678,7 +761,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
       <div style={{ padding: '0 12px', flex: 1, overflow: 'auto' }}>
         <div className="caps" style={{ margin: '0 8px 8px' }}>Workspace</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {sections.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => setView(s.id)}/>)}
+          {sections.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => go(s.id)}/>)}
         </div>
 
         <div className="caps" style={{ margin: '20px 8px 8px' }}>System</div>
@@ -686,7 +769,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system }) {
           item={{ id: 'system', label: 'System', hint: sysHint, ic: I.system,
                   badge: issueCount > 0 ? String(issueCount) : null }}
           active={view === 'system'}
-          onClick={() => setView('system')}
+          onClick={() => go('system')}
           warn={problems.length > 0}
         />
       </div>
@@ -769,7 +852,8 @@ function NavItem({ item, active, onClick, warn }) {
 // ═══════════════════════════════════════════════════════════════════
 // TOP BAR
 // ═══════════════════════════════════════════════════════════════════
-function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProcessing, onJumpToReview, onOpenSetup }) {
+function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProcessing,
+                  onJumpToReview, onOpenSetup, narrow = false, onOpenNav }) {
   const TITLES = {
     home: 'Home', processing: 'Processing', review: 'Review · wizard pause',
     result: 'Result', history: 'History', batch: 'Batch queue', system: 'System',
@@ -785,15 +869,34 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
     <div style={{
       height: 50, borderBottom: '1px solid var(--line)',
       display: 'flex', alignItems: 'center',
-      padding: '0 22px', gap: 12, background: 'var(--bg)', flexShrink: 0,
+      padding: '0 var(--gutter)', gap: 10, background: 'var(--bg)', flexShrink: 0,
+      overflow: 'hidden',
     }}>
-      <div className="serif" style={{ fontSize: 17, letterSpacing: '-0.01em' }}>{TITLES[view] || 'TachiDUBB Studio'}</div>
-      {view === 'processing' && runningJob && (
-        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginTop: 2 }}>
+      {narrow && (
+        <button onClick={onOpenNav} aria-label="Open navigation"
+                style={{ display: 'flex', flexDirection: 'column', gap: 3,
+                         padding: '10px 6px 10px 0', flexShrink: 0 }}>
+          {[0, 1, 2].map(i => (
+            <span key={i} style={{ display: 'block', width: 17, height: 1.5,
+                                   background: 'var(--ink-2)', borderRadius: 1 }}/>
+          ))}
+        </button>
+      )}
+      <div className="serif" style={{ fontSize: narrow ? 15 : 17, letterSpacing: '-0.01em',
+                                      flexShrink: 0 }}>
+        {TITLES[view] || 'TachiDUBB Studio'}
+      </div>
+      {view === 'processing' && runningJob && !narrow && (
+        // A YouTube URL is ~45 chars of unbreakable text; on a phone it pushed
+        // the whole bar wider than the screen, so it only shows with room.
+        <span className="mono" style={{
+          fontSize: 10, color: 'var(--ink-4)', marginTop: 2, minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
           · {(runningJob.source_label || runningJob.source || runningJob.id).slice(0, 50)}
         </span>
       )}
-      <div style={{ flex: 1 }}/>
+      <div style={{ flex: 1, minWidth: 8 }}/>
 
       {runningJob && view !== 'processing' && (
         <button onClick={onJumpToProcessing} className="chip" style={{ color: 'var(--ink-2)', cursor: 'pointer' }}>
@@ -1354,7 +1457,7 @@ function Hero({ sphereOn }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="caps" style={{ marginBottom: 12 }}>New dub</div>
         <h1 className="serif" style={{
-          fontSize: 48, lineHeight: 1.02, letterSpacing: '-0.02em', marginBottom: 14,
+          fontSize: 'clamp(30px, 9vw, 48px)', lineHeight: 1.02, letterSpacing: '-0.02em', marginBottom: 14,
         }}>
           Voice it back, <span style={{ fontStyle: 'italic', color: 'var(--ink-3)' }}>line by line</span>.
         </h1>
@@ -2050,9 +2153,9 @@ function StagePanel({ jobId, system, voicePresets, onChanged, defaultOpen = true
 function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCancelled, onSwitchToHome, onRefresh }) {
   if (!runningJob) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 40, background: 'var(--bg)' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 'var(--pad)', background: 'var(--bg)' }}>
         <div className="caps">No active job</div>
-        <div className="serif" style={{ fontSize: 32, letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
+        <div className="serif" style={{ fontSize: 'clamp(20px, 5.5vw, 32px)', letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
           Nothing to watch <span style={{ fontStyle: 'italic', color: 'var(--ink-3)' }}>yet</span>.
         </div>
         <button onClick={onSwitchToHome} className="btn btn-primary">Start a new dub</button>
@@ -2060,10 +2163,10 @@ function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCance
     );
   }
   return (
-    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
+    <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
-          <div className="serif" style={{ fontSize: 24 }}>
+          <div className="serif wrap-any" style={{ fontSize: 'clamp(16px, 4.4vw, 24px)' }}>
             Processing: {runningJob.source_label || runningJob.id}
           </div>
           <StatusBadge status={runningJob.status}/>
@@ -2096,16 +2199,16 @@ function ReviewView({ jobs, selectedJobId, voicePresets, onContinued, onCancel, 
   
   if (!job) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 40, background: 'var(--bg)' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 'var(--pad)', background: 'var(--bg)' }}>
         <div className="caps">No reviews pending</div>
-        <div className="serif" style={{ fontSize: 32, letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
+        <div className="serif" style={{ fontSize: 'clamp(20px, 5.5vw, 32px)', letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
           Wizard mode is <span style={{ fontStyle: 'italic', color: 'var(--ink-3)' }}>quiet</span>.
         </div>
       </div>
     );
   }
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, background: 'var(--bg)' }}>
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div className="serif" style={{ fontSize: 24 }}>Review: {job.source_label || job.id}</div>
       <button className="btn btn-primary" style={{ marginLeft: 20 }} onClick={onContinued}>Continue</button>
     </div>
@@ -2121,9 +2224,9 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
   
   if (!job) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 40, background: 'var(--bg)' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 'var(--pad)', background: 'var(--bg)' }}>
         <div className="caps">No completed jobs yet</div>
-        <div className="serif" style={{ fontSize: 32, letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
+        <div className="serif" style={{ fontSize: 'clamp(20px, 5.5vw, 32px)', letterSpacing: '-0.015em', textAlign: 'center', maxWidth: 480 }}>
           Nothing to <span style={{ fontStyle: 'italic', color: 'var(--ink-3)' }}>show off</span> yet.
         </div>
         <button onClick={onSwitchToHome} className="btn btn-primary">Start your first dub</button>
@@ -2131,7 +2234,7 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
     );
   }
   return (
-    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
+    <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column',
                     alignItems: 'center', gap: 20 }}>
         <div className="serif" style={{ fontSize: 24 }}>{job.source_label || job.id}</div>
@@ -2160,8 +2263,8 @@ function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpRevie
   // retry from exactly there.
   const [openId, setOpenId] = useState(null);
   return (
-    <div className="scroll" style={{ flex: 1, padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>History · {jobs.length} jobs</div>
+    <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
+      <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)', marginBottom: 20 }}>History · {jobs.length} jobs</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {jobs.slice(0, 20).map(j => (
           <div key={j.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
@@ -2198,8 +2301,8 @@ function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpRevie
 // ═══════════════════════════════════════════════════════════════════
 function BatchView({ jobs, onRefresh, onJumpProcessing, onJumpResult, onJumpHome }) {
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>Batch queue</div>
+    <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad)', background: 'var(--bg)' }}>
+      <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)', marginBottom: 20 }}>Batch queue</div>
       <div style={{ color: 'var(--ink-3)' }}>Batch grouping coming soon — check back.</div>
       <button className="btn" style={{ marginTop: 20 }} onClick={onJumpHome}>Go to Home</button>
     </div>
@@ -2428,9 +2531,9 @@ function SystemView({ system, onRefreshSystem }) {
   const problems = issues.filter(n => n.severity === 'error').length;
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
+    <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 18 }}>
-        <div className="serif" style={{ fontSize: 32 }}>System</div>
+        <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)' }}>System</div>
         <span className="chip" style={{
           color: issues.length === 0 ? 'var(--accent)' : sevMeta(problems ? 'error' : 'warn').color,
           borderColor: issues.length === 0 ? 'var(--line-2)' : sevMeta(problems ? 'error' : 'warn').line,
@@ -2536,8 +2639,8 @@ function SystemView({ system, onRefreshSystem }) {
 // ═══════════════════════════════════════════════════════════════════
 function VoicesView() {
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>Voice Library</div>
+    <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad)', background: 'var(--bg)' }}>
+      <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)', marginBottom: 20 }}>Voice Library</div>
       <div style={{ color: 'var(--ink-3)' }}>Voice library coming soon — check back.</div>
     </div>
   );
@@ -2548,8 +2651,8 @@ function VoicesView() {
 // ═══════════════════════════════════════════════════════════════════
 function GlossaryEditor() {
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 40, background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 32, marginBottom: 20 }}>Glossary</div>
+    <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad)', background: 'var(--bg)' }}>
+      <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)', marginBottom: 20 }}>Glossary</div>
       <div style={{ color: 'var(--ink-3)' }}>Glossary editor coming soon — check back.</div>
     </div>
   );
@@ -2566,6 +2669,12 @@ function App() {
   const [sphereOn, setSphereOn] = useState(true);
   const [selectedResultJobId, setSelectedResultJobId] = useState(null);
   const [selectedReviewJobId, setSelectedReviewJobId] = useState(null);
+  const narrow = useIsNarrow();
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Rotating a phone into landscape can cross the breakpoint while the drawer
+  // is open; leaving it open would then overlay a layout that has its own rail.
+  useEffect(() => { if (!narrow) setNavOpen(false); }, [narrow]);
 
   // System polling
   useEffect(() => {
@@ -2611,15 +2720,25 @@ function App() {
   const openSetup = () => { _lsSet('system_tab', 'setup'); setView('system'); };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', display: 'flex', background: 'var(--bg)' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', background: 'var(--bg)',
+                  overflow: 'hidden' }}>
+      {/* Tapping outside the drawer closes it — expected on touch, and the
+          only way out when the rail covers most of the screen. */}
+      {narrow && navOpen && <div className="scrim" onClick={() => setNavOpen(false)}/>}
+
       <LeftRail
         view={view} setView={setView}
         runningJob={runningJob}
         awaitingReviewCount={awaitingReviewCount}
         system={system}
+        narrow={narrow} open={navOpen} onClose={() => setNavOpen(false)}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {/* minWidth:0 is load-bearing: a flex child defaults to min-width:auto,
+          so any wide content (a URL, a table) refuses to shrink and pushes the
+          page sideways instead of wrapping. */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column',
+                    minWidth: 0, overflowX: 'hidden' }}>
         <TopBar
           view={view}
           runningJob={runningJob}
@@ -2628,6 +2747,7 @@ function App() {
           onJumpToProcessing={() => setView('processing')}
           onJumpToReview={() => setView('review')}
           onOpenSetup={openSetup}
+          narrow={narrow} onOpenNav={() => setNavOpen(true)}
         />
 
         {/* Above every view: a setup problem is worth interrupting whatever
@@ -2710,22 +2830,26 @@ function App() {
         )}
       </div>
 
-      <div style={{
-        position: 'fixed', bottom: 12, right: 16,
-        padding: '6px 10px',
-        background: 'var(--bg-2)', border: '1px solid var(--line)',
-        borderRadius: 999,
-        display: 'flex', alignItems: 'center', gap: 10,
-        fontSize: 10, fontFamily: 'var(--mono)',
-        color: 'var(--ink-4)', zIndex: 10,
-      }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-          <input type="checkbox" checked={sphereOn} onChange={e => setSphereOn(e.target.checked)} style={{ accentColor: 'var(--accent)' }}/>
-          sphere
-        </label>
-        <span style={{ color: 'var(--ink-4)' }}>·</span>
-        <span>1-6 views · ⇧G sphere</span>
-      </div>
+      {/* A floating pill over a phone screen covers whatever is at the bottom
+          of the page — here it sat on top of the last stage row and the URL
+          input. It is a decorative toggle plus a hint about keyboard
+          shortcuts, neither of which applies on touch. */}
+      {!narrow && (
+        <div style={{
+          position: 'fixed', bottom: 12, right: 16,
+          padding: '6px 10px',
+          background: 'var(--bg-2)', border: '1px solid var(--line)',
+          borderRadius: 999,
+          display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 10, fontFamily: 'var(--mono)',
+          color: 'var(--ink-4)', zIndex: 10,
+        }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={sphereOn} onChange={e => setSphereOn(e.target.checked)} style={{ accentColor: 'var(--accent)' }}/>
+            sphere
+          </label>
+        </div>
+      )}
     </div>
   );
 }
