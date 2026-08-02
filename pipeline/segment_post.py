@@ -74,12 +74,36 @@ def postprocess_segments(
     # sentence boundary; otherwise leaves as-is.
     out = _split_very_long_segments(out, split_threshold)
 
+    # Renumber. This function is the only place that restructures the segment
+    # list, so it owns `idx` integrity — and downstream code keys dicts by idx
+    # (server.py `by_idx = {s["idx"]: s ...}` when merging translations back),
+    # where a duplicate silently overwrites a real line of dialogue.
+    #
+    # Pass 3 is what makes this necessary: it splits one segment into two via
+    # `dict(seg)` twice, so both halves inherit the parent's idx. Observed on a
+    # real job: 152 segments in, 150 out of translate, two lines of speech gone
+    # from the dub with nothing logged. Merging passes leave gaps in the
+    # numbering rather than duplicates, but renumbering fixes those too.
+    out = _renumber(out)
+
     if len(out) != original_count:
         log.info(
             f"[post] Segment count: {original_count} → {len(out)} "
             f"(cleaner segments, better TTS quality)"
         )
     return out
+
+
+def _renumber(segments: List[Dict]) -> List[Dict]:
+    """Assign contiguous, unique idx in timeline order.
+
+    Safe to do here: idx only has to be stable from `transcription_done`
+    onward (that is what retries and the translation merge key on), and this
+    runs before that checkpoint is written.
+    """
+    for i, s in enumerate(segments):
+        s["idx"] = i
+    return segments
 
 
 def _merge_continuation_segments(

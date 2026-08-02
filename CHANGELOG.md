@@ -41,6 +41,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cfg.hf_token` existed in `app/config.py` but nothing read it, so a token
   entered anywhere but `.env` silently did nothing.
 
+### Added
+- **`tools/audit_job.py`** — audits a finished job's artifacts for content lost
+  between stages. Reports duplicate/missing segment indices, untranslated
+  segments, segments never synthesized or whose wav is gone, synthesized
+  segments the assembler never placed, and stale `seg_*.wav` from earlier
+  attempts. Exit code 1 on loss, `--json` for machines, `--all` for a sweep.
+  - The primary check is **word coverage**, not segment counts: the pipeline
+    legitimately merges fragments and splits long segments, so 190 → 152 is
+    healthy while 152 → 150 is two lines of dialogue gone. Counting cannot tell
+    those apart; words can only disappear if something was dropped.
+
+### Fixed
+- **Spoken lines silently vanished from finished dubs.**
+  `pipeline/segment_post._split_very_long_segments` splits one segment into two
+  via `dict(seg)` twice, so **both halves inherited the parent's `idx`**.
+  `_stage_translate` then merges results with `by_idx = {s["idx"]: s ...}`,
+  where a duplicate key overwrites a real segment. Every stage reported
+  success and nothing was logged.
+  - Confirmed on job `947ca81d`: 152 segments into translate, 150 out.
+    *"Wow bigger than I thought it would be."* and *"These four players decided
+    to keep my return a secret"* were both absent from the dub.
+  - `postprocess_segments` now renumbers `idx` contiguously after its passes —
+    it is the only place that restructures the list, so it owns index
+    integrity. Replaying it over that job's real transcription now yields zero
+    duplicates and zero words lost.
+  - `_serialize_segments` additionally re-keys and loudly logs any duplicate it
+    still sees, so no future source can drop a line quietly.
+
 ### Changed
 - **The server binds `127.0.0.1` instead of `0.0.0.0`.** It has no
   authentication of any kind, so the old default offered job control, every
