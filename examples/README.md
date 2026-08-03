@@ -1,6 +1,6 @@
 # Examples
 
-Ready-to-run scripts. The TachiDUBB server must be running (`start.bat` /
+Ready-to-run scripts. The GochiDUBB server must be running (`start.bat` /
 `./start.sh`); these scripts talk to it via HTTP.
 
 | File | What it does |
@@ -11,8 +11,8 @@ Ready-to-run scripts. The TachiDUBB server must be running (`start.bat` /
 | [`watch_folder.py`](watch_folder.py) | Watch a directory and auto-dub anything dropped in |
 | [`agentic.md`](agentic.md) | What to tell Claude Code / Cursor / Cline once the MCP server is wired up |
 
-Set `TACHIDUBB_URL` if the server is on another machine:
+Set `GOCHIDUBB_URL` if the server is on another machine:
 
 ```bash
-export TACHIDUBB_URL=http://192.168.0.10:8910
+export GOCHIDUBB_URL=http://192.168.0.10:8910
 ```

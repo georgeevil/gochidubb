@@ -1,17 +1,17 @@
 <div align="center">
 
-# 🎙️ TachiDUBB Studio
+# 🎙️ GochiDUBB Studio
 
 **Local, agent-controllable AI video dubbing.**
 YouTube link in → voice-cloned dub in 28 languages out. No cloud, no per-minute fees, no upload of your face to anyone's server.
 
-*by [@smolekoma](https://x.com/smolekoma) and [@smolemaru](https://x.com/smolemaru) &mdash; built with [Claude Opus 4.7](https://claude.ai)*
+*by [George Chi](https://github.com/georgeevil) &mdash; built with [Claude Opus 4.7](https://claude.ai)*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CUDA 12.0+](https://img.shields.io/badge/CUDA-12.0+-76B900.svg)](https://developer.nvidia.com/cuda-downloads)
 [![MCP enabled](https://img.shields.io/badge/MCP-enabled-7B61FF.svg)](https://modelcontextprotocol.io)
-[![GitHub stars](https://img.shields.io/github/stars/TachikomaRed/tachidubb?style=social)](https://github.com/TachikomaRed/tachidubb/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/georgeevil/tachidubb_lm_studio?style=social)](https://github.com/georgeevil/tachidubb_lm_studio/stargazers)
 
 [**Quickstart**](#-30-second-quickstart) ·
 [**Demo**](#-demo) ·
@@ -26,9 +26,9 @@ YouTube link in → voice-cloned dub in 28 languages out. No cloud, no per-minut
 
 ---
 
-## ✨ Why TachiDUBB
+## ✨ Why GochiDUBB
 
-| | TachiDUBB | ElevenLabs Dubbing | Heygen | Rask |
+| | GochiDUBB | ElevenLabs Dubbing | Heygen | Rask |
 |---|---|---|---|---|
 | **Cost** | Free (your GPU) | $0.30/min and up | $0.15+/min | $0.07+/min |
 | **Runs offline** | ✅ 100% local | ❌ cloud | ❌ cloud | ❌ cloud |
@@ -61,7 +61,7 @@ If you're dubbing a 10-minute video weekly across 5 languages, this saves you ab
 ### Linux / macOS
 
 ```bash
-git clone https://github.com/TachikomaRed/tachidubb && cd tachidubb
+git clone https://github.com/georgeevil/tachidubb_lm_studio && cd tachidubb_lm_studio
 chmod +x install.sh
 ./install.sh    # installs everything + creates start.sh
 ./start.sh
@@ -75,34 +75,34 @@ The server ships with a process manager that prevents lingering processes after 
 
 ```bash
 # Start in background (detached, survives terminal close)
-python tools/tachidubb_serverctl.py start
+python tools/gochidubb_serverctl.py start
 
 # Check if running
-python tools/tachidubb_serverctl.py status
+python tools/gochidubb_serverctl.py status
 
 # Graceful stop (SIGTERM, auto-force-kills after 10s)
-python tools/tachidubb_serverctl.py stop
+python tools/gochidubb_serverctl.py stop
 
 # Restart (stop + start)
-python tools/tachidubb_serverctl.py restart
+python tools/gochidubb_serverctl.py restart
 
 # Tail server logs
-python tools/tachidubb_serverctl.py logs --follow
+python tools/gochidubb_serverctl.py logs --follow
 
 # Development mode with auto-reload on file changes
-python tools/tachidubb_serverctl.py foreground --reload
+python tools/gochidubb_serverctl.py foreground --reload
 
 # Auto-start on macOS login
-python tools/tachidubb_serverctl.py install-launchd
+python tools/gochidubb_serverctl.py install-launchd
 ```
 
-The manager writes a PID file (`.tachidubb.pid`) on startup and cleans it up on shutdown. If a process lingers after a crash or agentic restart, `status` detects orphaned processes and `stop` kills them all.
+The manager writes a PID file (`.gochidubb.pid`) on startup and cleans it up on shutdown. If a process lingers after a crash or agentic restart, `status` detects orphaned processes and `stop` kills them all.
 
 ---
 
 ## 🤖 Agent control (MCP + CLI)
 
-This is what makes TachiDUBB different. You don't have to touch the UI to use it.
+This is what makes GochiDUBB different. You don't have to touch the UI to use it.
 
 ### Tell Claude Code (or any MCP-aware agent) what you want
 
@@ -110,15 +110,15 @@ This is what makes TachiDUBB different. You don't have to touch the UI to use it
 You:    Dub https://youtu.be/abc into French, Spanish and Japanese,
         then stitch them into one 60-second showcase reel.
 
-Claude: [calls tachidubb_showcase(...)]
-        [polls tachidubb_get_showcase(...)]
+Claude: [calls gochidubb_showcase(...)]
+        [polls gochidubb_get_showcase(...)]
         Done — http://localhost:8910/outputs/showcase_sc_2f1a.../showcase.mp4
 ```
 
 Add the MCP server in 10 seconds:
 
 ```bash
-claude mcp add tachidubb python /path/to/tachidubb/tools/tachidubb_mcp.py
+claude mcp add gochidubb python /path/to/gochidubb/tools/gochidubb_mcp.py
 ```
 
 Or paste into `~/.claude.json`:
@@ -126,40 +126,40 @@ Or paste into `~/.claude.json`:
 ```json
 {
   "mcpServers": {
-    "tachidubb": {
-      "command": "/path/to/tachidubb/venv/Scripts/python.exe",
-      "args": ["/path/to/tachidubb/tools/tachidubb_mcp.py"],
-      "env": { "TACHIDUBB_URL": "http://localhost:8910" }
+    "gochidubb": {
+      "command": "/path/to/gochidubb/venv/Scripts/python.exe",
+      "args": ["/path/to/gochidubb/tools/gochidubb_mcp.py"],
+      "env": { "GOCHIDUBB_URL": "http://localhost:8910" }
     }
   }
 }
 ```
 
-The repo ships a Claude Code skill at [`.claude/skills/tachidubb/SKILL.md`](.claude/skills/tachidubb/SKILL.md). Copy it to `~/.claude/skills/` and Claude knows when and how to drive the pipeline.
+The repo ships a Claude Code skill at [`.claude/skills/gochidubb/SKILL.md`](.claude/skills/gochidubb/SKILL.md). Copy it to `~/.claude/skills/` and Claude knows when and how to drive the pipeline.
 
 ### CLI — works from any shell, any OS, any cron
 
 ```bash
 # Single language, blocking
-python tools/tachidubb_cli.py dub https://youtu.be/abc --lang fr --wait
+python tools/gochidubb_cli.py dub https://youtu.be/abc --lang fr --wait
 
 # Compare 5 languages side-by-side
-python tools/tachidubb_cli.py compare ./clip.mp4 --langs es,fr,de,ja,pt --trim 60
+python tools/gochidubb_cli.py compare ./clip.mp4 --langs es,fr,de,ja,pt --trim 60
 
 # Stitched multilingual showcase reel
-python tools/tachidubb_cli.py showcase https://youtu.be/abc \
+python tools/gochidubb_cli.py showcase https://youtu.be/abc \
   --langs es,fr,de,ja,pt --trim 60 --wait
 
 # Re-dub an existing job into new languages — skips re-upload
-python tools/tachidubb_cli.py redub 5038e404 --langs ja,it --mode showcase --wait
+python tools/gochidubb_cli.py redub 5038e404 --langs ja,it --mode showcase --wait
 
 # Health, status, history
-python tools/tachidubb_cli.py system
-python tools/tachidubb_cli.py jobs --limit 20
-python tools/tachidubb_cli.py status <job_id>
+python tools/gochidubb_cli.py system
+python tools/gochidubb_cli.py jobs --limit 20
+python tools/gochidubb_cli.py status <job_id>
 ```
 
-Drive a remote box: `set TACHIDUBB_URL=http://192.168.0.10:8910`
+Drive a remote box: `set GOCHIDUBB_URL=http://192.168.0.10:8910`
 
 See [`examples/`](examples/) for ready-to-run scripts.
 
@@ -369,7 +369,7 @@ What "phones home" by default:
 - `ollama.com` for translation model pulls — first install only
 - `edge-tts` for the cloud TTS fallback — only triggers if VoxCPM2 fails to load on your GPU
 
-There's no telemetry, no analytics, no phone-home from TachiDUBB itself. Audit the network calls: search the repo for `httpx.` / `requests.` — only the integrations above.
+There's no telemetry, no analytics, no phone-home from GochiDUBB itself. Audit the network calls: search the repo for `httpx.` / `requests.` — only the integrations above.
 
 ---
 
@@ -400,8 +400,8 @@ LM_STUDIO_REASONING=off               # off|low|medium|high|on — off is much f
 LM_STUDIO_MAX_CONCURRENT=1            # LM Studio serves one model at a time
 
 # UI behavior
-TACHIDUBB_OPEN_BROWSER=1           # 0 to disable auto-open
-TACHIDUBB_QA_THRESHOLD=0.4         # stricter (lower) = more re-rolls on bad TTS
+GOCHIDUBB_OPEN_BROWSER=1           # 0 to disable auto-open
+GOCHIDUBB_QA_THRESHOLD=0.4         # stricter (lower) = more re-rolls on bad TTS
 ```
 
 ### Thinking models and translation speed
@@ -424,7 +424,7 @@ tokens of translation**. Two consequences:
 
 If translation fails wholesale, the log line to look for is LM Studio's
 `Unexpected endpoint or method` — it means the request went to the wrong path.
-TachiDUBB normalizes `LM_STUDIO_URL` itself, so this should only appear if
+GochiDUBB normalizes `LM_STUDIO_URL` itself, so this should only appear if
 something else is pointed at the server.
 
 ### Optional dependencies
@@ -439,14 +439,14 @@ something else is pointed at the server.
 
 ## 🧠 The agent skill
 
-If you use Claude Code, copy `.claude/skills/tachidubb/SKILL.md` into your global skills folder (`~/.claude/skills/tachidubb/`). After that, just say:
+If you use Claude Code, copy `.claude/skills/gochidubb/SKILL.md` into your global skills folder (`~/.claude/skills/gochidubb/`). After that, just say:
 
 - *"Dub this YouTube short into French and German"*
 - *"Make a showcase reel of this clip in 5 languages"*
 - *"Re-dub job 5038e404 into Japanese and Italian"*
 - *"What's the status of my dub?"*
 
-The skill teaches Claude which tool to call, what arguments to use, how to poll, how to recover from errors, and when to suggest a comparison vs a showcase. Read [`SKILL.md`](.claude/skills/tachidubb/SKILL.md) for the full trigger map.
+The skill teaches Claude which tool to call, what arguments to use, how to poll, how to recover from errors, and when to suggest a comparison vs a showcase. Read [`SKILL.md`](.claude/skills/gochidubb/SKILL.md) for the full trigger map.
 
 Works with any MCP-compatible agent — Cursor, Cline, Continue, custom agents. The MCP tool schema is auto-discovered.
 
@@ -576,7 +576,7 @@ Linux/macOS: `sudo apt install ffmpeg` or `brew install ffmpeg`. Windows: the in
 <details>
 <summary><b>Showcase reel renders all black / no audio</b></summary>
 
-Usually one of the child dubs failed silently. `python tools/tachidubb_cli.py showcase-status <batch_id>` shows which language failed. Rerun with `tachidubb showcase-rebuild <batch_id>` after fixing the failing job — it skips re-dubbing the successful ones.
+Usually one of the child dubs failed silently. `python tools/gochidubb_cli.py showcase-status <batch_id>` shows which language failed. Rerun with `gochidubb showcase-rebuild <batch_id>` after fixing the failing job — it skips re-dubbing the successful ones.
 
 </details>
 
@@ -597,7 +597,7 @@ We don't play audio — these are warnings from a transitive dep. Ignore unless 
 <details>
 <summary><b>The server is on a different machine — how do I point the CLI at it?</b></summary>
 
-`export TACHIDUBB_URL=http://192.168.0.10:8910` (or set `TACHIDUBB_URL` in your MCP config `env` block). The CLI and MCP server respect the same variable.
+`export GOCHIDUBB_URL=http://192.168.0.10:8910` (or set `GOCHIDUBB_URL` in your MCP config `env` block). The CLI and MCP server respect the same variable.
 
 </details>
 
@@ -607,7 +607,7 @@ We don't play audio — these are warnings from a transitive dep. Ignore unless 
 The server binds `127.0.0.1` by default. To reach it from another machine:
 
 ```bash
-TACHIDUBB_HOST=0.0.0.0 TACHIDUBB_PORT=8910 python server.py
+GOCHIDUBB_HOST=0.0.0.0 GOCHIDUBB_PORT=8910 python server.py
 ```
 
 (`server.py` does not parse `--host`/`--port` flags — these env vars are the supported way.)
@@ -648,7 +648,7 @@ Yes — anything VoxCPM2 can fit as a reference (usually 5+ s of clean speech) c
 VoxCPM2 has the best cross-lingual cloning quality we tested at the 5 GB weight class. The architecture is swappable — `pipeline/synthesizer.py` has a base class; PRs for other backends welcome.
 
 **Can agents trigger this without my approval?**
-Each MCP tool call requires user confirmation by default (per the MCP spec). Tachidubb doesn't bypass that.
+Each MCP tool call requires user confirmation by default (per the MCP spec). GochiDUBB doesn't bypass that.
 
 ---
 
@@ -667,13 +667,13 @@ Each MCP tool call requires user confirmation by default (per the MCP spec). Tac
 - [ ] Hardware-accelerated diarization (NVIDIA NeMo)
 - [ ] Apple Silicon MLX backend
 
-Vote / suggest features in [Discussions](https://github.com/TachikomaRed/tachidubb/discussions).
+Vote / suggest features in [Discussions](https://github.com/georgeevil/tachidubb_lm_studio/discussions).
 
 ---
 
 ## 🛡️ Responsible use
 
-Voice cloning is powerful and easily misused. **TachiDUBB is built for legitimate creators dubbing their own content or content they have rights to.** Please:
+Voice cloning is powerful and easily misused. **GochiDUBB is built for legitimate creators dubbing their own content or content they have rights to.** Please:
 
 - Don't clone someone's voice without their explicit, informed consent.
 - Don't impersonate real people (politicians, celebrities, your boss) for deception, fraud, or harassment.
@@ -698,9 +698,9 @@ Good first issues:
 
 ## 💖 Credits
 
-Built by **[TachikomaRed](https://x.com/smolekoma)** and **[smolemaru](https://x.com/smolemaru)** &mdash; in collaboration with **[Claude](https://claude.ai)** (Anthropic).
+Built by **[George Chi](https://github.com/georgeevil)** &mdash; in collaboration with **[Claude](https://claude.ai)** (Anthropic).
 
-Follow the build on X: [@smolekoma](https://x.com/smolekoma) &middot; [@smolemaru](https://x.com/smolemaru)
+Follow the build on GitHub: [@georgeevil](https://github.com/georgeevil)
 
 Standing on shoulders:
 - [VoxCPM2](https://huggingface.co/openbmb/VoxCPM2) — voice cloning TTS (Apache-2.0)
@@ -720,8 +720,8 @@ MIT — see [LICENSE](LICENSE). VoxCPM2 is Apache-2.0. edge-tts is GPL-3.0; usin
 
 <div align="center">
 
-**If TachiDUBB saved you a Heygen subscription, smash that ⭐ — that's how more people find it.**
+**If GochiDUBB saved you a Heygen subscription, smash that ⭐ — that's how more people find it.**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TachikomaRed/tachidubb&type=Date)](https://star-history.com/#TachikomaRed/tachidubb&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=georgeevil/tachidubb_lm_studio&type=Date)](https://star-history.com/#georgeevil/tachidubb_lm_studio&Date)
 
 </div>
