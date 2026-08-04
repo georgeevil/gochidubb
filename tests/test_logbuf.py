@@ -71,7 +71,7 @@ class TestLogRing:
 
 class TestRingHandler:
     def test_captures_records_once(self, ring):
-        logger = logging.getLogger("tachidubb.test.logbuf")
+        logger = logging.getLogger("gochidubb.test.logbuf")
         logger.propagate = False
         logger.setLevel(logging.INFO)
         handler = RingHandler(ring)
@@ -83,11 +83,11 @@ class TestRingHandler:
         entries = ring.entries()["entries"]
         assert len(entries) == 1, "a duplicated line means stdio is teed twice"
         assert entries[0]["level"] == "WARNING"
-        assert entries[0]["logger"] == "tachidubb.test.logbuf"
+        assert entries[0]["logger"] == "gochidubb.test.logbuf"
         assert entries[0]["message"] == "hello"
 
     def test_formats_lazy_args(self, ring):
-        logger = logging.getLogger("tachidubb.test.logbuf2")
+        logger = logging.getLogger("gochidubb.test.logbuf2")
         logger.propagate = False
         logger.setLevel(logging.INFO)
         handler = RingHandler(ring)
@@ -99,7 +99,7 @@ class TestRingHandler:
         assert ring.entries()["entries"][0]["message"] == "loaded model in 3s"
 
     def test_includes_the_traceback(self, ring):
-        logger = logging.getLogger("tachidubb.test.logbuf3")
+        logger = logging.getLogger("gochidubb.test.logbuf3")
         logger.propagate = False
         handler = RingHandler(ring)
         logger.addHandler(handler)
@@ -219,7 +219,7 @@ class TestInstall:
         root.addHandler(console)
         logbuf.install()
         try:
-            logging.getLogger("tachidubb.test.dup").warning("only once please")
+            logging.getLogger("gochidubb.test.dup").warning("only once please")
             msgs = [e["message"] for e in logbuf.ring.entries(limit=50)["entries"]
                     if "only once please" in e["message"]]
             assert len(msgs) == 1

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>TachiDUBB Studio</title>
+<title>GoChiDUBB Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -358,7 +358,7 @@ const fmtClock = (ts) => {
 
 const _lsGet = (key, fallback) => {
   try {
-    const v = localStorage.getItem('tachidubb_pref_' + key);
+    const v = localStorage.getItem('gochidubb_pref_' + key);
     if (v === null) return fallback;
     if (v === 'true') return true;
     if (v === 'false') return false;
@@ -366,7 +366,7 @@ const _lsGet = (key, fallback) => {
   } catch (_) { return fallback; }
 };
 const _lsSet = (key, v) => {
-  try { localStorage.setItem('tachidubb_pref_' + key, String(v)); } catch (_) {}
+  try { localStorage.setItem('gochidubb_pref_' + key, String(v)); } catch (_) {}
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -752,7 +752,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#0a0a0d" strokeWidth="1.6"><path d="M2 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5-.8 2.5-2 2.5"/><path d="M6 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5"/></svg>
           </div>
           <div>
-            <div className="serif" style={{ fontSize: 19, lineHeight: 1, letterSpacing: '-0.02em' }}>TachiDUBB</div>
+            <div className="serif" style={{ fontSize: 19, lineHeight: 1, letterSpacing: '-0.02em' }}>GoChiDUBB</div>
             <div className="mono" style={{ color: 'var(--ink-4)', fontSize: 9, marginTop: 3 }}>studio</div>
           </div>
         </div>
@@ -884,7 +884,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
       )}
       <div className="serif" style={{ fontSize: narrow ? 15 : 17, letterSpacing: '-0.01em',
                                       flexShrink: 0 }}>
-        {TITLES[view] || 'TachiDUBB Studio'}
+        {TITLES[view] || 'GoChiDUBB Studio'}
       </div>
       {view === 'processing' && runningJob && !narrow && (
         // A YouTube URL is ~45 chars of unbreakable text; on a phone it pushed
@@ -2510,7 +2510,7 @@ function LogsTab() {
             <span style={{ color: 'var(--ink-4)', flexShrink: 0 }}>{fmtClock(e.ts)}</span>
             <span style={{ color: levelColor(e.level), flexShrink: 0, width: 54 }}>{e.level}</span>
             <span style={{ color: 'var(--ink-4)', flexShrink: 0, width: 118, overflow: 'hidden',
-                           textOverflow: 'ellipsis' }}>{e.logger.replace(/^tachidubb\./, '')}</span>
+                           textOverflow: 'ellipsis' }}>{e.logger.replace(/^gochidubb\./, '')}</span>
             <span style={{ color: 'var(--ink-2)', flex: 1 }}>{e.message}</span>
           </div>
         ))}

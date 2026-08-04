@@ -1,4 +1,4 @@
-"""TachiDUBB Studio Pipeline - modular dubbing components."""
+"""GoChiDUBB Studio Pipeline - modular dubbing components."""
 from .downloader import download_video
 from .audio import extract_audio, extract_audio_hq, separate_background, get_duration
 from .transcriber import transcribe

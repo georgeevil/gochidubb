@@ -7,7 +7,7 @@ import sys
 import json
 from typing import List, Dict, Any, Optional
 
-log = logging.getLogger("tachidubb.models")
+log = logging.getLogger("gochidubb.models")
 
 # ============================================================
 # LM Studio Configuration

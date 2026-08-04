@@ -12,7 +12,7 @@ import subprocess
 
 from .notices import notice
 
-log = logging.getLogger("tachidubb.audio")
+log = logging.getLogger("gochidubb.audio")
 
 
 def _run(cmd, desc="", timeout=600):
@@ -50,6 +50,57 @@ def extract_audio_hq(video_path: str, audio_path: str) -> str:
     return audio_path
 
 
+# ─────────────────────────────────────────────────────────────
+# Tensor audio I/O — deliberately NOT torchaudio.load / torchaudio.save
+# ─────────────────────────────────────────────────────────────
+# Since torchaudio 2.9 those two calls dispatch to torchcodec, which
+# dlopen()s FFmpeg's shared libraries at runtime. torchcodec only ships
+# loaders for FFmpeg majors 4–7 (libavcodec.58/59/60/61), so on a machine
+# with a newer FFmpeg — Homebrew's ffmpeg 8 on Apple Silicon installs
+# libavcodec.62 — every call raises "Could not load libtorchcodec" and the
+# demucs and VAD stages silently degrade to "no background separation" and
+# "no VAD". The FFmpeg *binary* we shell out to everywhere else is
+# unaffected; it is only torchcodec's dylib-level binding that is version
+# locked.
+#
+# Everything we open here is a PCM WAV this pipeline just wrote with the
+# ffmpeg CLI, so libsndfile (via soundfile) reads and writes it directly
+# with no codec layer involved. pipeline/diarizer.py already preloads audio
+# the same way to keep pyannote off torchcodec.
+
+def load_audio_tensor(path: str):
+    """Load audio as a float32 (channels, time) tensor + its sample rate."""
+    import torch
+    try:
+        import numpy as np  # noqa: F401 — soundfile returns ndarrays
+        import soundfile as sf
+        data, sr = sf.read(path, dtype="float32", always_2d=True)  # (time, ch)
+        return torch.from_numpy(data.T.copy()), int(sr)
+    except Exception as e:
+        # Only reachable for a container libsndfile can't open; the FFmpeg
+        # version lock applies here too, so this may well fail — but it
+        # fails with a clear error instead of never being tried.
+        log.debug(f"soundfile could not read {path} ({e}); trying torchaudio")
+        import torchaudio
+        return torchaudio.load(path)
+
+
+def save_audio_tensor(path: str, wav, sr: int) -> None:
+    """Write a (channels, time) float tensor as a 16-bit PCM WAV."""
+    import torch  # noqa: F401 — wav is a torch tensor
+    if wav.dim() == 1:
+        wav = wav.unsqueeze(0)
+    data = wav.detach().cpu().float().numpy().T  # → (time, channels)
+    peak = float(abs(data).max()) if data.size else 0.0
+    if peak > 1.0:
+        # Demucs stems can overshoot ±1.0. Scaling the whole file keeps its
+        # internal balance; hard-clipping to 16-bit would not.
+        log.debug(f"Scaling {os.path.basename(path)} down from peak {peak:.2f}")
+        data = data / peak
+    import soundfile as sf
+    sf.write(path, data, int(sr), subtype="PCM_16")
+
+
 def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
     """Separate vocals/background using Demucs (htdemucs_ft model).
 
@@ -61,18 +112,28 @@ def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
     import torch
 
     log.info("Separating vocals with Demucs (htdemucs_ft)...")
+
+    # Only the imports may report "not installed". This used to wrap the
+    # whole body, so an ImportError raised anywhere inside — including from
+    # deep in demucs' own model loading — surfaced as "demucs not installed"
+    # and sent people off to `pip install demucs` for a package that was
+    # already there.
     try:
         from demucs.apply import apply_model
         from demucs.pretrained import get_model
         import torchaudio
+    except ImportError as e:
+        raise RuntimeError(f"demucs not installed — run: pip install demucs ({e})")
 
+    try:
         model = get_model("htdemucs_ft")
         model.eval()
         if torch.cuda.is_available():
             model = model.cuda()
 
-        wav, sr = torchaudio.load(audio_path)
-        # Demucs expects (batch, channels, time) at its native sample rate
+        wav, sr = load_audio_tensor(audio_path)
+        # Demucs expects (batch, channels, time) at its native sample rate.
+        # functional.resample is pure tensor math — no torchcodec involved.
         if sr != model.samplerate:
             wav = torchaudio.functional.resample(wav, sr, model.samplerate)
         if wav.shape[0] == 1:
@@ -92,14 +153,16 @@ def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
         vocals_path = os.path.join(output_dir, "vocals.wav")
         bg_path = os.path.join(output_dir, "background.wav")
 
-        torchaudio.save(vocals_path, vocals_wav, model.samplerate)
-        torchaudio.save(bg_path, bg_wav, model.samplerate)
+        save_audio_tensor(vocals_path, vocals_wav, model.samplerate)
+        save_audio_tensor(bg_path, bg_wav, model.samplerate)
 
         log.info("Demucs separation complete")
         return vocals_path, bg_path
 
-    except ImportError:
-        raise RuntimeError("demucs not installed — run: pip install demucs")
+    except Exception as e:
+        # Installed but broken — say which, so the notice can offer a
+        # remedy that matches the actual cause instead of a reinstall.
+        raise RuntimeError(f"demucs failed: {type(e).__name__}: {e}") from e
 
 
 def _separate_audio_separator(audio_path: str, output_dir: str) -> tuple[str, str]:
@@ -156,6 +219,11 @@ def separate_background(audio_path: str, output_dir: str,
     bg = os.path.join(output_dir, "background.wav")
     notices = notices if notices is not None else []
     reasons = []
+    # Whether the backends are *missing* or *present but broken* decides
+    # what the notice should tell the user to do. Conflating the two sent
+    # someone to `pip install demucs` for an already-installed package
+    # whose real problem was a torchcodec/FFmpeg mismatch.
+    demucs_missing = False
 
     # Try Demucs first
     try:
@@ -164,6 +232,7 @@ def separate_background(audio_path: str, output_dir: str,
         if "not installed" in str(e):
             log.info("Demucs not installed, trying audio-separator...")
             reasons.append("demucs: not installed")
+            demucs_missing = True
         else:
             log.warning(f"Demucs failed: {e}, trying audio-separator...")
             reasons.append(f"demucs: {e}")
@@ -193,11 +262,21 @@ def separate_background(audio_path: str, output_dir: str,
         detail="You asked to keep the background, but no separation backend "
                "worked, so the dub gets a silent background instead of the "
                "original music and effects.\n  " + "\n  ".join(reasons),
-        remediation=[
-            "pip install demucs      (best quality, ~2 GB of weights on first use)",
-            "or: pip install audio-separator",
-            "Then re-run the Extract stage on this job",
-        ],
+        remediation=(
+            [
+                "pip install demucs      (best quality, ~2 GB of weights on first use)",
+                "or: pip install audio-separator",
+                "Then re-run the Extract stage on this job",
+            ]
+            if demucs_missing else
+            [
+                "demucs IS installed — it failed at runtime, so reinstalling "
+                "will not help. The reason is quoted above.",
+                "Check System \u2192 Setup for a failing dependency (a torchcodec "
+                "or FFmpeg mismatch is the usual cause).",
+                "Then re-run the Extract stage on this job",
+            ]
+        ),
         url="https://github.com/adefossez/demucs",
     ))
 

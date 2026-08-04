@@ -1,5 +1,5 @@
 """
-TachiDUBB Studio - Plug-and-Play AI Video Dubbing
+GoChiDUBB Studio - Plug-and-Play AI Video Dubbing
 ==================================================
 Created by TachikomaRed and smolemaru
 Run: python server.py
@@ -22,11 +22,11 @@ import sys as _sys
 import types as _types
 
 
-def _tachidubb_stub_module(_name: str) -> None:
+def _gochidubb_stub_module(_name: str) -> None:
     if _name in _sys.modules:
         return
     m = _types.ModuleType(_name)
-    m.__file__ = f"<tachidubb-stub:{_name}>"
+    m.__file__ = f"<gochidubb-stub:{_name}>"
     m.__path__ = []
     _sys.modules[_name] = m
 
@@ -45,9 +45,9 @@ for _n in (
     "speechbrain.wordemb",
     "speechbrain.lobes.models.huggingface_transformers",
 ):
-    _tachidubb_stub_module(_n)
+    _gochidubb_stub_module(_n)
 
-del _sys, _types, _tachidubb_stub_module, _n
+del _sys, _types, _gochidubb_stub_module, _n
 
 # ═══════════════════════════════════════════════════════════════════
 
@@ -207,7 +207,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
-log = logging.getLogger("tachidubb.server")
+log = logging.getLogger("gochidubb.server")
 
 # Mirror everything into an in-memory ring so GET /api/logs can show it. This
 # has to happen right after basicConfig and before the pipeline does any work:
@@ -884,7 +884,7 @@ def resolve_voice_config(voice_preset: str, voice_style: str, job_id: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Init SQLite store (creates table + migrates legacy JSON files)
-    init_db(BASE / "tachidubb.db")
+    init_db(BASE / "gochidubb.db")
     load_jobs_from_disk()
 
     # Initialize job queue + start serial worker. Using a single worker
@@ -897,7 +897,7 @@ async def lifespan(app: FastAPI):
     # scheduled_at persist in the job dict on disk.
     _scheduler_task = asyncio.create_task(_scheduler_loop())
 
-    if os.getenv("TACHIDUBB_OPEN_BROWSER", "1") == "1" and not os.getenv("DOCKER"):
+    if os.getenv("GOCHIDUBB_OPEN_BROWSER", "1") == "1" and not os.getenv("DOCKER"):
         async def open_browser():
             await asyncio.sleep(1.5)
             try:
@@ -917,8 +917,8 @@ async def lifespan(app: FastAPI):
     # itself, translates fast, unloads via keep_alive, then VoxCPM loads
     # for TTS. Cost: first dub is ~20s slower (one-time VoxCPM load).
     # To opt back in (fast multi-user servers with abundant VRAM): set
-    # TACHIDUBB_WARMUP=1 in .env or environment.
-    if os.getenv("TACHIDUBB_WARMUP", "0") == "1":
+    # GOCHIDUBB_WARMUP=1 in .env or environment.
+    if os.getenv("GOCHIDUBB_WARMUP", "0") == "1":
         async def warmup_tts():
             await asyncio.sleep(2.0)  # let server finish binding port
             try:
@@ -931,7 +931,7 @@ async def lifespan(app: FastAPI):
                 if not isinstance(tts, VoxCPMSynthesizer):
                     return  # Edge-TTS fallback doesn't need warmup
                 # Create a minimal valid WAV file to serve as dummy reference
-                dummy_dir = _tmp.mkdtemp(prefix="tachidubb_warmup_")
+                dummy_dir = _tmp.mkdtemp(prefix="gochidubb_warmup_")
                 dummy_ref = os.path.join(dummy_dir, "dummy_ref.wav")
                 with _wave.open(dummy_ref, "wb") as w:
                     w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
@@ -975,7 +975,7 @@ async def lifespan(app: FastAPI):
                 pass
 
 
-app = FastAPI(title="TachiDUBB Studio", version="2.2.0", lifespan=lifespan)
+app = FastAPI(title="GoChiDUBB Studio", version="2.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
@@ -1598,12 +1598,15 @@ async def _stage_translate(job, work, ctx, update, perf):
     total_todo = len(todo)
 
     def _translate_progress(done, total, eta_sec):
-        # Map translation progress into the overall pipeline 45→62% range
+        # Map translation progress into the overall pipeline 45→62% range.
+        # `total` comes from the translator and counts unique lines to
+        # translate, which is ≤ the segment count (repeats are translated
+        # once), so don't substitute the segment count here.
         pct = 45 + int((done / max(total, 1)) * 17)
         eta_str = f" · ~{eta_sec // 60}m{eta_sec % 60}s left" if eta_sec > 30 else ""
         update(
             progress=min(pct, 62),
-            step_detail=f"Translating batch {done}/{total}{eta_str}",
+            step_detail=f"Translating line {done}/{total}{eta_str}",
         )
 
     # translate_segments(segments, target_lang, model, ...)
@@ -1638,14 +1641,6 @@ async def _stage_translate(job, work, ctx, update, perf):
         model=model, translated=total_todo, reused=len(prior_by_idx),
         untranslated=untranslated_count, segments=len(segments),
     )
-    if untranslated_count == len(segments):
-        raise RuntimeError(
-            f"Translation completely failed — all {len(segments)} segments "
-            f"still in source language. Check Ollama: run `ollama ps` and "
-            f"try `ollama run {model} 'hi'` manually. If it hangs, the "
-            f"model may be incompatible with your setup; try "
-            f"`ollama pull qwen2.5:7b` and retry this stage with that model."
-        )
     if untranslated_count:
         log.warning(
             f"[translate] {untranslated_count}/{len(segments)} segments did not "
@@ -1662,7 +1657,29 @@ async def _stage_translate(job, work, ctx, update, perf):
 
     ctx["segments"] = _serialize_segments(segments)
     ctx["model"] = model
+    # Checkpoint BEFORE the pass/fail verdict below. A run that translated
+    # some of the transcript must not throw that work away by raising —
+    # the whole point of `translate_failed_only` is to resume from here.
     _finalize_translation(job, work, ctx, update, perf)
+
+    # Sanity check: if a significant fraction of segments are still in the
+    # source language, stop here instead of letting VoxCPM try to speak
+    # English with Russian cross-lingual cfg (which crashes the worker).
+    #
+    # This used to fire only when EVERY segment failed, so a run that
+    # translated 16 of 182 lines was recorded as status=ok and flowed into
+    # TTS — producing a "finished" dub that is 91% the original language.
+    # Anything past a coin flip is a failed stage, not a warning.
+    if untranslated_count > len(segments) // 2:
+        raise RuntimeError(
+            f"Translation failed for {untranslated_count} of {len(segments)} "
+            f"segments — they are still in the source language, so the dub "
+            f"would be mostly untranslated. The partial result is saved: "
+            f"retry the 'translate' stage with 'only failed segments' to "
+            f"finish it, ideally with a faster/non-reasoning model than "
+            f"'{model}' (check the logs above for timeouts or "
+            f"budget-exhaustion warnings)."
+        )
 
 
 def _finalize_translation(job, work, ctx, update, perf) -> None:
@@ -2177,7 +2194,7 @@ async def get_logs(level: str = "", limit: int = 300, since_seq: int = 0):
     """Recent server log lines, including third-party stdout/stderr.
 
     Secrets are scrubbed on the way *into* the buffer (app/logbuf.py), not
-    here — TACHIDUBB_HOST can expose this server to the network, and a token
+    here — GOCHIDUBB_HOST can expose this server to the network, and a token
     that reached the deque would already be readable there.
     """
     return logbuf.snapshot(level=level, limit=max(1, min(int(limit or 300), 2000)),
@@ -5189,7 +5206,7 @@ async def download_transcripts_txt(job_id: str):
 
     target = cp.get("target_lang", "ru").upper()
     lines = [
-        f"TachiDUBB Studio transcript export · job {job_id}",
+        f"GoChiDUBB Studio transcript export · job {job_id}",
         f"Target language: {target} · {len(segs)} segments",
         "=" * 60, "",
     ]
@@ -5235,7 +5252,7 @@ async def download_transcripts_txt(job_id: str):
 def _find_wav2lip_setup():
     """Scan common paths for Wav2Lip repo + checkpoint. Returns dict with
     'repo_dir', 'checkpoint', 'python' — all strings, or None if missing.
-    Checks paths relative to the TachiDUBB Studio install, and a few user-home
+    Checks paths relative to the GoChiDUBB Studio install, and a few user-home
     fallbacks since people often clone repos in various places."""
     # Candidate directories where the repo might be cloned
     candidate_dirs = [
@@ -5244,8 +5261,8 @@ def _find_wav2lip_setup():
         BASE.parent / "Wav2Lip",
         Path.home() / "Wav2Lip",
     ]
-    # Also check if TACHIDUBB_WAV2LIP_DIR env var was set
-    env_dir = os.getenv("TACHIDUBB_WAV2LIP_DIR", "")
+    # Also check if GOCHIDUBB_WAV2LIP_DIR env var was set
+    env_dir = os.getenv("GOCHIDUBB_WAV2LIP_DIR", "")
     if env_dir:
         candidate_dirs.insert(0, Path(env_dir))
 
@@ -5268,7 +5285,7 @@ def _find_wav2lip_setup():
         return {
             "repo_dir": str(d),
             "checkpoint": str(ckpt),
-            "python": sys.executable,  # reuse current venv — adjust via TACHIDUBB_WAV2LIP_PYTHON
+            "python": sys.executable,  # reuse current venv — adjust via GOCHIDUBB_WAV2LIP_PYTHON
             "checkpoint_name": ckpt.name,
         }
     return None
@@ -5285,20 +5302,20 @@ def _wav2lip_install_guide() -> dict:
         "install_steps": [
             {"label": "1. Clone the Wav2Lip repo",
              "cmd": f"cd {BASE} && git clone https://github.com/Rudrabha/Wav2Lip.git"},
-            {"label": "2. Install Wav2Lip's deps into your TachiDUBB Studio venv",
+            {"label": "2. Install Wav2Lip's deps into your GoChiDUBB Studio venv",
              "cmd": "pip install librosa==0.7.0 numba==0.48 opencv-contrib-python "
                     "face-detection tqdm"},
             {"label": "3. Download the GAN checkpoint (~400 MB)",
              "cmd": "Open https://github.com/Rudrabha/Wav2Lip in browser, "
                     "follow README link to wav2lip_gan.pth, "
                     f"save it at {BASE}\\Wav2Lip\\checkpoints\\wav2lip_gan.pth"},
-            {"label": "4. Restart TachiDUBB Studio server. The button will light up automatically."},
+            {"label": "4. Restart GoChiDUBB Studio server. The button will light up automatically."},
         ],
         "note": "Wav2Lip is picky about input — only helps when faces are clear "
                 "and roughly front-facing. It fails on fast cuts, extreme angles, "
                 "and low-res video. Expect 2-5x the video duration to process.",
         "env_override": "If Wav2Lip is already cloned elsewhere, set "
-                        "TACHIDUBB_WAV2LIP_DIR=<path> in .env",
+                        "GOCHIDUBB_WAV2LIP_DIR=<path> in .env",
     }
 
 
@@ -6060,7 +6077,7 @@ async def set_preferences(prefs: str = Form(...)):
 
 # Config fields that must never leave the process verbatim. The Settings UI
 # only needs to know *whether* a value is set, so it gets a stub. This matters
-# because TACHIDUBB_HOST can expose this server beyond loopback (see
+# because GOCHIDUBB_HOST can expose this server beyond loopback (see
 # uvicorn.run at the bottom of this file), and /api/config has no auth.
 _SECRET_CONFIG_KEYS = ("hf_token",)
 
@@ -6535,11 +6552,11 @@ if __name__ == "__main__":
     import atexit
 
     # ── PID file management ──────────────────────────────────────────
-    # Write a PID file so the server manager (tachidubb_serverctl.py)
+    # Write a PID file so the server manager (gochidubb_serverctl.py)
     # can track and manage this process. The PID file is cleaned up on
     # normal exit via atexit. If the process is killed with SIGKILL,
     # the stale PID file is detected and cleaned by the manager.
-    _PID_FILE = Path(__file__).parent / ".tachidubb.pid"
+    _PID_FILE = Path(__file__).parent / ".gochidubb.pid"
     try:
         _PID_FILE.write_text(str(os.getpid()))
         atexit.register(lambda: _PID_FILE.unlink(missing_ok=True))
@@ -6569,12 +6586,12 @@ if __name__ == "__main__":
     #
     # Exposing it deliberately (dubbing box in the corner, phone on the couch)
     # is still one env var away, and now it's a decision rather than a surprise.
-    _host = os.getenv("TACHIDUBB_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    _port = int(os.getenv("TACHIDUBB_PORT", "") or cfg.server_port or 8910)
+    _host = os.getenv("GOCHIDUBB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    _port = int(os.getenv("GOCHIDUBB_PORT", "") or cfg.server_port or 8910)
 
     print("")
     print("+====================================================+")
-    print("|  TachiDUBB Studio - AI Video Dubbing               |")
+    print("|  GoChiDUBB Studio - AI Video Dubbing               |")
     print(f"|  http://localhost:{_port}                             |")
     print("|  Press Ctrl+C to stop                              |")
     print("+====================================================+")

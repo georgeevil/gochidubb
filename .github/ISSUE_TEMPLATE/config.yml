@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 💬 Discussions
-    url: https://github.com/TachikomaRed/tachidubb/discussions
+    url: https://github.com/georgeevil/gochidubb/discussions
     about: Ask questions, share dubs, suggest ideas
   - name: 📖 Read the docs first
-    url: https://github.com/TachikomaRed/tachidubb#-troubleshooting
+    url: https://github.com/georgeevil/gochidubb#-troubleshooting
     about: The README troubleshooting section covers most common issues
   - name: 🔒 Security
-    url: https://github.com/TachikomaRed/tachidubb/security/advisories/new
+    url: https://github.com/georgeevil/gochidubb/security/advisories/new
     about: Report a security vulnerability privately

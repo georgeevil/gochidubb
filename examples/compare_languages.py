@@ -14,11 +14,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from tachidubb_client import TachiDUBBClient  # noqa: E402
+from gochidubb_client import GoChiDUBBClient  # noqa: E402
 
 
 async def run(source: str, langs: list[str], trim: int) -> int:
-    async with TachiDUBBClient() as c:
+    async with GoChiDUBBClient() as c:
         submitted = await c.submit_compare(
             source=source, target_langs=langs, trim_seconds=trim
         )

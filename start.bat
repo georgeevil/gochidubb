@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title TachiDUBB Studio - AI Video Dubbing
+title GoChiDUBB Studio - AI Video Dubbing
 
 cd /d "%~dp0"
 
@@ -58,7 +58,7 @@ echo   (Ollama not found - install from https://ollama.com/download/windows)
 :: ── Launch ─────────────────────────────────────────────────
 echo.
 echo  ==============================================
-echo   TachiDUBB Studio  -  http://localhost:8910
+echo   GoChiDUBB Studio  -  http://localhost:8910
 echo   Browser will open automatically
 echo   Press Ctrl+C in this window to stop
 echo  ==============================================
@@ -67,5 +67,5 @@ echo.
 python server.py
 
 echo.
-echo TachiDUBB Studio has stopped.
+echo GoChiDUBB Studio has stopped.
 pause

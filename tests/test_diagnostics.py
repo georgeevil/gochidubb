@@ -13,9 +13,11 @@ def _clean_state():
     """Diagnostics keeps process-level caches; don't leak them between tests."""
     diag.clear_runtime()
     diag._last_deep = None
+    diag._TORCHCODEC_STATE = None
     yield
     diag.clear_runtime()
     diag._last_deep = None
+    diag._TORCHCODEC_STATE = None
 
 
 HEALTHY = {
@@ -295,3 +297,129 @@ class TestDeepChecks:
         r = self._run({"token_valid": False, "offline": False, "repos": {},
                        "error": "401"})
         assert "pyannote.inference_failed" in _codes(r["notices"])
+
+
+# ── torchcodec row ───────────────────────────────────────────────────
+
+def _fake_import(name_to_raise, exc):
+    """Make `import <name_to_raise>` raise, leaving other imports alone."""
+    import builtins
+    real = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name == name_to_raise:
+            raise exc
+        return real(name, *a, **k)
+    return fake
+
+
+class TestTorchcodecCheck:
+    """The row is informational: nothing in the pipeline decodes through
+    torchcodec, so it must never read as a failure — and its detail has to
+    survive a single nowrap, ellipsis-truncated column in the UI.
+
+    Regression: the first version pasted the first line of torchcodec's
+    exception ("Could not load libtorchcodec. Likely causes:") into the
+    middle of a sentence, so the row rendered as
+    "... Likely causes: Harmless: audio I/O uses libsndfile ...".
+    """
+
+    MAX_DETAIL = 70
+
+    def _row(self, monkeypatch, **status_kw):
+        monkeypatch.setenv("HF_TOKEN", "hf_abcdefghij0123456789")
+        out = diag.passive_checks(_status(**status_kw))
+        rows = [c for c in out["checks"] if c["id"] == "torchcodec"]
+        assert len(rows) == 1, "exactly one torchcodec row"
+        return rows[0]
+
+    def test_working_install_reports_its_version(self, monkeypatch):
+        import sys
+        import types
+        mod = types.ModuleType("torchcodec")
+        mod.__version__ = "9.9.9"
+        monkeypatch.setitem(sys.modules, "torchcodec", mod)
+
+        row = self._row(monkeypatch)
+        assert row["ok"] is True
+        assert row["detail"] == "v9.9.9"
+
+    def test_absent_install_is_not_a_problem(self, monkeypatch):
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", ImportError("no module")))
+
+        row = self._row(monkeypatch)
+        assert row["ok"] is True
+        assert row["detail"] == "not installed · not required"
+
+    def test_broken_install_names_the_ffmpeg_mismatch(self, monkeypatch):
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", RuntimeError(
+                "Could not load libtorchcodec. Likely causes:\n"
+                "  1. FFmpeg is not properly installed...\n"
+                "  2. The PyTorch version is not compatible...")))
+        monkeypatch.setattr(diag, "_installed_version", lambda p: "0.7.0")
+        monkeypatch.setattr(diag, "_torchcodec_ffmpeg_majors", lambda: [4, 5, 6, 7])
+
+        row = self._row(monkeypatch, ffmpeg={"ok": True, "version": "ffmpeg 8.1.2"})
+
+        assert row["ok"] is True, "nothing in the pipeline needs it"
+        assert row["detail"] == "unused · v0.7.0 · binds FFmpeg 4–7, system has 8"
+        assert row["hint"], "the remedy still reaches API clients"
+
+    def test_broken_detail_is_short_and_single_line(self, monkeypatch):
+        """The exact defect: torchcodec's multi-line exception must not be
+        spliced into the message."""
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", RuntimeError(
+                "Could not load libtorchcodec. Likely causes:\n"
+                "  1. FFmpeg is not properly installed...")))
+
+        row = self._row(monkeypatch)
+        detail = row["detail"]
+        assert "\n" not in detail
+        assert "Likely causes" not in detail
+        assert "Harmless" not in detail
+        assert len(detail) <= self.MAX_DETAIL, f"{len(detail)} chars: {detail!r}"
+
+    def test_matching_ffmpeg_does_not_claim_a_version_mismatch(self, monkeypatch):
+        """FFmpeg lines up, so the breakage is the torch ABI — say neither."""
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", RuntimeError("Symbol not found: __ZN3c10…")))
+        monkeypatch.setattr(diag, "_installed_version", lambda p: "0.7.0")
+        monkeypatch.setattr(diag, "_torchcodec_ffmpeg_majors", lambda: [4, 5, 6, 7])
+
+        row = self._row(monkeypatch, ffmpeg={"ok": True, "version": "ffmpeg 7.1"})
+        assert row["detail"] == "unused · v0.7.0 · cannot load its FFmpeg bindings"
+
+    def test_survives_undetectable_version_and_loaders(self, monkeypatch):
+        """A diagnostics probe must degrade, never raise."""
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", RuntimeError("boom")))
+        monkeypatch.setattr(diag, "_installed_version", lambda p: "")
+        monkeypatch.setattr(diag, "_torchcodec_ffmpeg_majors", lambda: [])
+
+        row = self._row(monkeypatch, ffmpeg={"ok": True, "version": ""})
+        assert row["ok"] is True
+        assert row["detail"] == "unused · cannot load its FFmpeg bindings"
+
+    def test_a_broken_torchcodec_raises_no_notice(self, monkeypatch):
+        """It must not add to the warning banner — nothing is degraded."""
+        import builtins
+        monkeypatch.setattr(
+            builtins, "__import__",
+            _fake_import("torchcodec", RuntimeError("Could not load libtorchcodec.")))
+        monkeypatch.setenv("HF_TOKEN", "hf_abcdefghij0123456789")
+
+        out = diag.passive_checks(_status())
+        assert not [n for n in out["notices"] if "torchcodec" in n["code"]]

@@ -29,7 +29,7 @@ import logging
 import re
 from typing import Dict, List
 
-log = logging.getLogger("tachidubb.segment_post")
+log = logging.getLogger("gochidubb.segment_post")
 
 # Sentence-final punctuation that indicates a complete thought.
 # We treat `…` (ellipsis) and `,` as "still going" to merge aggressively.

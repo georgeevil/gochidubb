@@ -1,7 +1,7 @@
 #!/bin/bash
-# macOS setup script for TachiDUBB
+# macOS setup script for GoChiDUBB
 
-echo "Setting up TachiDUBB for macOS..."
+echo "Setting up GoChiDUBB for macOS..."
 
 # 1. Check Python version
 PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1-2)
@@ -38,7 +38,7 @@ pip install faster-whisper
 # 8. Set environment variables
 echo "export PYTORCH_ENABLE_MPS_FALLBACK=1" >> .env
 echo "export TORCHCODEC_USE_TORCHAUDIO=1" >> .env
-echo "export TACHIDUBB_USE_WHISPERX=0" >> .env  # Use faster-whisper for stability
+echo "export GOCHIDUBB_USE_WHISPERX=0" >> .env  # Use faster-whisper for stability
 
 echo "✅ Setup complete!"
 echo "Run: ./start.sh"

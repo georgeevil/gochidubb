@@ -1,4 +1,4 @@
-# TachiDUBB Studio — Requirements
+# GoChiDUBB Studio — Requirements
 # Python 3.10-3.12 required (VoxCPM2 constraint)
 # Install: pip install -r requirements.txt
 
@@ -17,7 +17,7 @@ aiohttp>=3.9.0
 python-dotenv>=1.0.0
 
 # Agent integration (MCP server for Claude Code etc.). Optional but tiny.
-# CLI works without it; only `tools/tachidubb_mcp.py` requires this.
+# CLI works without it; only `tools/gochidubb_mcp.py` requires this.
 mcp>=1.0.0
 
 # Observability — per-stage CPU/RAM sampling (pipeline/metrics.py).

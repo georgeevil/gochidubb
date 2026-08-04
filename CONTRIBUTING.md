@@ -1,4 +1,4 @@
-# Contributing to TachiDUBB
+# Contributing to GoChiDUBB
 
 Thanks for thinking about contributing — this is a small project and every PR makes a real difference.
 
@@ -25,8 +25,8 @@ pipeline/
 ## Setup
 
 ```bash
-git clone https://github.com/TachikomaRed/tachidubb
-cd tachidubb
+git clone https://github.com/georgeevil/gochidubb
+cd gochidubb
 ./install.sh           # or install.bat on Windows
 source venv/bin/activate
 pip install -r requirements.txt
@@ -56,7 +56,7 @@ python server.py --reload
 - **Python 3.10+**, type hints where they help reading
 - **Run `ruff check .`** before opening a PR — CI runs the same
 - **No global state** added to existing modules
-- **Logger names**: use `logging.getLogger("tachidubb.<module>")`, no print statements in pipeline code
+- **Logger names**: use `logging.getLogger("gochidubb.<module>")`, no print statements in pipeline code
 - **No new dependencies** without discussing in an issue first — we prefer fewer, well-tested packages over many fashionable ones
 
 ## Tests

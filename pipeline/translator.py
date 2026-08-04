@@ -3,11 +3,12 @@ import json
 import logging
 import asyncio
 import aiohttp
+from collections import Counter
 from typing import List, Dict, Optional, Callable, Tuple
 import time
 import re
 
-log = logging.getLogger("tachidubb.translator")
+log = logging.getLogger("gochidubb.translator")
 # Add this logger definition
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,29 @@ _LM_SEND_REASONING = bool(LM_STUDIO_REASONING)
 # every individual request look slow enough to trip the timeout.
 LM_STUDIO_MAX_CONCURRENT = int(os.getenv("LM_STUDIO_MAX_CONCURRENT", "0"))  # 0 = caller's choice
 
+# ── Batched translation ─────────────────────────────────────────────
+# One request per subtitle line is the wrong shape for a model with a 16k+
+# context window: a 10-minute video is ~150 segments, so ~150 round trips
+# that each re-send the whole system prompt, re-pay prompt-processing and
+# (on a thinking model) re-pay the reasoning warm-up — for ~10 words of
+# payload. It also translates every line blind, so pronouns, tense and
+# terminology drift between neighbouring subtitles.
+#
+# Instead we send N consecutive lines per request, numbered, and require the
+# answer back with the same numbering. Alignment is never assumed: a reply
+# that doesn't map 1:1 onto the input is discarded and the batch is split in
+# half and retried, down to single lines. That matters more than the speed
+# — a silently dropped line would shift every later subtitle onto the wrong
+# audio segment.
+#
+# 0 = auto-size from LM_STUDIO_CONTEXT_LENGTH (or a conservative 8k guess).
+TRANSLATE_BATCH_SIZE = int(os.getenv("TRANSLATE_BATCH_SIZE", "0") or 0)
+TRANSLATE_BATCH_CHARS = int(os.getenv("TRANSLATE_BATCH_CHARS", "0") or 0)
+# Lines of already-translated preceding dialogue shown to the model as
+# context (not re-translated). 0 disables.
+TRANSLATE_CONTEXT_LINES = int(os.getenv("TRANSLATE_CONTEXT_LINES", "2") or 0)
+_DEFAULT_CONTEXT_LENGTH = 8192
+
 _THINK_BLOCK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE)
 
 # ============================================================
@@ -126,8 +150,8 @@ _BUILTIN_GLOSSARY = {
 # Try to load user glossary
 USER_GLOSSARY_FILE = os.path.join(os.path.dirname(__file__), "..", "presets", "user_glossary.json")
 
-def _load_user_glossary() -> Dict:
-    """Load user-defined glossary terms."""
+def _load_user_glossary(target_lang: str = "ru") -> Dict:
+    """Load user-defined glossary terms for one target language."""
     if not os.path.exists(USER_GLOSSARY_FILE):
         return {}
     try:
@@ -136,12 +160,36 @@ def _load_user_glossary() -> Dict:
             # Flatten the glossary into a simple dict
             terms = {}
             for domain in data.get("domains", []):
-                if domain.get("target_lang") == "ru":  # Only for Russian for now
+                if domain.get("target_lang") == target_lang:
                     terms.update(domain.get("terms", {}))
             return terms
     except Exception as e:
         log.warning(f"Failed to load user glossary: {e}")
         return {}
+
+
+_GLOSSARY_CACHE: Dict[str, Dict] = {}
+
+
+def _glossary_for(target_lang: str) -> Dict:
+    """Glossary terms for a target language, read from disk once per process.
+
+    The live translation path used to ignore the glossary entirely — only
+    the unused `_translate_with_lm_studio` helper ever passed one — so
+    presets/user_glossary.json had no effect on a real dub.
+    """
+    lang = (target_lang or "").strip() or "ru"
+    if lang not in _GLOSSARY_CACHE:
+        _GLOSSARY_CACHE[lang] = _load_user_glossary(lang)
+    return _GLOSSARY_CACHE[lang]
+
+
+def _glossary_block(glossary: Optional[Dict], limit: int = 60) -> str:
+    """Render a flat {term: translation} map as a prompt section."""
+    if not glossary:
+        return ""
+    terms = "\n".join(f"  - {k} → {v}" for k, v in list(glossary.items())[:limit])
+    return f"\nAlways use these translations for these terms:\n{terms}\n"
 
 
 def _build_translation_prompt(
@@ -191,6 +239,44 @@ Translation:"""
 
 class LMStudioError(RuntimeError):
     """LM Studio was reachable but did not return usable content."""
+
+
+class LMStudioFatalError(LMStudioError):
+    """Retrying will not help — e.g. the requested model isn't loaded.
+
+    Raised so the batch ladder gives up immediately instead of splitting a
+    24-line batch into 24 doomed single-line requests (and then retrying
+    each three times) for every batch in the job.
+    """
+
+
+class LMStudioBudgetError(LMStudioError):
+    """The model used its whole output budget reasoning and never answered.
+
+    The remedy is a BIGGER BUDGET, not a smaller batch. Measured on
+    qwen/qwen3.6-27b with real subtitles, against a 4096-token budget:
+
+        16 lines → 4094 reasoning tokens, 1 of answer   FAIL (226s)
+         8 lines → 4094 reasoning tokens, 1 of answer   FAIL (245s)
+         4 lines → 4094 reasoning tokens, 1 of answer   FAIL (243s)
+        16 lines, budget 16384                          OK   (291s)
+
+    The reasoning cost is essentially fixed per request, so halving the
+    batch buys nothing and doubles how many times you pay it. Splitting on
+    this error is actively harmful: 16→8→4→2→1 fails at every rung, five
+    times over, at ~4 minutes each. That is how a 182-segment job spent
+    1205s and translated zero lines.
+    """
+
+
+class LMStudioTimeoutError(LMStudioError):
+    """The request ran past its clock.
+
+    Unlike a budget exhaustion this one *does* scale with the batch, so a
+    smaller batch is a sane response. Kept distinct because str() on the
+    underlying TimeoutError is the empty string — logging it bare produced
+    "Batch of 16 failed (attempt 1/2):" and told nobody anything.
+    """
 
 
 def _strip_reasoning(text: str) -> str:
@@ -246,7 +332,7 @@ def _parse_native_response(data: Dict) -> str:
     # output budget on reasoning — say so, instead of an empty-string error.
     stats = data.get("stats") or {}
     if reasoning_len or stats.get("reasoning_output_tokens"):
-        raise LMStudioError(
+        raise LMStudioBudgetError(
             f"model returned only reasoning "
             f"({stats.get('reasoning_output_tokens', '?')} reasoning tokens, "
             f"{stats.get('total_output_tokens', '?')} total) — raise "
@@ -286,7 +372,7 @@ def _parse_compat_response(data: Dict) -> str:
     text = _strip_reasoning(message.get("content") or "")
     if not text:
         if message.get("reasoning_content") or message.get("reasoning"):
-            raise LMStudioError(
+            raise LMStudioBudgetError(
                 "model returned only reasoning — raise "
                 "LM_STUDIO_MAX_OUTPUT_TOKENS or set LM_STUDIO_REASONING=off"
             )
@@ -373,7 +459,7 @@ async def lm_studio_chat(
             # that lacks the native API — a bad model name must surface as
             # itself, not silently downgrade the endpoint for the whole run.
             if err.get("code") == "model_not_found":
-                raise LMStudioError(
+                raise LMStudioFatalError(
                     f"model '{model}' is not available in LM Studio — "
                     f"{err.get('message', '')[:200]}"
                 )
@@ -544,16 +630,24 @@ async def translate_text(
     target_lang: str,
     model: str = "qwen/qwen3-8b",
     context_hint: Optional[str] = None,
+    glossary: Optional[Dict] = None,
+    prev_pairs: Optional[List[Tuple[str, Optional[str]]]] = None,
 ) -> str:
     """
     Translate a single text using LM Studio.
-    
+
+    This is the fallback path — bulk work goes through translate_segments(),
+    which batches many lines into one request. A single line still ends up
+    here when a batch's reply couldn't be aligned and was split down to one.
+
     Args:
         text: Text to translate
         target_lang: Target language code (e.g., 'ru', 'zh', 'fr')
         model: LM Studio model to use
         context_hint: Optional context information
-        
+        glossary: Optional {term: translation} map to enforce
+        prev_pairs: Preceding (source, translation) lines, for continuity
+
     Returns:
         Translated text
     """
@@ -565,6 +659,9 @@ async def translate_text(
 
     if context_hint:
         prompt += f"\nContext: {context_hint}"
+
+    prompt += _glossary_block(glossary)
+    prompt += _context_block(prev_pairs)
 
     prompt += f"\n\nText: {text}\n\nTranslation:"
 
@@ -601,6 +698,497 @@ def _clean_translation(raw: str) -> str:
     return result.strip()
 
 
+# ============================================================
+# Batching
+# ============================================================
+
+def _batch_limits(batch_size: int = 0) -> Tuple[int, int]:
+    """(max lines, max source chars) allowed in one translation request.
+
+    Auto-sized from the model's context window when it is known. The line
+    cap normally binds first — subtitle lines are short — but the char cap
+    protects against a transcript of long monologue segments.
+    """
+    ctx = LM_STUDIO_CONTEXT_LENGTH or _DEFAULT_CONTEXT_LENGTH
+    lines = batch_size or TRANSLATE_BATCH_SIZE or max(4, min(24, ctx // 512))
+    chars = TRANSLATE_BATCH_CHARS or max(800, min(6000, ctx // 4))
+    return max(1, min(int(lines), 64)), max(80, int(chars))
+
+
+def _chunk_lines(texts: List[str], batch_size: int = 0) -> List[List[int]]:
+    """Group line indices into batches under both the line and char caps."""
+    max_lines, max_chars = _batch_limits(batch_size)
+    batches: List[List[int]] = []
+    cur: List[int] = []
+    cur_chars = 0
+    for i, t in enumerate(texts):
+        n = len(t)
+        if cur and (len(cur) >= max_lines or cur_chars + n > max_chars):
+            batches.append(cur)
+            cur, cur_chars = [], 0
+        cur.append(i)
+        cur_chars += n
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def _batch_output_budget(texts: List[str]) -> int:
+    """Output-token budget for a batch.
+
+    LM_STUDIO_MAX_OUTPUT_TOKENS is the *reasoning* headroom: it exists
+    because a thinking model spends tokens working before it writes a word
+    of the answer. The answer itself needs its own allowance on top — so
+    these are added, not max()'d.
+
+    Taking max() was a real bug: a 16-line batch of real subtitles computed
+    an answer estimate of 1852 tokens, max()'d back down to the 4096 floor,
+    and qwen3.6-27b then spent 4094 of those 4096 tokens reasoning and
+    emitted a single token of answer. Every batch in the job failed the
+    same way.
+
+    Non-Latin targets tokenize badly, so budget roughly 1.2 tokens per
+    source character plus per-line numbering overhead.
+    """
+    chars = sum(len(t) for t in texts)
+    answer = int(chars * 1.2) + 16 * len(texts) + 256
+    return LM_STUDIO_MAX_OUTPUT_TOKENS + answer
+
+
+def _batch_timeout(budget: int, concurrency: int = 1, stretch: int = 1) -> float:
+    """Seconds to allow one batch request.
+
+    Three multipliers, and leaving any of them out has burned an hour:
+
+    * **budget** — LM_STUDIO_TIMEOUT is calibrated for a single segment,
+      i.e. for one LM_STUDIO_MAX_OUTPUT_TOKENS. Generation time is roughly
+      linear in tokens emitted, so a batch that may emit 3× as many needs
+      3× the clock.
+    * **concurrency** — LM Studio serves one model instance, so N in-flight
+      requests each take ~N× as long in wall-clock. Sizing the clock for a
+      solo request while running two of them is what made every batch of a
+      182-segment job time out at ~400s and then split; the circuit breaker
+      gave up after 8 and 166 lines came back in English.
+    * **stretch** — set when a batch already timed out once and is being
+      retried with a longer clock instead of being split.
+    """
+    scale = max(1.0, budget / max(LM_STUDIO_MAX_OUTPUT_TOKENS, 1))
+    return LM_STUDIO_TIMEOUT * scale * max(1, concurrency) * max(1, stretch)
+
+
+def _context_block(prev_pairs: Optional[List[Tuple[str, Optional[str]]]]) -> str:
+    """Render preceding dialogue as read-only context for the prompt."""
+    if not prev_pairs:
+        return ""
+    lines = []
+    for src, tgt in prev_pairs:
+        src = (src or "").strip()
+        if not src:
+            continue
+        lines.append(f"  {src}" + (f"  →  {tgt.strip()}" if (tgt or "").strip() else ""))
+    if not lines:
+        return ""
+    return (
+        "\nPreceding dialogue, already translated — for continuity only, "
+        "do NOT translate or repeat it:\n" + "\n".join(lines) + "\n"
+    )
+
+
+def _build_batch_prompt(
+    texts: List[str],
+    target_lang: str,
+    context_hint: str = "",
+    glossary: Optional[Dict] = None,
+    prev_pairs: Optional[List[Tuple[str, Optional[str]]]] = None,
+) -> str:
+    """Build a numbered multi-line translation prompt."""
+    numbered = "\n".join(f"{i + 1}. {t.strip()}" for i, t in enumerate(texts))
+    n = len(texts)
+    hint = f"\nThe material is about: {context_hint}\n" if context_hint else ""
+    return f"""Translate each numbered subtitle line below into {target_lang}.
+{hint}{_glossary_block(glossary)}{_context_block(prev_pairs)}
+Rules:
+- Output EXACTLY {n} lines, numbered 1 to {n}, in the same order.
+- Format every line as "<number>. <translation>" and nothing else.
+- Never merge, split, reorder, drop or add lines — line {n} of your output
+  must be the translation of line {n} of the input.
+- These lines are consecutive speech from one video: keep terminology,
+  tense, register and speaker voice consistent across them.
+- Keep each translation close in length to its source line — it has to be
+  spoken in the same amount of time.
+- If a line cannot be translated, repeat its source text for that number.
+- No explanations, no notes, no commentary, no blank lines.
+
+Lines to translate:
+{numbered}
+
+Translation:"""
+
+
+# "1. text" / "1) text" / "[1] text" / "1: text" / "**1.** text" — models
+# pick their own numbering style, so accept the common ones.
+_NUMBERED_LINE_RE = re.compile(
+    r"^\s*[*#]*\s*[\[(]?(\d{1,3})[\])]?\s*(?:[.):\]|\-]\s*|\s+)\**\s*(.*)$"
+)
+
+
+def _parse_numbered_lines(raw: str, expected: int) -> Optional[List[str]]:
+    """Parse a numbered batch reply into exactly `expected` translations.
+
+    Returns None when the reply cannot be mapped 1:1 onto the input — the
+    caller then splits the batch rather than guessing, because a shifted
+    mapping would put every later line onto the wrong audio segment.
+
+    Numbers are only accepted in strict ascending sequence. That is what
+    catches the dangerous failure (the model merged two lines and numbered
+    1,2,4…) and it also stops a translation that happens to start with
+    "2." from being mistaken for a new item. A reply with MORE numbered
+    lines than we asked for is rejected too — that is a line the model
+    split in two, which shifts everything after it.
+    """
+    out: List[Optional[str]] = [None] * expected
+    cur = -1
+    for line in _strip_reasoning(raw).splitlines():
+        m = _NUMBERED_LINE_RE.match(line)
+        if m and int(m.group(1)) == cur + 2:
+            if cur + 1 >= expected:
+                return None
+            cur += 1
+            out[cur] = m.group(2).strip()
+            continue
+        # Continuation of the current line (a model wrapped it, or emitted a
+        # stray blank). Anything before line 1 is preamble — drop it.
+        text = line.strip()
+        if cur >= 0 and text:
+            out[cur] = f"{out[cur]} {text}".strip()
+    if cur + 1 != expected or any(not (v or "").strip() for v in out):
+        return None
+    return [_clean_translation(v) or v.strip() for v in out]
+
+
+def _alignment_is_plausible(sources: List[str], targets: List[str]) -> bool:
+    """Reject a parsed batch whose lines are wildly the wrong size.
+
+    A model that ignores the format and writes commentary usually still
+    numbers it, so the shape alone isn't proof. Length is: a subtitle
+    translation is never 5× its source plus 80 characters.
+    """
+    for src, tgt in zip(sources, targets):
+        if len(tgt) > max(80, len(src) * 5):
+            return False
+    return True
+
+
+async def _translate_batch(
+    texts: List[str],
+    target_lang: str,
+    model: str,
+    context_hint: str,
+    glossary: Optional[Dict],
+    prev_pairs: Optional[List[Tuple[str, Optional[str]]]],
+    budget_multiplier: int = 1,
+    concurrency: int = 1,
+    timeout_stretch: int = 1,
+) -> Optional[List[str]]:
+    """One request for many lines. None means "reply didn't line up".
+
+    Raises LMStudioBudgetError (retry bigger) or LMStudioTimeoutError
+    (retry smaller) so the caller can tell those two apart.
+    """
+    prompt = _build_batch_prompt(texts, target_lang, context_hint, glossary, prev_pairs)
+    budget = min(_batch_output_budget(texts) * max(1, budget_multiplier),
+                 _MAX_ABSOLUTE_BUDGET)
+    try:
+        raw = await lm_studio_chat(
+            prompt,
+            model=model,
+            system_prompt=(
+                f"You are a professional subtitle translator working into "
+                f"{target_lang}. You reply with the same numbered lines you were "
+                f"given, one translation per line, and nothing else."
+            ),
+            temperature=0.1,
+            max_output_tokens=budget,
+            timeout=_batch_timeout(budget, concurrency, timeout_stretch),
+        )
+    except (asyncio.TimeoutError, TimeoutError) as e:
+        # str(TimeoutError()) is "" — without the type name this logged as
+        # "Batch of 16 failed (attempt 1/2):" and told nobody anything.
+        raise LMStudioTimeoutError(
+            f"no reply for {len(texts)} lines within "
+            f"{_batch_timeout(budget, concurrency, timeout_stretch):.0f}s "
+            f"({type(e).__name__})"
+        ) from e
+    parsed = _parse_numbered_lines(raw, len(texts))
+    if parsed is None:
+        logger.warning(
+            f"[translate] Batch of {len(texts)} came back mis-numbered; "
+            f"splitting. Reply started: {(raw or '')[:120]!r}"
+        )
+        return None
+    if not _alignment_is_plausible(texts, parsed):
+        logger.warning(
+            f"[translate] Batch of {len(texts)} parsed but a line is "
+            f"implausibly long (model likely added commentary); splitting"
+        )
+        return None
+    return parsed
+
+
+class _Circuit:
+    """Stops a whole job from grinding through doomed requests.
+
+    When LM Studio is unreachable (or the wrong model is selected) every
+    request fails the same way. Without this, a 150-segment job would split
+    each batch down to single lines and retry each of those three times —
+    hundreds of timeouts, tens of minutes, same outcome. After enough
+    consecutive failures we stop asking and let the segments come back
+    untranslated, which the retry-failed-only UI can fix in one click.
+    """
+
+    LIMIT = 8
+
+    def __init__(self):
+        self.consecutive_failures = 0
+        self.reason = ""
+
+    @property
+    def open(self) -> bool:
+        return self.consecutive_failures >= self.LIMIT
+
+    def record_failure(self, err: Exception) -> None:
+        self.consecutive_failures += 1
+        # Always include the type: str() is empty for TimeoutError, which
+        # made the log read "giving up ... Last error: " and hid the cause.
+        self.reason = f"{type(err).__name__}: {err}".rstrip(": ")
+        if self.consecutive_failures == self.LIMIT:
+            logger.error(
+                f"[translate] {self.LIMIT} consecutive request failures — "
+                f"giving up on the rest of this job. Last error: "
+                f"{self.reason[:200]}"
+            )
+
+    def record_success(self) -> None:
+        self.consecutive_failures = 0
+
+
+# A budget is a ceiling, not a reservation — a model that doesn't need the
+# tokens doesn't generate them — so escalating in big steps costs nothing
+# except on the model that really is looping. Measured on qwen/qwen3.6-27b,
+# 16 real subtitle lines: it hit exactly budget-2 reasoning tokens at both
+# 4096 and 5948 (truncated mid-thought both times) and only completed at
+# 16384. Doubling would have burned two ~5 minute requests to get there.
+_BUDGET_ESCALATION = 4
+# Never ask for more output than the model could hold. LM Studio rejects or
+# truncates past the loaded context; 0 means we weren't told, so stay modest.
+_MAX_ABSOLUTE_BUDGET = LM_STUDIO_CONTEXT_LENGTH or 32768
+
+
+class _BudgetTuner:
+    """How much output budget this model actually needs, learned per job.
+
+    A model that thinks past its budget does it on every request, not just
+    one — so once a batch comes back as pure reasoning we raise the budget
+    and keep the larger figure for the rest of the job. Without the shared
+    multiplier each of a job's twelve batches would rediscover the same
+    thing at ~5 minutes a go; with it, a 182-segment job wastes two
+    requests instead of twenty-four.
+
+    Escalation stops at MAX_MULTIPLIER: past that the model isn't
+    budget-starved, it's looping, and the batch is better split.
+    """
+
+    MAX_MULTIPLIER = 16
+
+    def __init__(self):
+        self.multiplier = 1
+
+    def escalate(self) -> bool:
+        """Raise the budget. False when there is no headroom left."""
+        if self.multiplier >= self.MAX_MULTIPLIER:
+            return False
+        self.multiplier = min(self.multiplier * _BUDGET_ESCALATION,
+                              self.MAX_MULTIPLIER)
+        logger.warning(
+            f"[translate] Model spent its whole output budget reasoning; "
+            f"raising it to {self.multiplier}× for the rest of this job"
+        )
+        return True
+
+
+async def _translate_single(
+    text: str,
+    target_lang: str,
+    model: str,
+    context_hint: str,
+    glossary: Optional[Dict],
+    prev_pairs: Optional[List[Tuple[str, Optional[str]]]],
+    semaphore: asyncio.Semaphore,
+    circuit: "_Circuit",
+) -> str:
+    """Last resort: the original one-line-per-request path, with retries."""
+    for attempt in range(3):
+        if circuit.open:
+            break
+        try:
+            async with semaphore:
+                # Re-check under the lock: while this call was queued, the
+                # requests ahead of it may have tripped the breaker.
+                if circuit.open:
+                    break
+                out = await translate_text(
+                    text, target_lang, model,
+                    context_hint=context_hint,
+                    glossary=glossary,
+                    prev_pairs=prev_pairs,
+                )
+            if (out or "").strip():
+                circuit.record_success()
+                return out
+            logger.warning(f"Empty translation for: {text[:50]}...")
+        except LMStudioFatalError:
+            raise
+        except LMStudioBudgetError as e:
+            # The server answered — with nothing but reasoning. Retrying a
+            # single line won't change that, and counting it as a backend
+            # failure would abandon the rest of the job over one stubborn
+            # line. Give up on this line only.
+            logger.warning(
+                f"[translate] Model would not answer within its budget for "
+                f"a single line ({e}); leaving it untranslated"
+            )
+            break
+        except Exception as e:
+            circuit.record_failure(e)
+            if attempt == 2:
+                logger.error(f"Translation failed after 3 attempts: {e}")
+            else:
+                logger.warning(f"Translation error (attempt {attempt + 1}): {e}")
+        if attempt < 2:
+            await asyncio.sleep(1 + attempt)
+    # Leaving the source text in place is deliberate: _is_untranslated() in
+    # server.py spots it and the UI can offer "retry failed segments only".
+    return text
+
+
+async def _translate_group(
+    texts: List[str],
+    target_lang: str,
+    model: str,
+    context_hint: str,
+    glossary: Optional[Dict],
+    prev_fn: Callable[[], List[Tuple[str, Optional[str]]]],
+    semaphore: asyncio.Semaphore,
+    on_done: Callable[[int], "asyncio.Future"],
+    circuit: "_Circuit",
+    tuner: "_BudgetTuner",
+    concurrency: int = 1,
+) -> List[str]:
+    """Translate a group of lines, halving it on any alignment failure.
+
+    The semaphore is held only for the duration of a request, never across
+    the recursive split — otherwise a single stuck batch would deadlock a
+    concurrency-1 server against itself.
+    """
+    if circuit.open:
+        # Backend is down. Hand back the source text so the segments are
+        # marked untranslated, instead of splitting into more dead requests.
+        await on_done(len(texts))
+        return list(texts)
+
+    if len(texts) == 1:
+        out = await _translate_single(
+            texts[0], target_lang, model, context_hint, glossary,
+            prev_fn(), semaphore, circuit,
+        )
+        await on_done(1)
+        return [out]
+
+    # Enough attempts to walk the budget from 1x to MAX_MULTIPLIER, plus one
+    # ordinary retry. Each escalation is a real request, so this is bounded
+    # deliberately rather than looping until something works.
+    timeout_stretch = 1
+    for attempt in range(5):
+        if circuit.open:
+            break
+        try:
+            async with semaphore:
+                # Re-check under the lock: while this batch was queued, the
+                # requests ahead of it may have tripped the breaker.
+                if circuit.open:
+                    break
+                result = await _translate_batch(
+                    texts, target_lang, model, context_hint, glossary, prev_fn(),
+                    budget_multiplier=tuner.multiplier,
+                    concurrency=concurrency,
+                    timeout_stretch=timeout_stretch,
+                )
+            if result is not None:
+                circuit.record_success()
+                await on_done(len(texts))
+                return result
+            # A mis-aligned reply is the model's format failing, not the
+            # server's — the circuit stays closed and we split instead.
+            circuit.record_success()
+            break
+        except LMStudioFatalError:
+            raise
+        except LMStudioBudgetError as e:
+            # Budget starvation, not a size problem: the reasoning cost is
+            # near-constant per request, so a smaller batch fails the same
+            # way (measured 16/8/4 lines, all identical). Give it more room
+            # and re-send the same batch. Not a circuit failure — the server
+            # answered, it just answered with nothing but thinking.
+            circuit.record_success()
+            if tuner.escalate():
+                continue
+            logger.warning(
+                f"[translate] Batch of {len(texts)} still out of budget at "
+                f"{tuner.multiplier}× ({e}); splitting as a last resort"
+            )
+            break
+        except LMStudioTimeoutError as e:
+            # Give the same batch a longer clock before splitting. Splitting
+            # is the wrong first move on a model whose reasoning cost is
+            # per-request: two halves each pay it again, so the job gets
+            # slower, not faster. Only a batch that misses even the stretched
+            # deadline is worth breaking up.
+            if timeout_stretch == 1:
+                timeout_stretch = 3
+                logger.warning(
+                    f"[translate] Batch of {len(texts)} timed out ({e}); "
+                    f"retrying it with a {timeout_stretch}x longer clock"
+                )
+                continue
+            logger.warning(
+                f"[translate] Batch of {len(texts)} timed out again ({e}); "
+                f"splitting"
+            )
+            circuit.record_failure(e)
+            break
+        except Exception as e:
+            circuit.record_failure(e)
+            logger.warning(
+                f"[translate] Batch of {len(texts)} failed "
+                f"(attempt {attempt + 1}): {type(e).__name__}: {e}"
+            )
+            if attempt >= 1:
+                break
+            await asyncio.sleep(1)
+
+    mid = len(texts) // 2
+    left = await _translate_group(
+        texts[:mid], target_lang, model, context_hint, glossary,
+        prev_fn, semaphore, on_done, circuit, tuner, concurrency,
+    )
+    right = await _translate_group(
+        texts[mid:], target_lang, model, context_hint, glossary,
+        lambda: list(zip(texts[:mid], left))[-max(TRANSLATE_CONTEXT_LINES, 1):],
+        semaphore, on_done, circuit, tuner, concurrency,
+    )
+    return left + right
+
+
 async def translate_segments(
     segments: List[Dict],
     target_lang: str,
@@ -608,11 +1196,17 @@ async def translate_segments(
     max_concurrent: int = 5,
     context_hint: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
+    batch_size: int = 0,
 ) -> List[Dict]:
-    """Translate segments with progress callback."""
+    """Translate segments in batches, with progress callback.
+
+    Each segment gets `translated_text`. A segment whose translation failed
+    outright keeps its source text there, which server.py treats as
+    "untranslated" so the stage can be retried for those lines only.
+    """
     if not segments:
         return segments
-    
+
     # Ensure max_concurrent is a valid integer
     try:
         max_concurrent = int(max_concurrent)
@@ -633,77 +1227,126 @@ async def translate_segments(
         max_concurrent = LM_STUDIO_MAX_CONCURRENT
 
     max_concurrent = max(1, min(max_concurrent, 20))
-    
+    context_hint = context_hint or ""
+    glossary = _glossary_for(target_lang)
+
     total_segments = len(segments)
-    logger.info(f"Translating {total_segments} segments to {target_lang} (max_concurrent={max_concurrent})")
+
+    # ── Build the work list ───────────────────────────────────────────
+    # Empty segments never need a request. Short lines that repeat verbatim
+    # ("Yeah.", "Okay, so…") are translated once and reused — transcripts
+    # are full of them. Longer lines are always translated in place so they
+    # keep their surrounding context.
+    keys: List[Optional[str]] = []
+    for s in segments:
+        text = (s.get("text") or "").strip()
+        keys.append(" ".join(text.lower().split()) if text else None)
+    repeats = {
+        k for k, c in Counter(k for k in keys if k).items()
+        if c > 1 and len(k) <= 60
+    }
+
+    unique_texts: List[str] = []
+    slot_of: Dict[int, int] = {}      # segment index → unique-line index
+    first_seen: Dict[str, int] = {}
+    for i, s in enumerate(segments):
+        key = keys[i]
+        if key is None:
+            s["translated_text"] = ""
+            continue
+        if key in repeats and key in first_seen:
+            slot_of[i] = first_seen[key]
+            continue
+        slot = len(unique_texts)
+        unique_texts.append((s.get("text") or "").strip())
+        slot_of[i] = slot
+        if key in repeats:
+            first_seen[key] = slot
+
+    if not unique_texts:
+        logger.info("Nothing to translate — all segments are empty")
+        return segments
+
+    batches = _chunk_lines(unique_texts, batch_size)
+    max_lines, max_chars = _batch_limits(batch_size)
+    logger.info(
+        f"Translating {total_segments} segments to {target_lang}: "
+        f"{len(unique_texts)} unique line(s) in {len(batches)} request(s) "
+        f"(≤{max_lines} lines / ≤{max_chars} chars each, "
+        f"max_concurrent={max_concurrent}, model={model})"
+    )
     if context_hint:
         logger.info(f"Using context hint: {context_hint}")
-    
+    if glossary:
+        logger.info(f"Applying {len(glossary)} glossary term(s) for {target_lang}")
+
+    results: List[Optional[str]] = [None] * len(unique_texts)
+    total_lines = len(unique_texts)
     semaphore = asyncio.Semaphore(max_concurrent)
     completed_count = 0
     start_time = asyncio.get_event_loop().time()
-    
-    async def translate_one(segment: Dict) -> Dict:
+
+    async def on_done(n_lines: int) -> None:
+        """Progress is counted in lines translated, out of unique lines —
+        the caller derives its percentage from the pair we hand it."""
         nonlocal completed_count
-        async with semaphore:
-            try:
-                text = segment.get('text', '')
-                if not text:
-                    segment['translated_text'] = ''
-                    return segment
-                
-                # Translate with retry
-                for attempt in range(3):
-                    try:
-                        translated = await translate_text(
-                            text,
-                            target_lang,
-                            model,
-                            context_hint=context_hint
-                        )
-                        segment['translated_text'] = translated
-                        break
-                    except Exception as e:
-                        if attempt == 2:
-                            logger.error(f"Translation failed after 3 attempts: {e}")
-                            segment['translated_text'] = text
-                        else:
-                            await asyncio.sleep(1)
-                
-                # Update progress
-                completed_count += 1
-                if progress_callback:
-                    try:
-                        # Calculate ETA
-                        elapsed = asyncio.get_event_loop().time() - start_time
-                        if completed_count > 0:
-                            avg_time_per_item = elapsed / completed_count
-                            remaining = total_segments - completed_count
-                            eta_sec = avg_time_per_item * remaining
-                        else:
-                            eta_sec = 0
-                        
-                        # Call with both progress and ETA
-                        if asyncio.iscoroutinefunction(progress_callback):
-                            await progress_callback(completed_count, total_segments, eta_sec)
-                        else:
-                            progress_callback(completed_count, total_segments, eta_sec)
-                    except Exception as e:
-                        logger.warning(f"Progress callback failed: {e}")
-                
-                return segment
-                
-            except Exception as e:
-                logger.error(f"Error translating segment: {e}")
-                segment['translated_text'] = segment.get('text', '')
-                completed_count += 1
-                return segment
-    
-    tasks = [translate_one(seg) for seg in segments]
-    translated_segments = await asyncio.gather(*tasks)
-    
-    logger.info(f"Translation complete for {len(translated_segments)} segments")
-    return translated_segments
+        completed_count = min(completed_count + n_lines, total_lines)
+        if not progress_callback:
+            return
+        try:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            eta_sec = 0
+            if completed_count > 0:
+                per_item = elapsed / completed_count
+                eta_sec = per_item * (total_lines - completed_count)
+            if asyncio.iscoroutinefunction(progress_callback):
+                await progress_callback(completed_count, total_lines, eta_sec)
+            else:
+                progress_callback(completed_count, total_lines, eta_sec)
+        except Exception as e:
+            logger.warning(f"Progress callback failed: {e}")
+
+    def prev_context(batch_no: int) -> List[Tuple[str, Optional[str]]]:
+        """Tail of the previous batch, evaluated when the prompt is built.
+
+        At concurrency 1 the previous batch is already done, so the model
+        sees real translations. When batches run in parallel it may only
+        see the source lines — still enough to disambiguate a pronoun.
+        """
+        if batch_no == 0 or TRANSLATE_CONTEXT_LINES <= 0:
+            return []
+        tail = batches[batch_no - 1][-TRANSLATE_CONTEXT_LINES:]
+        return [(unique_texts[i], results[i]) for i in tail]
+
+    circuit = _Circuit()
+    tuner = _BudgetTuner()
+
+    async def run_batch(batch_no: int, idxs: List[int]) -> None:
+        out = await _translate_group(
+            [unique_texts[i] for i in idxs],
+            target_lang, model, context_hint, glossary,
+            lambda: prev_context(batch_no),
+            semaphore,
+            on_done,
+            circuit,
+            tuner,
+            max_concurrent,
+        )
+        for i, t in zip(idxs, out):
+            results[i] = t
+
+    await asyncio.gather(*(
+        run_batch(bn, idxs) for bn, idxs in enumerate(batches)
+    ))
+
+    for i, s in enumerate(segments):
+        slot = slot_of.get(i)
+        if slot is None:
+            continue
+        s["translated_text"] = results[slot] or (s.get("text") or "")
+
+    logger.info(f"Translation complete for {len(segments)} segments")
+    return segments
 
 
 # ============================================================

@@ -5,7 +5,7 @@
 If you find a security issue (code execution, path traversal, SSRF, auth bypass, exfiltration of local files via the API, etc.), please **do not open a public issue**.
 
 Open a private security advisory on GitHub:
-https://github.com/TachikomaRed/tachidubb/security/advisories/new
+https://github.com/georgeevil/gochidubb/security/advisories/new
 
 Or DM us on X: [@smolekoma](https://x.com/smolekoma) / [@smolemaru](https://x.com/smolemaru).
 
@@ -13,7 +13,7 @@ We aim to acknowledge within 72 hours and ship a fix within 14 days for critical
 
 ## Threat model
 
-TachiDUBB is designed to run on a **trusted local network**. Specifically:
+GoChiDUBB is designed to run on a **trusted local network**. Specifically:
 
 | Scenario | Supported? |
 |---|---|
@@ -74,7 +74,7 @@ This is the more important section. Voice cloning at this quality is a dual-use 
 
 ### If you see abuse
 
-If you encounter content created with TachiDUBB being used to impersonate, defraud, or harass someone, please report:
+If you encounter content created with GoChiDUBB being used to impersonate, defraud, or harass someone, please report:
 
 - To the platform hosting the content (DMCA / abuse reports)
 - To us via a GitHub security advisory or X DM ([@smolekoma](https://x.com/smolekoma) / [@smolemaru](https://x.com/smolemaru)) — we'll publicly document misuse patterns to help defenders

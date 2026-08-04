@@ -1,9 +1,19 @@
-"""Tests for pipeline/translator.py — prompt building and glossary logic."""
+"""Tests for pipeline/translator.py — prompt building, batching, glossary."""
 from unittest.mock import patch, mock_open
 
 import pytest
 
-from pipeline.translator import _build_translation_prompt, _load_user_glossary
+from pipeline import translator as T
+from pipeline.translator import (
+    _alignment_is_plausible,
+    _batch_limits,
+    _batch_output_budget,
+    _build_batch_prompt,
+    _build_translation_prompt,
+    _chunk_lines,
+    _load_user_glossary,
+    _parse_numbered_lines,
+)
 
 
 class TestBuildTranslationPrompt:
@@ -115,3 +125,170 @@ class TestLoadUserGlossary:
         """Only Russian terms are loaded based on current code."""
         result = _load_user_glossary()
         assert result == {}
+
+    @patch("os.path.exists", return_value=True)
+    @patch("builtins.open", new_callable=mock_open,
+           read_data='{"domains": [{"target_lang": "es", "terms": {"hello": "hola"}}]}')
+    def test_other_target_languages_are_selectable(self, mock_file, mock_exists):
+        assert _load_user_glossary("es") == {"hello": "hola"}
+
+
+# ── Batching ─────────────────────────────────────────────────────────
+
+class TestBatchLimits:
+    """Batch size auto-scales with the model's context window."""
+
+    def test_auto_scales_with_context_length(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_SIZE", 0)
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_CHARS", 0)
+
+        monkeypatch.setattr(T, "LM_STUDIO_CONTEXT_LENGTH", 4096)
+        small_lines, small_chars = _batch_limits()
+        monkeypatch.setattr(T, "LM_STUDIO_CONTEXT_LENGTH", 32768)
+        big_lines, big_chars = _batch_limits()
+
+        assert big_lines > small_lines
+        assert big_chars > small_chars
+        # Never so large that one bad reply costs the whole transcript
+        assert big_lines <= 64
+
+    def test_explicit_setting_wins(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_SIZE", 7)
+        monkeypatch.setattr(T, "LM_STUDIO_CONTEXT_LENGTH", 32768)
+        assert _batch_limits()[0] == 7
+
+    def test_caller_override_wins_over_env(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_SIZE", 7)
+        assert _batch_limits(batch_size=3)[0] == 3
+
+
+class TestChunkLines:
+    def test_respects_the_line_cap(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_CHARS", 100_000)
+        batches = _chunk_lines(["hi"] * 10, batch_size=4)
+        assert [len(b) for b in batches] == [4, 4, 2]
+        # Every line lands in exactly one batch, in order
+        assert [i for b in batches for i in b] == list(range(10))
+
+    def test_respects_the_char_cap(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_CHARS", 100)
+        batches = _chunk_lines(["x" * 60] * 4, batch_size=50)
+        assert [len(b) for b in batches] == [1, 1, 1, 1]
+
+    def test_a_single_oversized_line_is_not_dropped(self, monkeypatch):
+        monkeypatch.setattr(T, "TRANSLATE_BATCH_CHARS", 100)
+        batches = _chunk_lines(["x" * 5000], batch_size=10)
+        assert batches == [[0]]
+
+    def test_empty_input(self):
+        assert _chunk_lines([]) == []
+
+
+class TestBatchOutputBudget:
+    def test_scales_past_the_single_segment_default(self):
+        """A batch needs room for every line's answer, not just one."""
+        long_batch = ["A fairly long sentence of source text. " * 8] * 24
+        assert _batch_output_budget(long_batch) > T.LM_STUDIO_MAX_OUTPUT_TOKENS
+
+    def test_grows_with_the_batch_once_past_the_floor(self, monkeypatch):
+        monkeypatch.setattr(T, "LM_STUDIO_MAX_OUTPUT_TOKENS", 512)
+        small = _batch_output_budget(["Hello there friend"] * 4)
+        big = _batch_output_budget(["Hello there friend"] * 40)
+        assert big > small >= 512
+
+    def test_never_below_the_single_segment_default(self):
+        """Thinking models burn the first N tokens on reasoning regardless."""
+        assert _batch_output_budget(["Hi"]) >= T.LM_STUDIO_MAX_OUTPUT_TOKENS
+
+
+class TestParseNumberedLines:
+    @pytest.mark.parametrize("reply", [
+        "1. Привет\n2. Мир",
+        "1) Привет\n2) Мир",
+        "[1] Привет\n[2] Мир",
+        "1: Привет\n2: Мир",
+        "**1.** Привет\n**2.** Мир",
+        "1.Привет\n2.Мир",
+        "  1. Привет  \n\n  2. Мир  ",
+    ])
+    def test_accepts_the_numbering_styles_models_actually_use(self, reply):
+        assert _parse_numbered_lines(reply, 2) == ["Привет", "Мир"]
+
+    def test_drops_preamble_before_the_first_line(self):
+        reply = "Sure, here is the translation:\n1. Привет\n2. Мир"
+        assert _parse_numbered_lines(reply, 2) == ["Привет", "Мир"]
+
+    def test_joins_a_wrapped_line(self):
+        reply = "1. Привет\nмир\n2. Пока"
+        assert _parse_numbered_lines(reply, 2) == ["Привет мир", "Пока"]
+
+    def test_strips_think_blocks(self):
+        reply = "<think>ru is Привет</think>\n1. Привет\n2. Мир"
+        assert _parse_numbered_lines(reply, 2) == ["Привет", "Мир"]
+
+    def test_rejects_a_missing_line(self):
+        """The dangerous case: the model merged two subtitles. Returning a
+        short list here would shift every later line onto the wrong audio."""
+        assert _parse_numbered_lines("1. Привет\n3. Мир", 3) is None
+
+    def test_rejects_a_short_reply(self):
+        assert _parse_numbered_lines("1. Привет", 3) is None
+
+    def test_rejects_an_unnumbered_reply(self):
+        assert _parse_numbered_lines("Привет\nМир", 2) is None
+
+    def test_rejects_an_empty_translation(self):
+        assert _parse_numbered_lines("1. Привет\n2. \n3. Пока", 3) is None
+
+    def test_rejects_more_lines_than_asked_for(self):
+        """An extra numbered line means the model split one subtitle in two
+        — same shifting hazard as dropping one, so don't trust the batch."""
+        assert _parse_numbered_lines("1. Привет\n2. Мир\n3. Ещё", 2) is None
+
+    def test_a_translation_starting_with_a_number_is_not_a_new_item(self):
+        reply = "1. Первый шаг\n5. минут спустя\n2. Второй"
+        assert _parse_numbered_lines(reply, 2) == ["Первый шаг 5. минут спустя",
+                                                   "Второй"]
+
+
+class TestAlignmentPlausibility:
+    def test_accepts_normal_expansion(self):
+        assert _alignment_is_plausible(["Hello there"], ["Привет, как дела"])
+
+    def test_rejects_appended_commentary(self):
+        src = ["Hi"]
+        tgt = ["Привет. Note: this is an informal greeting used between "
+               "friends; a formal alternative would be Здравствуйте."]
+        assert not _alignment_is_plausible(src, tgt)
+
+
+class TestBuildBatchPrompt:
+    def test_numbers_every_line(self):
+        prompt = _build_batch_prompt(["Hello", "World"], "ru")
+        assert "1. Hello" in prompt
+        assert "2. World" in prompt
+
+    def test_states_the_exact_line_count(self):
+        prompt = _build_batch_prompt(["a", "b", "c"], "ru")
+        assert "EXACTLY 3 lines" in prompt
+
+    def test_includes_context_hint_and_glossary(self):
+        prompt = _build_batch_prompt(
+            ["Guard pass"], "ru",
+            context_hint="Brazilian Jiu-Jitsu",
+            glossary={"guard": "гард"},
+        )
+        assert "Brazilian Jiu-Jitsu" in prompt
+        assert "guard → гард" in prompt
+
+    def test_previous_lines_are_marked_as_context_not_input(self):
+        prompt = _build_batch_prompt(
+            ["Then you sweep."], "ru",
+            prev_pairs=[("Take the guard.", "Возьми гард.")],
+        )
+        assert "Take the guard." in prompt
+        assert "Возьми гард." in prompt
+        assert "do NOT translate" in prompt
+        # The context lines must not be numbered — only the work is
+        assert "1. Then you sweep." in prompt
+        assert "1. Take the guard." not in prompt

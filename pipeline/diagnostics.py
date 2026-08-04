@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from .notices import merge_notices, notice
 
-log = logging.getLogger("tachidubb.diagnostics")
+log = logging.getLogger("gochidubb.diagnostics")
 
 # The repos pyannote actually needs. speaker-diarization-3.1 is a *pipeline*
 # whose config pulls in segmentation-3.0; each is gated separately, and it is
@@ -128,6 +128,121 @@ def accelerator() -> Dict[str, Any]:
     if snap:
         info["live"] = {k: round(v, 1) for k, v in snap.items()}
     return info
+
+
+_TORCHCODEC_STATE: Optional[Dict[str, Any]] = None
+
+
+def _installed_version(package: str) -> str:
+    """Version of an installed distribution, without importing it.
+
+    torchcodec raises on import when it can't bind FFmpeg, so asking the
+    module for __version__ is exactly what we cannot do here.
+    """
+    try:
+        from importlib.metadata import version
+        return version(package)
+    except Exception:
+        return ""
+
+
+def _torchcodec_ffmpeg_majors() -> List[int]:
+    """FFmpeg majors this torchcodec build ships loaders for.
+
+    It ships one `libtorchcodec_coreN` per supported FFmpeg major, and N is
+    the major itself — 0.7.0 has core4–core7, 0.15.0 adds core8. Reading the
+    filenames keeps the message right after an upgrade instead of baking in
+    whatever was true when this was written. find_spec() locates the package
+    without executing its __init__ (which is what raises).
+    """
+    try:
+        import glob
+        import importlib.util
+        import os as _os
+        import re as _re
+
+        spec = importlib.util.find_spec("torchcodec")
+        locations = list(getattr(spec, "submodule_search_locations", None) or [])
+        if not locations:
+            return []
+        majors = set()
+        for pattern in ("*.dylib", "*.so*", "*.dll"):
+            for path in glob.glob(_os.path.join(locations[0], pattern)):
+                m = _re.search(r"libtorchcodec_core(\d+)", _os.path.basename(path))
+                if m:
+                    majors.add(int(m.group(1)))
+        return sorted(majors)
+    except Exception:
+        return []
+
+
+def _ffmpeg_major(version_text: str) -> str:
+    """Leading major from an ffmpeg version string ("8.1.2_1" → "8")."""
+    import re as _re
+    m = _re.search(r"(\d+)", version_text or "")
+    return m.group(1) if m else ""
+
+
+def torchcodec_state(ffmpeg_version: str = "") -> Dict[str, Any]:
+    """Can torchcodec load its FFmpeg bindings? Cached — it can't change.
+
+    Two things can break it, and an M1 Mac with Homebrew hits both:
+      1. FFmpeg major mismatch — a given torchcodec build ships loaders for
+         a fixed set of FFmpeg majors (0.7.0 covers 4–7, i.e. libavcodec
+         .58–.61). Homebrew's ffmpeg 8 installs libavcodec.62, which none
+         of them bind to. torchcodec 0.15.0 added a core8 loader.
+      2. torch ABI mismatch — a torchcodec built against an older libc10
+         fails with "Symbol not found: __ZN3c1013MessageLogger…" even once
+         FFmpeg resolves. Only a matching torchcodec release fixes that.
+
+    `ok` is True even when it cannot load, because no code path in this
+    pipeline decodes through torchcodec — pipeline/audio.load_audio_tensor
+    and pipeline/vad._load_mono_16k go through libsndfile, and
+    pipeline/diarizer preloads a waveform for pyannote. Reporting a red ✕
+    for a component nothing uses is how a checklist becomes wallpaper (see
+    accelerator() above). The claim is enforced, not assumed:
+    tests/test_audio.py::TestTensorAudioIO and
+    tests/test_vad.py::TestLoadMono16k make torchaudio.load/save raise, so
+    reintroducing the dependency fails the suite rather than quietly making
+    this row a lie.
+
+    The detail lands in a single nowrap, ellipsis-truncated column
+    (CheckList in static/index.html), so it has to stay short — roughly 70
+    characters. `hint` is not rendered there at all (the template picks
+    `detail || hint`) but is still served by /api/system, so the CLI and MCP
+    clients carry the remedy.
+    """
+    global _TORCHCODEC_STATE
+    if _TORCHCODEC_STATE is not None:
+        return _TORCHCODEC_STATE
+
+    state: Dict[str, Any] = {"ok": True, "detail": "", "hint": ""}
+    try:
+        import torchcodec
+        state["detail"] = f"v{getattr(torchcodec, '__version__', '?')}"
+    except ImportError:
+        state["detail"] = "not installed · not required"
+    except Exception:
+        ver = _installed_version("torchcodec")
+        majors = _torchcodec_ffmpeg_majors()
+        system_major = _ffmpeg_major(ffmpeg_version)
+
+        bits = ["unused"]
+        if ver:
+            bits.append(f"v{ver}")
+        if majors and system_major and int(system_major) not in majors:
+            span = (f"{majors[0]}–{majors[-1]}" if len(majors) > 1
+                    else str(majors[0]))
+            bits.append(f"binds FFmpeg {span}, system has {system_major}")
+        else:
+            # Either we couldn't read the loaders, or FFmpeg matches and the
+            # breakage is the torch ABI. Don't guess at which.
+            bits.append("cannot load its FFmpeg bindings")
+        state["detail"] = " · ".join(bits)
+        state["hint"] = ("Only needed for torchaudio.load(); a newer build "
+                         "supports newer FFmpeg: pip install -U torchcodec")
+    _TORCHCODEC_STATE = state
+    return state
 
 
 def passive_checks(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -239,6 +354,14 @@ def passive_checks(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                          "'keep background' is on",
                          severity="warn",
                          hint=dem.get("hint", "pip install demucs")))
+
+    # Always a pass: nothing here decodes through torchcodec (see
+    # torchcodec_state). The row exists because torch, torchaudio and
+    # pyannote print an alarming "Could not load libtorchcodec" on import,
+    # and with no row at all the obvious conclusion is that the dub broke.
+    tc = torchcodec_state(ff.get("version", ""))
+    checks.append(_check("torchcodec", "torchcodec (optional decoder)", True,
+                         tc["detail"], severity="warn", hint=tc["hint"]))
 
     # ── Diarization ───────────────────────────────────────────────────
     from .diarizer import effective_hf_token

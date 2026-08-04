@@ -74,7 +74,7 @@ def temp_audio_file() -> str:
     import struct
     import wave
 
-    path = os.path.join(tempfile.gettempdir(), "_tachidubb_test_ref.wav")
+    path = os.path.join(tempfile.gettempdir(), "_gochidubb_test_ref.wav")
     if os.path.exists(path):
         return path
 

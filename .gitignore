@@ -14,8 +14,8 @@ __pycache__/
 config-user.json
 
 # Server runtime artifacts
-.tachidubb.pid
-tachidubb.log
+.gochidubb.pid
+gochidubb.log
 .coverage
 
 # Runtime data
@@ -25,8 +25,8 @@ outputs/*
 !outputs/.gitkeep
 jobs_db/*.json
 !jobs_db/.gitkeep
-tachidubb.db
-tachidubb.db-journal
+gochidubb.db
+gochidubb.db-journal
 *.sqlite
 *.sqlite-journal
 
@@ -39,6 +39,16 @@ presets/voices/*.mp3
 bin/ffmpeg*
 bin/ffprobe*
 bin/yt-dlp*
+
+# Local scratch — notes, sample media, exploratory scripts
+product.txt
+selfware.toml
+test.webm
+test_audio.wav
+# Exploratory scripts, not pytest tests (see CLAUDE.md)
+tests/manual_test_*.py
+# Working copies of the UI kept alongside the real one
+static/*copy*.html
 
 # OS
 .DS_Store
