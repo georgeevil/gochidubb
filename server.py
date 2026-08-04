@@ -6704,12 +6704,27 @@ async def cleanup_storage(
 
 
 @app.get("/api/jobs")
-async def list_jobs():
+async def list_jobs(
+    status: str | None = None,
+    batch_id: str | None = None,
+    limit: int = 0,
+    since: float = 0,
+):
     # Annotate each job with checkpoint info so the History UI can
     # decide whether to show a Resume button. This is intentionally
     # done at read time (not stored on the job object) because users
     # can delete output dirs manually — reading live keeps UI honest.
-    sorted_jobs = sorted(jobs.values(), key=lambda j: j.get("created", 0), reverse=True)
+    selected = jobs.values()
+    if status:
+        wanted = {s.strip() for s in status.split(",") if s.strip()}
+        selected = [j for j in selected if j.get("status") in wanted]
+    if batch_id:
+        selected = [j for j in selected if j.get("batch_id") == batch_id]
+    if since > 0:
+        selected = [j for j in selected if j.get("created", 0) >= since]
+    sorted_jobs = sorted(selected, key=lambda j: j.get("created", 0), reverse=True)
+    if limit > 0:
+        sorted_jobs = sorted_jobs[:limit]
     enriched = []
     for j in sorted_jobs:
         info = _job_checkpoint_info(j["id"])
