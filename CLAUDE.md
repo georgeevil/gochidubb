@@ -50,7 +50,7 @@ audio.py          ffmpeg extract, hq extract, optional demucs/audio-separator ba
 transcriber.py    faster-whisper → segments + word timestamps
 diarizer.py       pyannote → speaker turns (optional; needs HF_TOKEN)
 segment_post.py   sentence-boundary repair, split long segments, drop micro-fragments
-translator.py     LM Studio (OpenAI /v1) OR Ollama → target-language text, length-matched
+translator.py     LM Studio (OpenAI /v1) OR Ollama → target-language text, length-matched, batched N lines/request
 tts_worker.py     orchestrates synthesizer.py with tts_qa.py retry policy
 synthesizer.py    VoxCPM2 / F5-TTS / CosyVoice / edge-tts (BaseTTSEngine + subclasses)
 tts_qa.py         whisper-roundtrip QA check on each synthesized segment
@@ -99,6 +99,7 @@ All three respect `TACHIDUBB_URL` (default `http://localhost:8910`) so any of th
 - **speechbrain/k2 stub block at the top of `server.py` is load-bearing.** It pre-populates `sys.modules` with empty stubs for `k2` and several `speechbrain.integrations.k2_fsa.*` paths BEFORE any pipeline import. WhisperX and pyannote transitively walk speechbrain's namespace, and on Windows the real `k2` wheel doesn't exist. Do not move imports above this block or remove the stubs.
 - **Windows FFmpeg DLL registration block (also in `server.py`)** uses `os.add_dll_directory` because Python 3.8+ ignores PATH for DLL loading. Adds any dir containing `avformat*.dll` so `torchcodec` can find them.
 - **VoxCPM2 warmup is off by default** (`TACHIDUBB_WARMUP=0`). Reason: translation LLM gets full GPU first; VoxCPM2 loads lazily on first synth. Only turn on if you have VRAM to burn.
+- **Translation is batched, and the batch reply is never trusted blindly.** `pipeline/translator.py` sends N numbered subtitle lines per request (auto-sized from `LM_STUDIO_CONTEXT_LENGTH`, override with `TRANSLATE_BATCH_SIZE`) instead of one request per segment. `_parse_numbered_lines` requires a strictly-sequential 1:1 reply; anything else (a merged line, an extra line, commentary) makes `_translate_group` split the batch in half and retry, down to single lines. Don't "fix" the parser to be lenient — a reply that's one line short would shift every later subtitle onto the wrong audio segment.
 - **QA retries must not mutate the RNG seed mid-job** — this was a real bug that produced two different voices for retried segments in the same speaker. `pipeline/tts_worker.py` fixes it. If touching retry logic, keep seeds deterministic per (job, speaker, segment_idx).
 - **Ollama model catalog is in `pipeline/models.py::MODEL_CATALOG`** — `POST /api/models/pull` streams progress from `ollama pull` back to the UI.
 - **Do not add new dependencies without discussing** (per `CONTRIBUTING.md`). The stack is intentionally lean.

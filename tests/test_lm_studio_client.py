@@ -12,6 +12,7 @@ is what gets asserted.
 """
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -357,3 +358,328 @@ class TestNoThinkSwitch:
                 assert T._parse_native_response(payload) == "Привет"
         warnings = [r for r in caplog.records if "ignored reasoning" in r.message]
         assert len(warnings) == 1, "should warn once, not once per segment"
+
+
+# ── Batched translation over HTTP ────────────────────────────────────
+
+def _numbering_responder(prefix="RU:", drop_line=None, unnumbered=False):
+    """Stand in for a well-behaved (or misbehaving) translator model."""
+    def respond(body):
+        text = body.get("input") or body["messages"][-1]["content"]
+        lines = []
+        if "Lines to translate:" in text:
+            work = text.split("Lines to translate:", 1)[1]
+            for raw in work.splitlines():
+                m = re.match(r"^(\d+)\.\s+(.*)$", raw.strip())
+                if m:
+                    lines.append((int(m.group(1)), m.group(2)))
+        if not lines:                       # single-line prompt: "Text: foo"
+            src = text.split("Text:")[-1].split("\n\n")[0].strip()
+            return 200, {"output": [{"type": "message",
+                                     "content": f"{prefix} {src}"}]}
+        out = []
+        for n, src in lines:
+            if n == drop_line:
+                continue
+            out.append(f"{prefix} {src}" if unnumbered else f"{n}. {prefix} {src}")
+        return 200, {"output": [{"type": "message", "content": "\n".join(out)}]}
+    return respond
+
+
+@pytest.fixture
+def batching(monkeypatch):
+    """Deterministic batch sizing, no glossary, no dedupe surprises."""
+    monkeypatch.setattr(T, "TRANSLATE_BATCH_SIZE", 4)
+    monkeypatch.setattr(T, "TRANSLATE_BATCH_CHARS", 100_000)
+    monkeypatch.setattr(T, "TRANSLATE_CONTEXT_LINES", 2)
+    monkeypatch.setattr(T, "_GLOSSARY_CACHE", {"ru": {}})
+
+
+def _segs(*texts):
+    return [{"start": i, "end": i + 1, "text": t} for i, t in enumerate(texts)]
+
+
+class TestBatchedTranslation:
+    def test_many_segments_take_few_requests(self, stub, batching):
+        """The point of the whole exercise: 8 subtitles, not 8 round trips."""
+        stub.native_body = _numbering_responder()
+        segs = _segs(*[f"line {i}" for i in range(8)])
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        assert [s["translated_text"] for s in out] == [
+            f"RU: line {i}" for i in range(8)]
+        assert len(stub.requests) == 2, "8 lines / batch of 4 = 2 requests"
+
+    def test_each_line_keeps_its_own_translation(self, stub, batching):
+        """Alignment is the thing that must not break — a shifted mapping
+        would put every later subtitle onto the wrong audio segment."""
+        stub.native_body = _numbering_responder()
+        segs = _segs("first", "second", "third")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert [s["translated_text"] for s in out] == [
+            "RU: first", "RU: second", "RU: third"]
+
+    def test_a_dropped_line_makes_the_batch_split_instead_of_shifting(
+            self, stub, batching):
+        stub.native_body = _numbering_responder(drop_line=2)
+        segs = _segs("a", "b", "c", "d")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        # Every line still maps to its own source, via the split-and-retry
+        # ladder — never "b" translated as "c".
+        assert [s["translated_text"] for s in out] == [
+            "RU: a", "RU: b", "RU: c", "RU: d"]
+        assert len(stub.requests) > 1, "should have split the bad batch"
+
+    def test_an_unnumbered_reply_falls_back_to_single_lines(self, stub, batching):
+        stub.native_body = _numbering_responder(unnumbered=True)
+        segs = _segs("a", "b")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert [s["translated_text"] for s in out] == ["RU: a", "RU: b"]
+
+    def test_empty_segments_cost_no_requests(self, stub, batching):
+        stub.native_body = _numbering_responder()
+        segs = _segs("", "   ", "")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert [s["translated_text"] for s in out] == ["", "", ""]
+        assert stub.requests == []
+
+    def test_repeated_short_lines_are_translated_once(self, stub, batching):
+        stub.native_body = _numbering_responder()
+        segs = _segs("Okay.", "something else entirely", "Okay.", "okay.")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        assert [s["translated_text"] for s in out] == [
+            "RU: Okay.", "RU: something else entirely", "RU: Okay.", "RU: Okay."]
+        # Only 2 unique lines were sent, so they fit in one batch
+        sent = stub.requests[0][1]["input"]
+        assert sent.count("Okay.") == 1
+
+    def test_preceding_lines_are_given_as_context(self, stub, batching):
+        stub.native_body = _numbering_responder()
+        segs = _segs(*[f"line {i}" for i in range(8)])
+
+        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        second = stub.requests[1][1]["input"]
+        assert "do NOT translate" in second
+        assert "RU: line 3" in second, "should see the previous batch's output"
+
+    def test_progress_is_reported(self, stub, batching):
+        stub.native_body = _numbering_responder()
+        seen = []
+        segs = _segs(*[f"line {i}" for i in range(8)])
+
+        _run(stub, T.translate_segments(
+            segs, "ru", model="m", max_concurrent=1,
+            progress_callback=lambda done, total, eta: seen.append((done, total))))
+
+        assert seen[-1] == (8, 8)
+        assert [d for d, _ in seen] == sorted(d for d, _ in seen)
+
+    def test_output_budget_covers_the_whole_batch(self, stub, batching):
+        stub.native_body = _numbering_responder()
+        segs = _segs(*["a rather long line of source text " * 40 for _ in range(4)])
+
+        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert stub.requests[0][1]["max_output_tokens"] > T.LM_STUDIO_MAX_OUTPUT_TOKENS
+
+    def test_dead_server_gives_up_instead_of_retrying_every_line(
+            self, stub, batching, monkeypatch):
+        """Without the circuit breaker a 40-line job would fire ~200 doomed
+        requests before finishing."""
+        monkeypatch.setattr(T._Circuit, "LIMIT", 3)
+        stub.native_status = 500
+        stub.native_body = {"error": {"message": "engine crashed"}}
+        segs = _segs(*[f"line {i}" for i in range(40)])
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        # Untranslated == source text, which the retry-failed-only UI keys on
+        assert [s["translated_text"] for s in out] == [f"line {i}" for i in range(40)]
+        assert len(stub.requests) <= 6
+
+    def test_unknown_model_fails_fast(self, stub, batching):
+        stub.native_status = 404
+        stub.native_body = {"error": {
+            "message": 'Invalid model identifier "nope".',
+            "type": "invalid_request", "param": "model", "code": "model_not_found"}}
+        segs = _segs(*[f"line {i}" for i in range(12)])
+
+        with pytest.raises(T.LMStudioError, match="not available in LM Studio"):
+            _run(stub, T.translate_segments(segs, "nope", model="nope",
+                                            max_concurrent=1))
+
+
+# ── Budget starvation vs timeout ─────────────────────────────────────
+
+def _budget_gated_responder(needs_budget, prefix="RU:"):
+    """A thinking model: answers only once its output budget is big enough.
+
+    Below the threshold it burns the whole budget reasoning and returns no
+    message — exactly what qwen/qwen3.6-27b did to a 16-line batch at 4096
+    tokens (4094 reasoning, 1 of answer), and identically at 8 and 4 lines.
+    """
+    def respond(body):
+        budget = body.get("max_output_tokens") or body.get("max_tokens") or 0
+        if budget < needs_budget:
+            return 200, {"output": [{"type": "reasoning", "content": "hmm " * 50}],
+                         "stats": {"reasoning_output_tokens": budget - 2,
+                                   "total_output_tokens": budget - 1}}
+        text = body.get("input") or body["messages"][-1]["content"]
+        lines = []
+        if "Lines to translate:" in text:
+            for raw in text.split("Lines to translate:", 1)[1].splitlines():
+                m = re.match(r"^(\d+)\.\s+(.*)$", raw.strip())
+                if m:
+                    lines.append(m.group(2))
+        if not lines:
+            src = text.split("Text:")[-1].split("\n\n")[0].strip()
+            return 200, {"output": [{"type": "message", "content": f"{prefix} {src}"}]}
+        out = "\n".join(f"{i+1}. {prefix} {s}" for i, s in enumerate(lines))
+        return 200, {"output": [{"type": "message", "content": out}]}
+    return respond
+
+
+class TestBudgetStarvation:
+    def test_only_reasoning_raises_a_budget_error_not_a_generic_one(self, stub):
+        stub.native_body = lambda body: (200, {
+            "output": [{"type": "reasoning", "content": "thinking"}],
+            "stats": {"reasoning_output_tokens": 4094, "total_output_tokens": 4095}})
+        with pytest.raises(T.LMStudioBudgetError):
+            _run(stub, T.lm_studio_chat("x", model="m"))
+
+    def test_budget_is_raised_and_the_same_batch_retried(self, stub, batching):
+        """The reasoning cost is near-constant per request, so splitting is
+        the wrong move — the batch must be re-sent with more room."""
+        stub.native_body = _budget_gated_responder(needs_budget=9000)
+        segs = _segs(*[f"line {i}" for i in range(4)])
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        assert [s["translated_text"] for s in out] == [f"RU: line {i}" for i in range(4)]
+        budgets = [b["max_output_tokens"] for _, b in stub.requests]
+        assert budgets[0] < budgets[-1], "budget should have been escalated"
+        # Same 4 lines every time — never split into smaller batches
+        assert all("4. line 3" in b["input"] for _, b in stub.requests)
+
+    def test_the_raised_budget_carries_to_later_batches(self, stub, batching):
+        """Otherwise every batch in the job rediscovers this at minutes a go."""
+        stub.native_body = _budget_gated_responder(needs_budget=9000)
+        segs = _segs(*[f"line {i}" for i in range(8)])   # 2 batches of 4
+
+        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+
+        budgets = [b["max_output_tokens"] for _, b in stub.requests]
+        # The last request must not have started back at 1×
+        assert budgets[-1] > budgets[0]
+        starved = sum(1 for b in budgets if b < 9000)
+        assert starved <= 3, f"should stop paying for starved requests: {budgets}"
+
+    def test_budget_starvation_does_not_trip_the_circuit_breaker(self, stub, batching):
+        """The server answered; it just answered with only reasoning. Treating
+        that as 'backend down' abandoned a job smaller budgets could finish."""
+        stub.native_body = _budget_gated_responder(needs_budget=9000)
+        segs = _segs(*[f"line {i}" for i in range(12)])
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert all(s["translated_text"].startswith("RU:") for s in out)
+
+    def test_gives_up_escalating_eventually(self, stub, batching):
+        """A model stuck in a reasoning loop must not escalate forever."""
+        stub.native_body = _budget_gated_responder(needs_budget=10 ** 9)
+        segs = _segs("only line")
+
+        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        assert out[0]["translated_text"] == "only line"      # left untranslated
+        budgets = [b["max_output_tokens"] for _, b in stub.requests]
+        assert max(budgets) <= T._batch_output_budget(["only line"]) * \
+            T._BudgetTuner.MAX_MULTIPLIER * 2
+
+
+class TestBudgetAndTimeoutSizing:
+    def test_budget_adds_reasoning_headroom_to_the_answer(self):
+        """max() was the bug: a 1852-token answer estimate was clamped back
+        down to the 4096 reasoning floor, leaving nothing for the answer."""
+        texts = ["a fairly ordinary subtitle line of speech"] * 16
+        budget = T._batch_output_budget(texts)
+        assert budget > T.LM_STUDIO_MAX_OUTPUT_TOKENS, \
+            "must leave room for the answer on top of the reasoning budget"
+
+    def test_timeout_scales_with_the_budget(self):
+        small = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS)
+        big = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS * 3)
+        assert small == pytest.approx(T.LM_STUDIO_TIMEOUT)
+        assert big > small, "a batch that generates 3x as much needs 3x the clock"
+
+    def test_timeout_never_shrinks_below_the_configured_value(self):
+        assert T._batch_timeout(1) == pytest.approx(T.LM_STUDIO_TIMEOUT)
+
+
+class TestTimeoutIsReportedWithItsType:
+    def test_empty_str_timeout_still_produces_a_message(self, stub, monkeypatch):
+        """str(TimeoutError()) is "" — the original logged
+        "Batch of 16 failed (attempt 1/2):" and named no cause."""
+        async def boom(*a, **k):
+            raise asyncio.TimeoutError()
+
+        monkeypatch.setattr(T, "lm_studio_chat", boom)
+        with pytest.raises(T.LMStudioTimeoutError) as ei:
+            _run(stub, T._translate_batch(["a", "b"], "ru", "m", "", None, None))
+        assert str(ei.value), "must not be an empty message"
+        assert "TimeoutError" in str(ei.value)
+
+
+class TestTimeoutSizing:
+    """A 182-segment job timed out on every batch because the clock was
+    sized for a solo request while two ran concurrently against one model."""
+
+    def test_scales_with_concurrency(self):
+        solo = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS, concurrency=1)
+        pair = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS, concurrency=2)
+        assert pair == pytest.approx(solo * 2), \
+            "two in-flight requests each take ~2x as long on one model instance"
+
+    def test_stretch_extends_the_clock(self):
+        base = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS, 1, stretch=1)
+        assert T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS, 1, stretch=3) > base
+
+    def test_all_three_multipliers_compose(self):
+        t = T._batch_timeout(T.LM_STUDIO_MAX_OUTPUT_TOKENS * 2, concurrency=2, stretch=3)
+        assert t == pytest.approx(T.LM_STUDIO_TIMEOUT * 2 * 2 * 3)
+
+
+class TestTimeoutRetriesBeforeSplitting:
+    def test_a_slow_batch_gets_a_longer_clock_not_a_split(self, stub, batching):
+        """Splitting is the wrong first move when the model's cost is
+        per-request: each half pays the reasoning again."""
+        calls = {"n": 0}
+
+        real_chat = T.lm_studio_chat
+
+        async def slow_once(prompt, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise asyncio.TimeoutError()
+            return await real_chat(prompt, **kw)
+
+        stub.native_body = _numbering_responder()
+        import pipeline.translator as mod
+        mod.lm_studio_chat = slow_once
+        try:
+            segs = _segs("a", "b", "c", "d")
+            out = _run(stub, T.translate_segments(segs, "ru", model="m",
+                                                  max_concurrent=1))
+        finally:
+            mod.lm_studio_chat = real_chat
+
+        assert [s["translated_text"] for s in out] == \
+            ["RU: a", "RU: b", "RU: c", "RU: d"]
+        # The retry must be the SAME 4 lines, not two halves
+        assert any("4. d" in b["input"] for _, b in stub.requests)

@@ -1598,12 +1598,15 @@ async def _stage_translate(job, work, ctx, update, perf):
     total_todo = len(todo)
 
     def _translate_progress(done, total, eta_sec):
-        # Map translation progress into the overall pipeline 45→62% range
+        # Map translation progress into the overall pipeline 45→62% range.
+        # `total` comes from the translator and counts unique lines to
+        # translate, which is ≤ the segment count (repeats are translated
+        # once), so don't substitute the segment count here.
         pct = 45 + int((done / max(total, 1)) * 17)
         eta_str = f" · ~{eta_sec // 60}m{eta_sec % 60}s left" if eta_sec > 30 else ""
         update(
             progress=min(pct, 62),
-            step_detail=f"Translating batch {done}/{total}{eta_str}",
+            step_detail=f"Translating line {done}/{total}{eta_str}",
         )
 
     # translate_segments(segments, target_lang, model, ...)
@@ -1638,14 +1641,6 @@ async def _stage_translate(job, work, ctx, update, perf):
         model=model, translated=total_todo, reused=len(prior_by_idx),
         untranslated=untranslated_count, segments=len(segments),
     )
-    if untranslated_count == len(segments):
-        raise RuntimeError(
-            f"Translation completely failed — all {len(segments)} segments "
-            f"still in source language. Check Ollama: run `ollama ps` and "
-            f"try `ollama run {model} 'hi'` manually. If it hangs, the "
-            f"model may be incompatible with your setup; try "
-            f"`ollama pull qwen2.5:7b` and retry this stage with that model."
-        )
     if untranslated_count:
         log.warning(
             f"[translate] {untranslated_count}/{len(segments)} segments did not "
@@ -1662,7 +1657,29 @@ async def _stage_translate(job, work, ctx, update, perf):
 
     ctx["segments"] = _serialize_segments(segments)
     ctx["model"] = model
+    # Checkpoint BEFORE the pass/fail verdict below. A run that translated
+    # some of the transcript must not throw that work away by raising —
+    # the whole point of `translate_failed_only` is to resume from here.
     _finalize_translation(job, work, ctx, update, perf)
+
+    # Sanity check: if a significant fraction of segments are still in the
+    # source language, stop here instead of letting VoxCPM try to speak
+    # English with Russian cross-lingual cfg (which crashes the worker).
+    #
+    # This used to fire only when EVERY segment failed, so a run that
+    # translated 16 of 182 lines was recorded as status=ok and flowed into
+    # TTS — producing a "finished" dub that is 91% the original language.
+    # Anything past a coin flip is a failed stage, not a warning.
+    if untranslated_count > len(segments) // 2:
+        raise RuntimeError(
+            f"Translation failed for {untranslated_count} of {len(segments)} "
+            f"segments — they are still in the source language, so the dub "
+            f"would be mostly untranslated. The partial result is saved: "
+            f"retry the 'translate' stage with 'only failed segments' to "
+            f"finish it, ideally with a faster/non-reasoning model than "
+            f"'{model}' (check the logs above for timeouts or "
+            f"budget-exhaustion warnings)."
+        )
 
 
 def _finalize_translation(job, work, ctx, update, perf) -> None:

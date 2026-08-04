@@ -236,8 +236,36 @@ class TestPartialTranslateRetry:
 
         ctx = {"target_lang": "ru", "model": "broken",
                "segments": [{"idx": 0, "start": 0, "end": 1, "text": "one", "speaker": "S"}]}
-        with pytest.raises(RuntimeError, match="Translation completely failed"):
+        with pytest.raises(RuntimeError, match="Translation failed for 1 of 1"):
             self._run(job_env, monkeypatch, ctx, translator)
+
+    def test_mostly_untranslated_is_a_failure_not_a_pass(self, job_env, monkeypatch):
+        """A run that translated 16 of 182 lines was recorded status=ok and
+        flowed into TTS, producing a "finished" dub that was 91% English."""
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+            out = []
+            for i, s in enumerate(segs):
+                # only the first line comes back translated
+                out.append(dict(s, translated_text="перевод" if i == 0 else s["text"]))
+            return out
+
+        ctx = {"target_lang": "ru", "model": "slow",
+               "segments": [{"idx": i, "start": i, "end": i + 1,
+                             "text": f"line {i}", "speaker": "S"} for i in range(10)]}
+        with pytest.raises(RuntimeError, match="Translation failed for 9 of 10"):
+            self._run(job_env, monkeypatch, ctx, translator)
+
+    def test_a_mostly_successful_run_still_passes(self, job_env, monkeypatch):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+            out = []
+            for i, s in enumerate(segs):
+                out.append(dict(s, translated_text=s["text"] if i == 0 else "перевод"))
+            return out
+
+        ctx = {"target_lang": "ru", "model": "ok",
+               "segments": [{"idx": i, "start": i, "end": i + 1,
+                             "text": f"line {i}", "speaker": "S"} for i in range(10)]}
+        self._run(job_env, monkeypatch, ctx, translator)   # must not raise
 
 
 # ── Partial TTS retry ────────────────────────────────────────────────
