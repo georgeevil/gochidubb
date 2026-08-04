@@ -81,3 +81,41 @@ class TestApplyVadFilter:
         # The threshold for warning is 15%, so it should fire
         assert any("only" in record.message and "%" in record.message
                    for record in caplog.records if "VAD" in record.message)
+
+
+class TestLoadMono16k:
+    """VAD must not use silero's read_audio() — it calls torchaudio.load(),
+    which dies with "Could not load libtorchcodec" wherever FFmpeg is newer
+    than the installed torchcodec supports."""
+
+    def test_loads_without_torchaudio_load(self, tmp_path, monkeypatch):
+        import numpy as np
+        import soundfile as sf
+        import torchaudio
+
+        from pipeline.vad import _load_mono_16k
+
+        monkeypatch.setattr(torchaudio, "load", lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("Could not load libtorchcodec")))
+
+        p = tmp_path / "a.wav"
+        sf.write(p, np.zeros((1600, 1), dtype="float32"), 16000)
+        wav = _load_mono_16k(str(p))
+        assert wav.ndim == 1, "silero expects a 1-D tensor"
+        assert wav.shape[0] == 1600
+
+    def test_downmixes_and_resamples(self, tmp_path, monkeypatch):
+        import numpy as np
+        import soundfile as sf
+        import torchaudio
+
+        from pipeline.vad import _load_mono_16k
+
+        monkeypatch.setattr(torchaudio, "load", lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("Could not load libtorchcodec")))
+
+        p = tmp_path / "st.wav"
+        sf.write(p, np.zeros((44100, 2), dtype="float32"), 44100)
+        wav = _load_mono_16k(str(p))
+        assert wav.ndim == 1
+        assert 15000 < wav.shape[0] < 17000, "1s of audio should become ~16000 samples"

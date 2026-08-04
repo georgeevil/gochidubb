@@ -30,6 +30,19 @@ def _run_ffmpeg(cmd, desc="", timeout=300):
     return r
 
 
+def _load_mono_16k(audio_path: str):
+    """Load audio as the 1-D 16 kHz float tensor Silero VAD expects."""
+    from .audio import load_audio_tensor
+
+    wav, sr = load_audio_tensor(audio_path)
+    if wav.dim() > 1:
+        wav = wav.mean(dim=0)          # (channels, time) → mono
+    if sr != 16000:
+        import torchaudio
+        wav = torchaudio.functional.resample(wav, sr, 16000)
+    return wav
+
+
 def get_speech_timestamps(audio_path: str, threshold: float = 0.5) -> list[dict]:
     """Return Silero VAD timestamps as list of {start, end} dicts (seconds).
 
@@ -48,9 +61,13 @@ def get_speech_timestamps(audio_path: str, threshold: float = 0.5) -> list[dict]
             verbose=False,
         )
         get_ts = utils[0]  # get_speech_timestamps is utils[0]
-        read_audio = utils[2]
 
-        wav = read_audio(audio_path, sampling_rate=16000)
+        # Deliberately not silero's own utils[2] read_audio(): it calls
+        # torchaudio.load(), which since torchaudio 2.9 goes through
+        # torchcodec and dies with "Could not load libtorchcodec" on any
+        # machine whose FFmpeg is newer than 7 (e.g. Homebrew ffmpeg 8 on
+        # Apple Silicon). See pipeline/audio.py::load_audio_tensor.
+        wav = _load_mono_16k(audio_path)
         timestamps = get_ts(wav, model, sampling_rate=16000, threshold=threshold)
         result = [
             {"start": t["start"] / 16000, "end": t["end"] / 16000}
