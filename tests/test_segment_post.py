@@ -216,3 +216,57 @@ class TestPostprocessSegments:
         result = postprocess_segments(continuation_segments, merge_gap=0.1)
         # Tighter gap may still merge
         assert len(result) > 0
+
+
+# ── idx integrity ────────────────────────────────────────────────────
+
+class TestIndexIntegrity:
+    """Downstream stages key segments by `idx` (server.py builds
+    `by_idx = {s["idx"]: s ...}` when merging translations back), so a
+    duplicate index silently overwrites one segment with another.
+
+    This is not hypothetical: job 947ca81d lost two spoken lines that way —
+    152 segments into translate, 150 out, nothing logged. Pass 3 split a long
+    segment into two `dict(seg)` copies which both inherited the parent's idx.
+    """
+
+    def _long_segment(self):
+        # >15s and with a sentence boundary near the middle, so pass 3 splits it.
+        text = ("This is the first half of a long stretch of speech. "
+                "And this is the second half which follows after it.")
+        return [{"idx": 7, "start": 0.0, "end": 20.0, "text": text,
+                 "speaker": "SPEAKER_00"}]
+
+    def test_splitting_does_not_duplicate_idx(self):
+        out = postprocess_segments(self._long_segment())
+        assert len(out) == 2, "the fixture should actually split"
+        assert out[0]["idx"] != out[1]["idx"], (
+            "both halves kept the parent's idx — one will be overwritten "
+            "when downstream code keys segments by index"
+        )
+
+    def test_indices_are_unique_after_postprocess(self, sample_segments):
+        out = postprocess_segments(sample_segments)
+        idxs = [s["idx"] for s in out]
+        assert len(idxs) == len(set(idxs))
+
+    def test_indices_are_contiguous_and_ordered(self):
+        out = postprocess_segments(self._long_segment())
+        assert [s["idx"] for s in out] == list(range(len(out)))
+
+    def test_every_segment_has_an_idx(self, continuation_segments):
+        """Input without idx must still come out numbered — the fallback in
+        _serialize_segments is positional and can collide with a real index."""
+        stripped = [{k: v for k, v in s.items() if k != "idx"}
+                    for s in continuation_segments]
+        out = postprocess_segments(stripped)
+        assert all("idx" in s for s in out)
+        assert [s["idx"] for s in out] == list(range(len(out)))
+
+    def test_split_preserves_all_words(self):
+        """The reason a count change is not itself a bug: text is conserved."""
+        src = self._long_segment()
+        out = postprocess_segments(src)
+        before = "".join(src[0]["text"].split())
+        after = "".join("".join(s["text"].split()) for s in out)
+        assert before == after

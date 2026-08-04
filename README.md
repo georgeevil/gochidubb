@@ -273,6 +273,43 @@ GPU telemetry works through `pynvml` → `torch.cuda` → `nvidia-smi` →
 `torch.mps`, whichever is available; with none of them, stages are still
 timed and CPU/RAM sampled.
 
+### Auditing a finished job for lost content
+
+`tools/audit_job.py` walks a job's checkpoints and artifacts and reports
+anything that went missing between stages:
+
+```bash
+python tools/audit_job.py 947ca81d      # one job
+python tools/audit_job.py --all          # every job in outputs/
+python tools/audit_job.py 947ca81d --json
+```
+
+```
+stage         segments  unique idx    words
+transcribe         190         190     3439
+diarize            152         150     3439  <-- DUPLICATE IDX
+translate          150         150     3421
+
+✗ LOSS  [diarize] 2 duplicate idx — downstream keys segments by idx, so 2
+        segment(s) will be silently overwritten
+        idx=188:
+            'could you sign this book?'
+            'These four players decided to keep my return a secret'
+```
+
+Counting segments per stage is not enough on its own: the pipeline
+*legitimately* merges sentence fragments and splits over-long ones, so
+190 → 152 is healthy while 152 → 150 is two lines of dialogue gone. The
+primary check is therefore **word coverage** — every word transcribed from the
+source must still be accounted for in the segments that reached the render.
+Merges and splits preserve words; dropped segments do not.
+
+It also flags segments that were never translated, never synthesized, whose
+wav is missing, or that TTS produced but the assembler never placed — plus
+leftover `seg_*.wav` from earlier attempts, which is the most confusing thing
+to find when checking a job directory by hand. Exit code is 1 when anything
+was lost, so it works as a post-run assertion or a CI check.
+
 ### Setup problems come to you
 
 A stage can finish successfully and still not have done what you assume. The

@@ -1087,11 +1087,34 @@ def _ctx_for_checkpoint(ctx: dict) -> dict:
 
 
 def _serialize_segments(segments: list) -> list:
-    """Normalize segments for checkpointing — stable idx, known fields only."""
+    """Normalize segments for checkpointing — stable idx, known fields only.
+
+    `idx` must be unique: downstream stages key dicts by it (see the
+    translation merge in `_stage_translate`), so a duplicate silently
+    overwrites one segment with another and a line of dialogue disappears from
+    the dub with nothing logged. That happened for real — pipeline/segment_post
+    split a long segment into two `dict(seg)` copies that both kept the
+    parent's idx.
+    """
     out = []
+    seen: dict = {}
     for i, s in enumerate(segments):
+        idx = s.get("idx", i)
+        if idx in seen:
+            # Re-key rather than drop, and say so — losing a segment quietly
+            # is the failure mode this guard exists to prevent.
+            new_idx = max(max(seen), i) + 1
+            while new_idx in seen:
+                new_idx += 1
+            log.warning(
+                f"[segments] duplicate idx={idx} at position {i} "
+                f"(text={str(s.get('text',''))[:60]!r}) — reassigned to "
+                f"{new_idx}. Upstream should emit unique indices."
+            )
+            idx = new_idx
+        seen[idx] = True
         item = {
-            "idx": s.get("idx", i),
+            "idx": idx,
             "start": s.get("start", 0.0),
             "end": s.get("end", 0.0),
             "text": s.get("text", ""),
