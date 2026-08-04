@@ -120,8 +120,8 @@ class TestWorkerJobJson:
 # had a 100% failure rate. These tests pin both the source of the value
 # and the worker-side clamp that backstops it.
 
-import sys
-from pathlib import Path
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -228,6 +228,75 @@ class TestTierLadder:
         _worker._process_job(model, job)
         assert len(model.calls) >= 2, "no fallback tier was attempted"
         assert os.path.exists(job["segments"][0]["output_path"])
+
+
+class TestUnmeasuredQA:
+    """QA returning score=None ("not measured") must be pass-without-claim:
+    no seed-mutation retries, no tier fallback, no degraded tier-0 marking.
+    Retrying on an unmeasurable signal burns compute and risks voice drift."""
+
+    def _no_ref_segment(self, tmp_path):
+        # No reference audio (has_ref False) and text NOT starting with "("
+        # (not voice-design) → the one configuration where MAX_QA_RETRIES > 0,
+        # so a retry would actually happen if the code wrongly triggered one.
+        seg = _segment(tmp_path)
+        seg.update(reference_wav_path="", prompt_wav_path="", prompt_text="")
+        return seg
+
+    def test_unmeasured_qa_does_not_retry_or_degrade(self, tmp_path, monkeypatch):
+        from pipeline import tts_qa as _qa
+
+        qa_calls = []
+
+        def fake_check(audio_path, target_text, target_lang="ru", whisper_size="base"):
+            qa_calls.append(audio_path)
+            return None, "", {"measured": False, "error": "whisper unavailable",
+                              "cer": 1.0, "detected_lang": "", "lang_match": False,
+                              "empty": False}
+
+        monkeypatch.setattr(_qa, "check_segment_quality", fake_check)
+
+        model = FakeTTSModel()
+        seg = self._no_ref_segment(tmp_path)
+        job = {
+            "tier_policy": "balanced", "enable_qa": True, "voice_seed": 7,
+            "segments": [seg],
+        }
+        _worker._process_job(model, job)
+
+        assert len(model.calls) == 1, "unmeasured QA must not trigger regeneration"
+        assert len(qa_calls) == 1
+        assert os.path.exists(seg["output_path"])
+        assert seg["qa_score"] is None, "unmeasured must not report a fake score"
+        assert seg["qa"]["measured"] is False
+        assert seg["qa"]["score"] is None
+        assert seg["qa"]["attempts"] == 1
+        assert seg["qa"]["tier"] != 0, "unmeasured must not be marked degraded"
+
+    def test_measured_bad_score_still_retries(self, tmp_path, monkeypatch):
+        """Contrast case: a REAL bad measurement keeps the retry ladder alive."""
+        from pipeline import tts_qa as _qa
+
+        def fake_check(audio_path, target_text, target_lang="ru", whisper_size="base"):
+            return 1.0, "garbage", {"measured": True, "cer": 1.0,
+                                    "detected_lang": "en", "lang_match": False,
+                                    "empty": False}
+
+        monkeypatch.setattr(_qa, "check_segment_quality", fake_check)
+
+        model = FakeTTSModel()
+        seg = self._no_ref_segment(tmp_path)
+        job = {
+            "tier_policy": "balanced", "enable_qa": True, "voice_seed": 7,
+            "segments": [seg],
+        }
+        _worker._process_job(model, job)
+
+        assert len(model.calls) > 1, "a measured bad score should regenerate"
+        # All attempts exhausted → accepted best output, marked degraded
+        assert seg["qa"]["tier"] == 0
+        assert seg["qa"]["measured"] is True
+        assert seg["qa_score"] == 1.0
 
 
 class TestPromptPairing:

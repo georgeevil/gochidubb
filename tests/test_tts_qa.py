@@ -1,9 +1,17 @@
 """Tests for pipeline/tts_qa.py — CER computation, text normalization, scoring."""
-import os
+import sys
+import types
 
-import pytest
 
-from pipeline.tts_qa import _normalize_text, _cer, is_acceptable
+import pipeline.tts_qa as tts_qa
+from pipeline.tts_qa import (
+    QA_THRESHOLD,
+    _cer,
+    _normalize_text,
+    _resolve_device,
+    check_segment_quality,
+    is_acceptable,
+)
 
 
 class TestNormalizeText:
@@ -131,3 +139,127 @@ class TestIsAcceptable:
         # Re-import to pick up env? No — function reads env on each call.
         assert is_acceptable(0.45) is True
         assert is_acceptable(0.55) is False
+
+    def test_threshold_constant_is_the_default_gate(self):
+        """Single source of truth: the default param IS the module constant."""
+        assert QA_THRESHOLD == 0.4
+        assert is_acceptable(QA_THRESHOLD) is True
+        assert is_acceptable(QA_THRESHOLD + 0.01) is False
+
+    def test_none_score_is_pass_without_claim(self):
+        """A segment that CANNOT be measured must not trigger retries."""
+        assert is_acceptable(None) is True
+
+    def test_none_score_passes_even_under_strict_env_threshold(self, monkeypatch):
+        monkeypatch.setenv("GOCHIDUBB_QA_THRESHOLD", "0.0")
+        assert is_acceptable(None) is True
+
+
+def _fake_torch(cuda_available: bool):
+    """Minimal torch stand-in for device resolution tests."""
+    mod = types.ModuleType("torch")
+    mod.cuda = types.SimpleNamespace(is_available=lambda: cuda_available)
+    return mod
+
+
+class TestResolveDevice:
+    """_resolve_device() picks a real device instead of assuming CUDA."""
+
+    def test_explicit_preference_passes_through(self):
+        assert _resolve_device("cuda") == "cuda"
+        assert _resolve_device("cpu") == "cpu"
+
+    def test_auto_with_cuda_available(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "torch", _fake_torch(True))
+        assert _resolve_device("auto") == "cuda"
+
+    def test_auto_without_cuda_falls_back_to_cpu(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "torch", _fake_torch(False))
+        assert _resolve_device("auto") == "cpu"
+
+    def test_auto_when_torch_is_broken_falls_back_to_cpu(self, monkeypatch):
+        # sys.modules[name] = None makes `import torch` raise ImportError
+        monkeypatch.setitem(sys.modules, "torch", None)
+        assert _resolve_device("auto") == "cpu"
+
+    def test_empty_preference_resolves_like_auto(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "torch", _fake_torch(False))
+        assert _resolve_device("") == "cpu"
+
+
+class TestNotMeasuredSemantics:
+    """check_segment_quality() must be honest when it could not measure."""
+
+    def test_missing_audio_is_a_real_failure(self, tmp_path):
+        score, transcript, diag = check_segment_quality(
+            str(tmp_path / "does_not_exist.wav"), "привет", target_lang="ru",
+        )
+        assert score == 1.0
+        assert diag["measured"] is True
+        assert "error" in diag
+
+    def test_whisper_unavailable_returns_unmeasured(self, tmp_path, monkeypatch):
+        wav = tmp_path / "seg.wav"
+        wav.write_bytes(b"RIFF fake")
+        monkeypatch.setattr(tts_qa, "_get_whisper", lambda **kw: None)
+        score, transcript, diag = check_segment_quality(
+            str(wav), "привет", target_lang="ru",
+        )
+        assert score is None, "unmeasured must NOT look like a perfect 0.0"
+        assert diag["measured"] is False
+        assert is_acceptable(score) is True  # pass-without-claim
+
+    def test_transcribe_crash_returns_unmeasured(self, tmp_path, monkeypatch):
+        wav = tmp_path / "seg.wav"
+        wav.write_bytes(b"RIFF fake")
+
+        class ExplodingModel:
+            def transcribe(self, *a, **kw):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(tts_qa, "_get_whisper", lambda **kw: ExplodingModel())
+        score, transcript, diag = check_segment_quality(
+            str(wav), "привет", target_lang="ru",
+        )
+        assert score is None
+        assert diag["measured"] is False
+        assert "boom" in diag["error"]
+
+    def test_real_measurement_sets_measured_true(self, tmp_path, monkeypatch):
+        wav = tmp_path / "seg.wav"
+        wav.write_bytes(b"RIFF fake")
+
+        info = types.SimpleNamespace(language="ru", language_probability=0.99)
+        segs = [types.SimpleNamespace(text=" привет мир ")]
+
+        class OkModel:
+            def transcribe(self, *a, **kw):
+                return iter(segs), info
+
+        monkeypatch.setattr(tts_qa, "_get_whisper", lambda **kw: OkModel())
+        score, transcript, diag = check_segment_quality(
+            str(wav), "Привет, мир!", target_lang="ru",
+        )
+        assert score == 0.0
+        assert transcript == "привет мир"
+        assert diag["measured"] is True
+        assert diag["lang_match"] is True
+
+    def test_empty_transcript_is_a_real_failure(self, tmp_path, monkeypatch):
+        """Silence from TTS is a measured defect, not an unmeasured one."""
+        wav = tmp_path / "seg.wav"
+        wav.write_bytes(b"RIFF fake")
+
+        info = types.SimpleNamespace(language="ru", language_probability=0.2)
+
+        class SilentModel:
+            def transcribe(self, *a, **kw):
+                return iter([]), info
+
+        monkeypatch.setattr(tts_qa, "_get_whisper", lambda **kw: SilentModel())
+        score, transcript, diag = check_segment_quality(
+            str(wav), "привет", target_lang="ru",
+        )
+        assert score == 1.0
+        assert diag["measured"] is True
+        assert diag["empty"] is True

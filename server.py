@@ -1270,9 +1270,17 @@ def _serialize_segments(segments: list) -> list:
             "text": s.get("text", ""),
             "speaker": s.get("speaker", "SPEAKER_00"),
         }
-        for opt in ("translated_text", "audio_path", "qa_score", "tts_tier"):
+        for opt in ("translated_text", "audio_path", "qa_score", "tts_tier",
+                    "qa", "avg_logprob", "no_speech_prob",
+                    "word_conf_mean", "word_conf_min"):
             if s.get(opt) is not None:
                 item[opt] = s.get(opt)
+        # Aggregate per-word ASR confidences the first time through (the
+        # words list itself is NOT serialized — only its summary survives
+        # checkpointing; later passes carry the stats via the loop above).
+        if s.get("words") and "word_conf_mean" not in item:
+            from pipeline.transcriber import word_confidence_stats
+            item.update(word_confidence_stats(s.get("words")))
         out.append(item)
     return out
 
@@ -1996,6 +2004,15 @@ async def _stage_tts(job, work, ctx, update, perf):
         synthesized=synth_ok, failed=len(segments) - synth_ok,
         sec_per_segment=round(took / max(synth_ok, 1), 2),
     )
+    # QA/tier aggregates from the worker's "done" event (tier_stats,
+    # qa_regens, qa_measured_count, qa_unmeasured_count) — previously
+    # log-only, now persisted with the stage metrics.
+    if hasattr(tts, "last_run_stats"):
+        try:
+            perf.update({k: v for k, v in (tts.last_run_stats() or {}).items()
+                         if v is not None})
+        except Exception:
+            pass
     if synth_ok == 0:
         # The worker reports per-segment failures as events rather than
         # raising, so name the actual cause here — "check model/GPU" sent us

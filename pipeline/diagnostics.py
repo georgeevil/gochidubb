@@ -20,8 +20,6 @@ behind a button.
 from __future__ import annotations
 
 import logging
-import os
-import shutil
 import time
 from typing import Any, Dict, List, Optional
 
@@ -445,31 +443,30 @@ def passive_checks(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 
 def _tts_qa_notices(acc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Whisper-roundtrip QA is hardcoded to CUDA and fails open.
+    """Whisper-roundtrip QA runs on CPU off NVIDIA — worth knowing, not broken.
 
-    `pipeline/tts_qa.py:44` defaults `device="cuda"` and its only caller (line
-    130) never overrides it, so off NVIDIA the model never loads,
-    `check_segment_quality()` scores everything as perfect, and the log still
-    prints "QA: Whisper roundtrip enabled". Every segment reports qa=0.00
-    whether it is good or not.
-
-    Failing open is the right call — a broken QA check must not block a dub —
-    but silently is not, because the scores then look like evidence.
+    `pipeline/tts_qa.py` auto-resolves its device (CUDA when available, else
+    CPU with int8), so QA now actually measures segments on this machine —
+    just slower. If the model still cannot load, segments are honestly
+    reported as "not measured" (qa score null, measured=false) instead of the
+    old fail-open behavior that scored everything as a perfect 0.00.
     """
     if acc.get("cuda"):
         return []
     return [notice(
-        code="tts_qa.device_unavailable",
-        severity="warn",
+        code="tts_qa.cpu_fallback",
+        severity="info",
         subsystem="tts",
-        title="TTS quality checks are not running",
-        detail="Whisper-roundtrip QA (used on cross-lingual dubs) asks for its "
-               "model on CUDA, which this machine does not have, so it fails to "
-               "load and every segment is scored as perfect. The qa=0.00 values "
-               "in the logs mean 'not measured', not 'good'.",
+        title="TTS quality checks run on CPU here",
+        detail="Whisper-roundtrip QA (used on cross-lingual dubs) has no CUDA "
+               "device on this machine, so it runs on CPU with int8 — adding "
+               "roughly a second or two of ASR per checked segment. Segments "
+               "that cannot be measured at all report a null qa score with "
+               "measured=false; they are never counted as 'not measured' "
+               "passes with a perfect 0.00.",
         remediation=[
-            "Read the qa= numbers as meaningless on this machine",
-            "Judge output by listening, or run on an NVIDIA GPU",
+            "Nothing to do — QA still measures, just more slowly",
+            "Run on an NVIDIA GPU to speed up the QA pass",
         ],
     )]
 
