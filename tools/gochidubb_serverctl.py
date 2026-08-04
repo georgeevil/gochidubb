@@ -87,22 +87,81 @@ def _find_server_processes() -> list[int]:
     orphaned processes whose PID file was deleted or stale.
     """
     pids = []
+    for pid, line in _ps_lines():
+        if "server.py" in line and "python" in line:
+            pids.append(pid)
+    return pids
+
+
+def _ps_lines() -> list[tuple[int, str]]:
+    """Return (pid, full ps line) for every process, or [] if ps is unusable."""
+    rows = []
     try:
         result = subprocess.run(
             ["ps", "aux"],
             capture_output=True, text=True, timeout=10,
         )
-        for line in result.stdout.splitlines():
-            if "server.py" in line and "python" in line:
-                parts = line.split()
-                if parts:
-                    try:
-                        pids.append(int(parts[1]))
-                    except (ValueError, IndexError):
-                        pass
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return pids
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return rows
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            rows.append((int(parts[1]), line))
+        except ValueError:
+            continue  # header row
+    return rows
+
+
+# The multiprocessing resource tracker is what unlinks POSIX semaphores left
+# behind by a process that died badly — killing it is what turns the benign
+# "leaked semaphore objects to clean up at shutdown" warning into a real leak.
+_PROTECTED_MARKERS = ("multiprocessing.resource_tracker",
+                      "multiprocessing.semaphore_tracker",
+                      "resource_tracker.main")
+
+
+def _find_orphan_children() -> list[tuple[int, str]]:
+    """Find pipeline children that outlived the server.
+
+    `_find_server_processes` only matches `python ... server.py`, so a stray
+    ffmpeg left over from a killed job — or the VoxCPM TTS daemon, which is
+    spawned without its own process group — is invisible to it. Returns
+    (pid, short label) pairs.
+    """
+    root = str(PROJECT_ROOT)
+    outputs = str(PROJECT_ROOT / "outputs")
+    found = []
+    for pid, line in _ps_lines():
+        if pid == os.getpid() or any(m in line for m in _PROTECTED_MARKERS):
+            continue
+        if "tts_worker.py" in line and "--daemon" in line:
+            found.append((pid, "TTS worker"))
+        elif ("ffmpeg" in line or "ffprobe" in line) and outputs in line:
+            found.append((pid, "ffmpeg"))
+        elif "yt-dlp" in line and root in line:
+            found.append((pid, "yt-dlp"))
+    return found
+
+
+def _signal_tree(pid: int, sig) -> None:
+    """Signal `pid`'s whole process group when it leads one, else just `pid`.
+
+    `cmd_start(daemon=True)` uses start_new_session=True, so the daemon is its
+    own group leader and killing the group takes ffmpeg / yt-dlp / the TTS
+    worker with it. `cmd_foreground` uses os.execvpe and therefore shares the
+    *shell's* process group — killpg there would kill the user's terminal, so
+    the leader check is not optional.
+    """
+    if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+        try:
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, sig)
+                return
+        except OSError:
+            pass  # gone, or not permitted — fall through to the plain kill
+    os.kill(pid, sig)
 
 
 # ── Commands ───────────────────────────────────────────────────────────
@@ -116,11 +175,14 @@ def cmd_status() -> dict:
     all_server_pids = _find_server_processes()
     orphaned = [p for p in all_server_pids if p != pid]
 
+    orphan_children = _find_orphan_children()
+
     info = {
         "running": running,
         "pid": pid,
         "pid_file": str(PID_FILE),
         "orphaned_pids": orphaned,
+        "orphaned_children": orphan_children,
         "log_file": str(LOG_FILE),
     }
 
@@ -134,6 +196,14 @@ def cmd_status() -> dict:
 
     if orphaned:
         print(f"⚠️  Found {len(orphaned)} orphaned server process(es): {orphaned}")
+        print("   Run 'gochidubb-serverctl stop' to clean them up")
+
+    # A running server legitimately owns ffmpeg/TTS children mid-job; only
+    # flag them as orphans when nothing is there to own them.
+    if orphan_children and not running:
+        listed = ", ".join(f"{label} (PID {p})" for p, label in orphan_children)
+        print(f"⚠️  Found {len(orphan_children)} orphaned pipeline child process(es): "
+              f"{listed}")
         print("   Run 'gochidubb-serverctl stop' to clean them up")
 
     return info
@@ -199,16 +269,18 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
         os.execvpe(python, cmd, env)
 
 
-def cmd_stop(force: bool = False) -> None:
+def cmd_stop(force: bool = False, timeout: float = 15.0) -> None:
     """Stop the GoChiDUBB server gracefully.
 
     Args:
         force: If True, use SIGKILL instead of SIGTERM.
+        timeout: Seconds to wait for graceful shutdown before SIGKILL.
     """
     pid = _read_pid()
     all_pids = _find_server_processes()
 
     if not all_pids:
+        _reap_orphans()
         print("ℹ️  No server processes found")
         _remove_pid()
         return
@@ -220,7 +292,7 @@ def cmd_stop(force: bool = False) -> None:
     if pid and pid in all_pids:
         print(f"🛑 Stopping server (PID {pid}) with {signal_name}...")
         try:
-            os.kill(pid, sig)
+            _signal_tree(pid, sig)
         except OSError as e:
             print(f"   Warning: {e}")
 
@@ -229,13 +301,16 @@ def cmd_stop(force: bool = False) -> None:
         if p != pid:
             print(f"🛑 Stopping orphaned server process (PID {p}) with {signal_name}...")
             try:
-                os.kill(p, sig)
+                _signal_tree(p, sig)
             except OSError as e:
                 print(f"   Warning: {e}")
 
-    # Wait for graceful shutdown (only for SIGTERM)
+    # Wait for graceful shutdown (only for SIGTERM). The server terminates its
+    # own ffmpeg / TTS children during lifespan shutdown, which takes a few
+    # seconds longer than a bare exit — hence the wider default budget.
     if not force:
-        deadline = time.time() + 10  # 10 second grace period
+        still_alive = list(all_pids)
+        deadline = time.time() + timeout
         while time.time() < deadline:
             still_alive = [p for p in all_pids if _is_running(p)]
             if not still_alive:
@@ -244,19 +319,35 @@ def cmd_stop(force: bool = False) -> None:
 
         # Force kill any remaining
         for p in still_alive:
+            print(f"   Grace period elapsed — SIGKILL on PID {p}")
             try:
-                os.kill(p, signal.SIGKILL)
+                _signal_tree(p, signal.SIGKILL)
             except OSError:
                 pass
 
+    _reap_orphans()
     _remove_pid()
     print("✅ Server stopped")
 
 
-def cmd_restart(port: int = 8910, reload: bool = False) -> None:
+def _reap_orphans() -> None:
+    """SIGKILL pipeline children that outlived the server, if any."""
+    orphans = _find_orphan_children()
+    for p, label in orphans:
+        if not _is_running(p):
+            continue
+        print(f"🧹 Killing orphaned {label} (PID {p})")
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError as e:
+            print(f"   Warning: {e}")
+
+
+def cmd_restart(port: int = 8910, reload: bool = False,
+                timeout: float = 15.0) -> None:
     """Restart the server (stop + start)."""
     print("🔄 Restarting GoChiDUBB server...")
-    cmd_stop()
+    cmd_stop(timeout=timeout)
     # Brief pause to ensure port is released
     time.sleep(1)
     cmd_start(daemon=True, port=port, reload=reload)
@@ -415,11 +506,15 @@ Examples:
     # stop
     stop_parser = subparsers.add_parser("stop", help="Stop the server gracefully")
     stop_parser.add_argument("--force", "-f", action="store_true", help="Force kill (SIGKILL)")
+    stop_parser.add_argument("--timeout", type=float, default=15.0,
+                             help="Seconds to wait for graceful shutdown (default: 15)")
 
     # restart
     restart_parser = subparsers.add_parser("restart", help="Restart the server")
     restart_parser.add_argument("--port", type=int, default=8910, help="Server port (default: 8910)")
     restart_parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
+    restart_parser.add_argument("--timeout", type=float, default=15.0,
+                                help="Seconds to wait for graceful shutdown (default: 15)")
 
     # status
     subparsers.add_parser("status", help="Check server status")
@@ -447,9 +542,9 @@ Examples:
     if args.command == "start":
         cmd_start(daemon=True, port=args.port, reload=args.reload)
     elif args.command == "stop":
-        cmd_stop(force=args.force)
+        cmd_stop(force=args.force, timeout=args.timeout)
     elif args.command == "restart":
-        cmd_restart(port=args.port, reload=args.reload)
+        cmd_restart(port=args.port, reload=args.reload, timeout=args.timeout)
     elif args.command == "status":
         cmd_status()
     elif args.command == "logs":
