@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Callable, Tuple
 import time
 import re
 
-log = logging.getLogger("tachidubb.translator")
+log = logging.getLogger("gochidubb.translator")
 # Add this logger definition
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 
-log = logging.getLogger("tachidubb.assembler")
+log = logging.getLogger("gochidubb.assembler")
 
 # Target peak after per-segment peak-normalization (avoids whisper-vs-shout jumps
 # between consecutive TTS outputs from VoxCPM2 when fed different reference clips).

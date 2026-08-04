@@ -14,7 +14,7 @@ import os
 import subprocess
 import tempfile
 
-log = logging.getLogger("tachidubb.vad")
+log = logging.getLogger("gochidubb.vad")
 
 # Minimum ratio of speech to total audio — below this we warn the user
 SPEECH_RATIO_WARNING = 0.15

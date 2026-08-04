@@ -19,7 +19,7 @@ import soundfile as sf
 
 from .notices import notice
 
-log = logging.getLogger("tachidubb.diarizer")
+log = logging.getLogger("gochidubb.diarizer")
 
 # Snapshot at import for backwards compatibility. Prefer effective_hf_token(),
 # which also sees a token typed into the Settings UI after startup.
@@ -98,7 +98,7 @@ def _load_pipeline(token: str, notices: list | None = None):
             detail="pyannote.audio is not installed, so every segment is "
                    "attributed to a single speaker.",
             remediation=["pip install pyannote.audio",
-                         "Restart TachiDUBB"],
+                         "Restart GoChiDUBB"],
             url="https://github.com/pyannote/pyannote-audio",
         ))
         return None
@@ -287,7 +287,7 @@ def diarize_speakers(audio_path: str,
                 subsystem="diarize",
                 title="Diarization returned an unrecognized result",
                 detail=f"pyannote returned {type(diarization).__name__}, which "
-                       f"this version of TachiDUBB cannot read. All speech was "
+                       f"this version of GoChiDUBB cannot read. All speech was "
                        f"attributed to one speaker.",
                 remediation=["pip install -U pyannote.audio",
                              "Report the type above if it persists"],

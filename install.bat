@@ -1,9 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
-title TachiDUBB Studio Installer
+title GoChiDUBB Studio Installer
 
 :: ════════════════════════════════════════════════════════════════
-::  TachiDUBB Studio — Windows One-Click Installer
+::  GoChiDUBB Studio — Windows One-Click Installer
 ::  Created by TachikomaRed and smolemaru
 ::  Installs: Python packages, FFmpeg, yt-dlp, Ollama, VoxCPM2
 :: ════════════════════════════════════════════════════════════════
@@ -12,7 +12,7 @@ cd /d "%~dp0"
 
 echo.
 echo  ============================================================
-echo   TachiDUBB Studio Installer - Plug-and-Play AI Video Dubbing
+echo   GoChiDUBB Studio Installer - Plug-and-Play AI Video Dubbing
 echo  ============================================================
 echo.
 

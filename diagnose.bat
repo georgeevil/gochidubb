@@ -1,5 +1,5 @@
 @echo off
-echo === TachiDUBB Studio Diagnostic ===
+echo === GoChiDUBB Studio Diagnostic ===
 echo.
 echo Current directory: %CD%
 echo.

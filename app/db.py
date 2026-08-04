@@ -5,7 +5,9 @@ the existing in-memory dict API intact (all code that does `jobs[id]` still
 works) while adding durable, queryable storage.
 
 Migration: on startup, any existing jobs_db/*.json files are imported into
-SQLite automatically so there is zero data loss when upgrading.
+SQLite automatically so there is zero data loss when upgrading. A store left
+under the pre-rename name (tachidubb.db) is adopted the same way — see
+_migrate_legacy_db_name.
 
 Why SQLite over flat JSON:
   - O(1) read/write per job instead of O(n) directory scan on load
@@ -21,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("tachidubb.db")
+log = logging.getLogger("gochidubb.db")
 
 _DB_PATH: Optional[Path] = None
 _lock = asyncio.Lock()
@@ -30,10 +32,40 @@ _lock = asyncio.Lock()
 _LARGE_FIELDS = {"transcript", "transcript_raw", "_pending_args"}
 
 
+def _migrate_legacy_db_name(db_path: Path) -> None:
+    """Adopt a pre-rename tachidubb.db sitting next to us.
+
+    The project was renamed TachiDUBB → GoChiDUBB, and with it the store's
+    filename. Without this, an upgrade looks like every job was deleted:
+    sqlite3.connect() happily creates a new empty gochidubb.db and the job
+    list comes up blank with the real history still on disk, unreferenced.
+
+    Only fires when the new name does not exist yet, so it can never
+    clobber a live store. The -journal/-wal/-shm siblings move too — a WAL
+    left behind would be matched against the wrong database file.
+    """
+    legacy = db_path.with_name("tachidubb.db")
+    if db_path.exists() or not legacy.exists():
+        return
+    try:
+        legacy.rename(db_path)
+        for suffix in ("-journal", "-wal", "-shm"):
+            sidecar = legacy.with_name(legacy.name + suffix)
+            if sidecar.exists():
+                sidecar.rename(db_path.with_name(db_path.name + suffix))
+        log.info(f"[db] Adopted pre-rename store: {legacy.name} → {db_path.name}")
+    except OSError as e:
+        # Keep going against a fresh DB rather than refusing to start; the
+        # old file is untouched and can be moved by hand.
+        log.warning(f"[db] Could not adopt {legacy.name}: {e}")
+
+
 def init_db(db_path: Path) -> None:
     """Create table and migrate existing JSON files. Synchronous — call once at startup."""
     global _DB_PATH
     _DB_PATH = db_path
+
+    _migrate_legacy_db_name(db_path)
 
     conn = sqlite3.connect(str(db_path))
     conn.execute("""

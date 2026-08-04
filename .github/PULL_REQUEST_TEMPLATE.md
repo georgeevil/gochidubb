@@ -14,7 +14,7 @@
 
 ```bash
 # example
-python tools/tachidubb_cli.py dub <some url> --lang fr --wait
+python tools/gochidubb_cli.py dub <some url> --lang fr --wait
 ```
 
 ## Screenshots / clips

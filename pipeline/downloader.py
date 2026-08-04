@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 
-log = logging.getLogger("tachidubb.downloader")
+log = logging.getLogger("gochidubb.downloader")
 
 
 def _find_ytdlp() -> str:

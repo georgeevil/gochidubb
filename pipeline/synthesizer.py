@@ -15,7 +15,7 @@ import traceback
 import types
 from typing import Optional
 
-log = logging.getLogger("tachidubb.synthesizer")
+log = logging.getLogger("gochidubb.synthesizer")
 
 # Track whether we've logged the full tier-1 traceback once per process
 _TIER1_DIAG_LOGGED = False
@@ -58,7 +58,7 @@ def _ensure_sb_stubs():
     ):
         if name not in sys.modules:
             m = types.ModuleType(name)
-            m.__file__ = f"<tachidubb-stub:{name}>"
+            m.__file__ = f"<gochidubb-stub:{name}>"
             m.__path__ = []
             sys.modules[name] = m
 
@@ -516,7 +516,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         }
 
         # Write job.json
-        tmpdir = tempfile.mkdtemp(prefix="tachidubb_tts_")
+        tmpdir = tempfile.mkdtemp(prefix="gochidubb_tts_")
         job_path = os.path.join(tmpdir, "job.json")
         with open(job_path, "w", encoding="utf-8") as f:
             json.dump(job, f, ensure_ascii=False)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# TachiDUBB Studio — Server Launcher
+# GoChiDUBB Studio — Server Launcher
 # ====================================
 # Uses the server manager for clean process lifecycle.
 # Run: ./start.sh
-# Or:  python tools/tachidubb_serverctl.py start
+# Or:  python tools/gochidubb_serverctl.py start
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -30,15 +30,15 @@ fi
 
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║  TachiDUBB Studio                    ║"
+echo "║  GoChiDUBB Studio                    ║"
 echo "║  http://localhost:8910               ║"
 echo "║                                      ║"
 echo "║  Manage with:                        ║"
-echo "║    python tools/tachidubb_serverctl.py status   ║"
-echo "║    python tools/tachidubb_serverctl.py stop     ║"
-echo "║    python tools/tachidubb_serverctl.py logs -f  ║"
+echo "║    python tools/gochidubb_serverctl.py status   ║"
+echo "║    python tools/gochidubb_serverctl.py stop     ║"
+echo "║    python tools/gochidubb_serverctl.py logs -f  ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
 # Use the server manager to start in foreground
-exec python tools/tachidubb_serverctl.py foreground
+exec python tools/gochidubb_serverctl.py foreground

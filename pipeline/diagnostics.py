@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from .notices import merge_notices, notice
 
-log = logging.getLogger("tachidubb.diagnostics")
+log = logging.getLogger("gochidubb.diagnostics")
 
 # The repos pyannote actually needs. speaker-diarization-3.1 is a *pipeline*
 # whose config pulls in segmentation-3.0; each is gated separately, and it is
