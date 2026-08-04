@@ -322,6 +322,16 @@ const fmtAge = (ts) => {
   return dt.toLocaleDateString();
 };
 
+// Abbreviated view counts for the Discover tab — trending numbers span
+// 5 orders of magnitude, so "1.8B" reads where "1,791,203,554" doesn't.
+const fmtViews = (n) => {
+  if (n === null || n === undefined) return '—';
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return Math.round(n / 1e3) + 'K';
+  return String(n);
+};
+
 // Keep in sync with the @media block in the stylesheet above — the CSS
 // retunes spacing, this drives the structural change (rail becomes a drawer).
 const NARROW_QUERY = '(max-width: 860px)';
@@ -387,6 +397,7 @@ const I = {
   cancel:     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="6" cy="6" r="4.5"/><path d="M4.2 4.2l3.6 3.6"/></svg>,
   check:      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2.5 6.5l2.5 2.5 5-6"/></svg>,
   search:     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="5" cy="5" r="3.5"/><path d="M7.6 7.6L11 11"/></svg>,
+  discover:   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="6"/><path d="M10.6 5.4L9.2 9.2 5.4 10.6 6.8 6.8z"/></svg>,
   cpu:        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><rect x="3" y="3" width="6" height="6" rx="1"/><path d="M5 1v1.5M7 1v1.5M5 9.5V11M7 9.5V11M1 5h1.5M1 7h1.5M9.5 5H11M9.5 7H11"/></svg>,
   arrow:      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 6h6m0 0L6.5 3.5M9 6L6.5 8.5"/></svg>,
   copy:       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><path d="M2 8.5V2.5h6"/></svg>,
@@ -696,13 +707,17 @@ function NoticeCard({ n }) {
 // LEFT RAIL (simplified)
 // ═══════════════════════════════════════════════════════════════════
 function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
+                    publishPendingCount = 0,
                     narrow = false, open = false, onClose }) {
   const sections = [
     { id: 'home',        label: 'Home',         hint: 'Upload · queue',       ic: I.home },
+    { id: 'discover',    label: 'Discover',     hint: 'Trending · scout',     ic: I.discover },
     { id: 'processing',  label: 'Processing',   hint: runningJob ? 'Live job' : 'Idle', ic: I.processing, badge: runningJob ? '●' : null },
     { id: 'review',      label: 'Review',       hint: awaitingReviewCount > 0 ? 'Wizard pause' : 'Nothing pending', ic: I.review, badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : null },
     { id: 'result',      label: 'Result',       hint: 'Last completed',       ic: I.result },
-    { id: 'history',     label: 'History',      hint: 'All jobs',             ic: I.history },
+    // The publish inbox rides on History — that's where staged jobs live,
+    // so the count doubles as "N jobs waiting for your approval".
+    { id: 'history',     label: 'History',      hint: publishPendingCount > 0 ? `${publishPendingCount} to publish` : 'All jobs', ic: I.history, badge: publishPendingCount > 0 ? String(publishPendingCount) : null },
     { id: 'batch',       label: 'Batch',        hint: 'Queue & scheduled',    ic: I.batch },
     { id: 'voices',      label: 'Voices',       hint: 'Library · clone refs', ic: I.voice || I.review },
     { id: 'glossary',    label: 'Glossary',     hint: 'Translation overrides',ic: I.glossary || I.edit },
@@ -858,7 +873,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
   const TITLES = {
     home: 'Home', processing: 'Processing', review: 'Review · wizard pause',
     result: 'Result', history: 'History', batch: 'Batch queue', system: 'System',
-    voices: 'Voices', glossary: 'Glossary',
+    voices: 'Voices', glossary: 'Glossary', discover: 'Discover · trending',
   };
   const issues = notices || [];
   const worst = issues.some(n => n.severity === 'error') ? 'error'
@@ -2094,7 +2109,9 @@ function StagePanel({ jobId, system, voicePresets, onChanged, defaultOpen = true
   if (!jobId) return null;
 
   return (
-    <div className="panel" style={{ padding: 16, width: '100%' }}>
+    // data-stage-panel: anchor for the Quality panel's "→ fix it" hints,
+    // which scroll here — the retry controls live in this panel.
+    <div className="panel" data-stage-panel={jobId} style={{ padding: 16, width: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
            onClick={() => setExpanded(e => !e)}>
         <div className="caps">Pipeline stages</div>
@@ -2141,6 +2158,484 @@ function StagePanel({ jobId, system, voicePresets, onChanged, defaultOpen = true
               re-done — their output no longer reflects the current input. Re-run
               them (or any stage above) to refresh.
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// QUALITY PANEL — per-stage scores + verdicts
+// ═══════════════════════════════════════════════════════════════════
+// Mirrors GET /api/dub/{id}/quality: rollup.stages holds 0-100 scores per
+// stage (or available:false when a stage produced nothing to measure) and
+// rollup.verdicts carries actionable findings. The report walks checkpoint
+// files on disk, so it is fetched lazily — only once the section is opened.
+const QUALITY_STAGE_LABELS = [
+  ['asr', 'Transcription'],
+  ['translation', 'Translation'],
+  ['tts', 'TTS'],
+  ['timing', 'Timing'],
+  ['loudness', 'Loudness'],
+];
+
+const scoreColor = (s) =>
+  s === null || s === undefined ? 'var(--ink-4)'
+  : s >= 80 ? 'var(--accent)'
+  : s >= 50 ? 'var(--warn)'
+  : 'var(--err)';
+
+// suggested_action values name existing server routes; the retry controls
+// for all of them live in the Pipeline stages panel, so the hint scrolls
+// there rather than pretending each has its own editor.
+const QUALITY_ACTION_HINTS = {
+  retranslate: 'Re-run Translate',
+  edit_translations: 'Edit translations',
+  retry_tts: 'Retry TTS',
+  regenerate_segment: 'Regenerate segment',
+};
+
+const VERDICT_SEV_META = {
+  serious: { icon: '⚠', color: 'var(--err)' },
+  warn:    { icon: '⚠', color: 'var(--warn)' },
+  info:    { icon: 'ℹ', color: 'var(--ink-2)' },
+};
+
+function QualityVerdict({ v, jobId }) {
+  const meta = VERDICT_SEV_META[v.severity] || VERDICT_SEV_META.info;
+  const hint = v.suggested_action &&
+    (QUALITY_ACTION_HINTS[v.suggested_action] || v.suggested_action.replace(/_/g, ' '));
+  const jumpToStages = () => {
+    const el = document.querySelector(`[data-stage-panel="${jobId}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0',
+                  borderTop: '1px solid var(--line)' }}>
+      <span style={{ color: meta.color, flexShrink: 0, width: 14, textAlign: 'center' }}>{meta.icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-2)', lineHeight: 1.5 }} className="wrap-any">
+          <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginRight: 6 }}>{v.stage}</span>
+          {v.message}
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
+          {v.segment_indices?.length > 0 && (
+            <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)' }}>
+              segments {v.segment_indices.slice(0, 8).join(', ')}
+              {v.segment_indices.length > 8 ? ` +${v.segment_indices.length - 8} more` : ''}
+            </span>
+          )}
+          {hint && (
+            <button onClick={jumpToStages} className="mono"
+                    title="The retry controls are in the Pipeline stages panel"
+                    style={{ fontSize: 10, color: 'var(--accent)', cursor: 'pointer', padding: 0 }}>
+              → {hint}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QualityPanel({ jobId, defaultOpen = false }) {
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!jobId) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/dub/${jobId}/quality`);
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || d.detail || `HTTP ${r.status}`); setData(null); }
+      else { setData(d); setErr(''); }
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setLoading(false); }
+  }, [jobId]);
+
+  useEffect(() => {
+    if (expanded && !data && !err && !loading) load();
+  }, [expanded]);
+
+  if (!jobId) return null;
+  const rollup = data?.rollup;
+
+  return (
+    <div className="panel" style={{ padding: 16, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+           onClick={() => setExpanded(e => !e)}>
+        <div className="caps">Quality</div>
+        {rollup && rollup.overall !== null && rollup.overall !== undefined && (
+          <span className="mono" style={{ fontSize: 10.5, color: scoreColor(rollup.overall) }}>
+            {rollup.overall}/100
+          </span>
+        )}
+        <div style={{ flex: 1 }}/>
+        {expanded && data && (
+          <button className="btn btn-ghost" style={{ padding: '2px 7px', fontSize: 10.5 }}
+                  onClick={e => { e.stopPropagation(); load(); }}>
+            {I.refresh} Refresh
+          </button>
+        )}
+        <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+      </div>
+
+      {expanded && loading && !data && (
+        <div style={{ color: 'var(--ink-3)', marginTop: 12, fontSize: 12 }}>Scoring…</div>
+      )}
+      {expanded && err && (
+        <div style={{ color: 'var(--ink-3)', marginTop: 12, fontSize: 12 }}>
+          No quality report — {err}
+        </div>
+      )}
+
+      {expanded && rollup && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+            {/* Overall first and big — the chips explain it, not the reverse. */}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span className="serif" style={{ fontSize: 40, lineHeight: 1,
+                                               color: scoreColor(rollup.overall) }}>
+                {rollup.overall ?? '—'}
+              </span>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>/100 overall</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {QUALITY_STAGE_LABELS.map(([key, label]) => {
+                const st = rollup.stages?.[key];
+                if (!st || !st.available) {
+                  // Not-measured is neutral, not a failing grade: a stage
+                  // that produced no artifacts simply has nothing to score.
+                  return (
+                    <span key={key} className="chip" style={{ opacity: 0.55 }}>
+                      {label} <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)' }}>not measured</span>
+                    </span>
+                  );
+                }
+                const c = scoreColor(st.score);
+                return (
+                  <span key={key} className="chip" style={{ color: c, borderColor: c + '50' }}>
+                    {label} <span className="mono" style={{ fontSize: 10 }}>{st.score}</span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+          {data.n_segments !== undefined && (
+            <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)', marginTop: 8 }}>
+              {data.n_segments} segments · scored from the {data.segments_from || '?'} checkpoint
+            </div>
+          )}
+          {(rollup.verdicts || []).length > 0 ? (
+            <div style={{ marginTop: 10 }}>
+              {rollup.verdicts.map((v, i) => <QualityVerdict key={i} v={v} jobId={jobId}/>)}
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--ink-3)' }}>
+              No findings — nothing needs attention.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PUBLISH PANEL — stage → review duplicates → approve → upload to VK
+// ═══════════════════════════════════════════════════════════════════
+// Talks to /api/dub/{id}/publish[...] and /api/secrets. The lifecycle is
+// deliberately human-gated: staging never uploads anything; only Approve
+// does. A GET 404 simply means "not staged yet" — including on servers
+// where the publish backend hasn't landed, where the Stage button will
+// report the missing route as an inline error.
+const DUP_VERDICT_META = {
+  likely_duplicate: { color: 'var(--err)',    bg: 'oklch(0.7 0.2 25 / 0.08)',   line: 'oklch(0.7 0.2 25 / 0.3)',
+                      label: 'A very similar video already exists on VK' },
+  possible:         { color: 'var(--warn)',   bg: 'oklch(0.78 0.15 60 / 0.08)', line: 'oklch(0.78 0.15 60 / 0.3)',
+                      label: 'Possibly similar videos found — check the list before uploading' },
+  clear:            { color: 'var(--accent)', bg: 'var(--accent-dim)',          line: 'var(--line-2)',
+                      label: 'No similar uploads found' },
+  unchecked:        { color: 'var(--ink-3)',  bg: 'var(--bg-1)',                line: 'var(--line)',
+                      label: "Couldn't check for duplicates" },
+};
+
+const dupScorePct = (s) => {
+  if (s === null || s === undefined) return '—';
+  return `${Math.round(s <= 1 ? s * 100 : s)}%`;
+};
+
+function Spinner() {
+  return <span className="dot" style={{ background: 'var(--accent)',
+    boxShadow: '0 0 8px var(--accent-glow)', animation: 'pulse 1.2s infinite' }}/>;
+}
+
+function PublishPanel({ jobId, defaultOpen = false }) {
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [pub, setPub] = useState(null);        // P from the contract, or null
+  const [loaded, setLoaded] = useState(false); // first GET finished (404 counts)
+  const [secrets, setSecrets] = useState(null);
+  const [tokenInput, setTokenInput] = useState('');
+  const [title, setTitle] = useState('');
+  const [desc, setDesc] = useState('');
+  const [warning, setWarning] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // Seed the editable fields only from a deliberate load or a fresh stage —
+  // never from the 3s poll, which would fight the user's typing.
+  const applyPub = useCallback((P, seed) => {
+    setPub(P || null);
+    if (seed && P) { setTitle(P.title || ''); setDesc(P.description || ''); }
+  }, []);
+
+  const loadPublish = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/dub/${jobId}/publish`);
+      if (r.status === 404) { setPub(null); }
+      else {
+        const d = await r.json();
+        if (r.ok) applyPub(d.publish, true);
+      }
+    } catch (_) {}
+    setLoaded(true);
+  }, [jobId, applyPub]);
+
+  const loadSecrets = useCallback(async () => {
+    try {
+      const r = await fetch('/api/secrets/status');
+      if (r.ok) setSecrets(await r.json());
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    if (expanded && !loaded) { loadPublish(); loadSecrets(); }
+  }, [expanded, loaded, loadPublish, loadSecrets]);
+
+  // While the server owns the upload, watch it.
+  const inFlight = pub && (pub.status === 'approved' || pub.status === 'uploading');
+  useEffect(() => {
+    if (!expanded || !inFlight) return;
+    const t = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/dub/${jobId}/publish`);
+        if (r.ok) { const d = await r.json(); setPub(d.publish || null); }
+      } catch (_) {}
+    }, 3000);
+    return () => clearInterval(t);
+  }, [expanded, inFlight, jobId]);
+
+  const post = async (path, body) => {
+    setBusy(true); setErr('');
+    try {
+      const r = await fetch(`/api/dub/${jobId}/publish/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error || d.detail || `HTTP ${r.status}`); return null; }
+      return d;
+    } catch (e) { setErr(String(e.message || e)); return null; }
+    finally { setBusy(false); }
+  };
+
+  const stage = async () => {
+    const d = await post('stage', { platform: 'vk' });
+    if (d) { applyPub(d.publish, true); setWarning(d.warning || ''); }
+  };
+  const approve = async () => {
+    const d = await post('approve', { title, description: desc });
+    if (d) applyPub(d.publish, false);
+  };
+  const cancel = async () => {
+    const d = await post('cancel');
+    if (d) { applyPub(d.publish, false); setWarning(''); }
+  };
+
+  const saveToken = async () => {
+    setBusy(true); setErr('');
+    try {
+      const r = await fetch('/api/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vk_access_token: tokenInput.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) setErr(d.error || `HTTP ${r.status}`);
+      else { setSecrets(d.status || null); setTokenInput(''); }
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!jobId) return null;
+  const hasToken = !!(secrets && secrets.vk_access_token);
+  const status = pub?.status;
+  const dupMeta = pub && (DUP_VERDICT_META[pub.duplicate_verdict] || DUP_VERDICT_META.unchecked);
+  const statusChip =
+    status === 'uploaded' ? { c: 'var(--accent)', t: 'uploaded' } :
+    status === 'failed'   ? { c: 'var(--err)',    t: 'failed' } :
+    inFlight              ? { c: 'var(--accent)', t: status } :
+    status === 'staged'   ? { c: 'var(--warn)',   t: 'awaiting approval' } :
+    null;
+
+  return (
+    <div className="panel" style={{ padding: 16, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+           onClick={() => setExpanded(e => !e)}>
+        <div className="caps">Publish</div>
+        {statusChip && (
+          <span className="mono" style={{ fontSize: 10.5, color: statusChip.c }}>{statusChip.t}</span>
+        )}
+        <div style={{ flex: 1 }}/>
+        <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+      </div>
+
+      {expanded && !loaded && (
+        <div style={{ color: 'var(--ink-3)', marginTop: 12, fontSize: 12 }}>Loading…</div>
+      )}
+
+      {expanded && loaded && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {err && (
+            <div style={{ padding: '8px 10px', borderRadius: 6, fontSize: 11.5, color: 'var(--err)',
+                          background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)' }}>
+              {err}
+            </div>
+          )}
+
+          {/* Credentials gate — the token is write-only: posted once, then
+              only its presence boolean ever comes back. */}
+          {secrets && !hasToken && (
+            <div style={{ padding: 12, background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 8 }}>
+              <div className="caps" style={{ marginBottom: 6 }}>VK access token</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.55, marginBottom: 8 }}>
+                Publishing needs a VK access token with the <span className="mono">video</span> scope
+                (create one at vk.com → manage apps, or via an API token generator for your group).
+                Stored locally, never shown again.
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="field" type="password" placeholder="vk1.a.…"
+                       value={tokenInput} onChange={e => setTokenInput(e.target.value)}
+                       style={{ flex: 1, minWidth: 200, maxWidth: 340 }}/>
+                <button className="btn" onClick={saveToken} disabled={busy || !tokenInput.trim()}>
+                  Save token
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Not staged yet (or cancelled): the one-button entry point. */}
+          {(!pub || status === 'cancelled') && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" onClick={stage} disabled={busy || !hasToken}>
+                {busy ? 'Staging…' : 'Publish to VK'}
+              </button>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+                {status === 'cancelled'
+                  ? 'Publish was cancelled — stage again to restart.'
+                  : 'Stages the upload for review first — nothing is sent until you approve.'}
+              </span>
+            </div>
+          )}
+
+          {pub && status !== 'cancelled' && (
+            <React.Fragment>
+              {warning && (
+                <div style={{ padding: '8px 10px', borderRadius: 6, fontSize: 11.5, color: 'var(--warn)',
+                              background: 'oklch(0.78 0.15 60 / 0.08)', border: '1px solid oklch(0.78 0.15 60 / 0.3)' }}>
+                  {warning}
+                </div>
+              )}
+
+              {/* Duplicate check banner + the matches behind it. */}
+              {dupMeta && status !== 'uploaded' && (
+                <div style={{ padding: '9px 11px', borderRadius: 6, background: dupMeta.bg,
+                              border: '1px solid ' + dupMeta.line }}>
+                  <div style={{ fontSize: 11.5, color: dupMeta.color }}>{dupMeta.label}</div>
+                  {(pub.duplicate_warnings || []).length > 0 && (
+                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {pub.duplicate_warnings.map((w, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11 }}>
+                          {w.url ? (
+                            <a href={w.url} target="_blank" rel="noreferrer" className="wrap-any"
+                               style={{ color: 'var(--ink)', flex: 1, minWidth: 0 }}>{w.title || w.url}</a>
+                          ) : (
+                            <span className="wrap-any" style={{ color: 'var(--ink)', flex: 1, minWidth: 0 }}>{w.title}</span>
+                          )}
+                          <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', flexShrink: 0 }}>
+                            {w.duration != null ? fmtSec(w.duration) : '—'} · {dupScorePct(w.score)} match
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Staged / failed: metadata is editable until it is approved. */}
+              {(status === 'staged' || status === 'failed') && (
+                <React.Fragment>
+                  <Field label="Title">
+                    <input className="field" value={title} onChange={e => setTitle(e.target.value)}/>
+                  </Field>
+                  <Field label="Description">
+                    <textarea className="field" value={desc} onChange={e => setDesc(e.target.value)}
+                              style={{ resize: 'vertical', minHeight: 72 }}/>
+                  </Field>
+                  {(pub.tags || []).length > 0 && (
+                    <div>
+                      <div className="caps" style={{ marginBottom: 5 }}>Tags</div>
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {pub.tags.map((t, i) => <span key={i} className="chip" style={{ fontSize: 10 }}>{t}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {status === 'failed' && (
+                    <div style={{ padding: '8px 10px', borderRadius: 6, fontSize: 11.5,
+                                  background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)' }}>
+                      <div style={{ color: 'var(--err)' }} className="wrap-any">{pub.error || 'Upload failed.'}</div>
+                      <div style={{ color: 'var(--ink-3)', marginTop: 3, fontSize: 11 }}>Approve again to retry.</div>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button className="btn btn-primary" onClick={approve} disabled={busy}>
+                      {busy ? 'Sending…' : 'Approve & upload'}
+                    </button>
+                    <button className="btn" onClick={cancel} disabled={busy}>Cancel</button>
+                  </div>
+                </React.Fragment>
+              )}
+
+              {inFlight && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--ink-2)' }}>
+                  <Spinner/>
+                  {status === 'uploading' ? 'Uploading to VK…' : 'Approved — waiting for the uploader…'}
+                </div>
+              )}
+
+              {status === 'uploaded' && (
+                <div style={{ padding: '10px 12px', borderRadius: 6, background: 'var(--accent-dim)',
+                              border: '1px solid var(--line-2)', fontSize: 12 }}>
+                  <span style={{ color: 'var(--accent)' }}>✓ Uploaded</span>
+                  {pub.url && (
+                    <a href={pub.url} target="_blank" rel="noreferrer"
+                       style={{ color: 'var(--accent)', marginLeft: 10 }} className="wrap-any">
+                      {pub.url.replace(/^https?:\/\//, '')} ↗
+                    </a>
+                  )}
+                  {pub.uploaded_at && (
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', marginLeft: 10 }}>
+                      {fmtAge(pub.uploaded_at)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </React.Fragment>
           )}
         </div>
       )}
@@ -2245,6 +2740,14 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
           <a className="btn btn-primary" href={`/outputs/${job.id}/dubbed_video.mp4`} download>Download MP4</a>
           <button className="btn" onClick={onSwitchToHistory}>Back to History</button>
         </div>
+        {/* Quality first (should you publish this?), then publish, then the
+            stage controls that fix whatever quality flagged. */}
+        {job.status === 'complete' && (
+          <QualityPanel jobId={job.id} defaultOpen={false}/>
+        )}
+        {job.status === 'complete' && (
+          <PublishPanel jobId={job.id} defaultOpen={true}/>
+        )}
         {/* Stages stay available after completion: this is where you re-run
             just the translation with a better model, or re-synthesize a
             voice, without paying for transcription again. */}
@@ -2258,20 +2761,47 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
 // ═══════════════════════════════════════════════════════════════════
 // HISTORY VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
-function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpReview, onJumpResult, onRefresh }) {
+function HistoryView({ jobs, system, voicePresets, publishPending = [],
+                       onJumpProcessing, onJumpReview, onJumpResult, onRefresh }) {
   // Which job's stage breakdown is expanded. Errored jobs are the main
   // reason to open this — the panel says which stage died and offers a
   // retry from exactly there.
   const [openId, setOpenId] = useState(null);
+  // Publish inbox: filter the list down to jobs waiting for approval.
+  const [publishOnly, setPublishOnly] = useState(false);
+  const pendingIds = useMemo(() => new Set(publishPending.map(p => p.job_id)), [publishPending]);
+  const shown = publishOnly ? jobs.filter(j => pendingIds.has(j.id)) : jobs;
   return (
     <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)', marginBottom: 20 }}>History · {jobs.length} jobs</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)' }}>History · {jobs.length} jobs</div>
+        {publishPending.length > 0 && (
+          <button className="chip" onClick={() => setPublishOnly(o => !o)} style={{
+            color: 'var(--warn)', cursor: 'pointer',
+            borderColor: 'oklch(0.78 0.15 60 / 0.3)',
+            background: publishOnly ? 'oklch(0.78 0.15 60 / 0.15)' : 'oklch(0.78 0.15 60 / 0.06)',
+          }}>
+            {publishPending.length} awaiting publish approval {publishOnly ? '· show all' : ''}
+          </button>
+        )}
+      </div>
+      {publishOnly && shown.length === 0 && (
+        <div style={{ color: 'var(--ink-3)', fontSize: 12, marginBottom: 12 }}>
+          Pending publishes exist but their jobs are not in the visible list.
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {jobs.slice(0, 20).map(j => (
+        {shown.slice(0, 20).map(j => (
           <div key={j.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 10 }}>
               <StatusBadge status={j.status}/>
               <div style={{ flex: 1 }}>{j.title || j.source_label || j.source || j.id}</div>
+              {pendingIds.has(j.id) && (
+                <span className="chip" style={{ fontSize: 10, color: 'var(--warn)',
+                                                borderColor: 'oklch(0.78 0.15 60 / 0.3)' }}>
+                  publish pending
+                </span>
+              )}
               {j.failed_stage && (
                 <span className="mono" style={{ fontSize: 10.5, color: 'var(--err)' }}>
                   failed at {j.failed_stage}
@@ -2285,7 +2815,11 @@ function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpRevie
               {j.status === 'complete' && <button className="btn" onClick={() => onJumpResult(j.id)}>View</button>}
             </div>
             {openId === j.id && (
-              <div style={{ padding: '0 10px 10px' }}>
+              <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {j.status === 'complete' && <QualityPanel jobId={j.id}/>}
+                {j.status === 'complete' && (
+                  <PublishPanel jobId={j.id} defaultOpen={pendingIds.has(j.id)}/>
+                )}
                 <StagePanel jobId={j.id} system={system} voicePresets={voicePresets}
                             onChanged={onRefresh}/>
               </div>
@@ -2660,6 +3194,249 @@ function GlossaryEditor() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// DISCOVER VIEW — trending candidates from the scout (app/scout.py)
+// ═══════════════════════════════════════════════════════════════════
+// GET /api/scout/trending returns normalized candidates + which source
+// actually served ("mostviewed" vs the yt-dlp fallback). Each card can
+// submit straight into the dub queue via POST /api/scout/dub.
+const SCOUT_COUNTRIES = [
+  ['global', 'Global'], ['usa', 'USA'], ['uk', 'UK'], ['india', 'India'],
+  ['germany', 'Germany'], ['canada', 'Canada'], ['brazil', 'Brazil'],
+  ['australia', 'Australia'],
+];
+
+function RankDelta({ delta }) {
+  if (!delta) return null;
+  const up = delta > 0;
+  return (
+    <span className="mono" style={{ fontSize: 10, color: up ? 'var(--accent)' : 'var(--err)' }}>
+      {up ? '▲' : '▼'}{Math.abs(delta)}
+    </span>
+  );
+}
+
+function ScoutCard({ cand, onJumpResult, onJumpProcessing }) {
+  // Default to the same target language the Dub form remembers.
+  const [lang, setLang] = useState(() => _lsGet('tgtLang', 'ru'));
+  const [state, setState] = useState({ phase: 'idle' }); // idle|sending|queued|error
+  const [thumbBroken, setThumbBroken] = useState(false);
+
+  const dub = async () => {
+    setState({ phase: 'sending' });
+    try {
+      const r = await fetch('/api/scout/dub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: cand.url, video_id: cand.video_id,
+          target_lang: lang, mode: 'auto', is_music: cand.is_music,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.job_id) setState({ phase: 'queued', jobId: d.job_id });
+      else setState({ phase: 'error', msg: d.error || d.detail || `HTTP ${r.status}` });
+    } catch (e) { setState({ phase: 'error', msg: String(e.message || e) }); }
+  };
+
+  return (
+    <div className="panel" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'relative', aspectRatio: '16 / 9', background: 'var(--bg-2)' }}>
+        {cand.thumb_url && !thumbBroken && (
+          <img src={cand.thumb_url} alt="" loading="lazy"
+               onError={() => setThumbBroken(true)}
+               style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
+        )}
+        {cand.duration_sec != null && (
+          <span className="mono" style={{
+            position: 'absolute', right: 6, bottom: 6, fontSize: 10,
+            padding: '1px 6px', borderRadius: 4, background: 'rgba(0,0,0,0.75)', color: '#fff',
+          }}>{fmtSec(cand.duration_sec)}</span>
+        )}
+        {cand.rank != null && (
+          <span className="mono" style={{
+            position: 'absolute', left: 6, top: 6, fontSize: 10,
+            padding: '1px 7px', borderRadius: 4, background: 'rgba(0,0,0,0.75)', color: '#fff',
+            display: 'inline-flex', gap: 5, alignItems: 'baseline',
+          }}>#{cand.rank} <RankDelta delta={cand.rank_delta}/></span>
+        )}
+      </div>
+
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 7, flex: 1 }}>
+        <a href={cand.url} target="_blank" rel="noreferrer" className="wrap-any"
+           style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--ink)', textDecoration: 'none',
+                    lineHeight: 1.4 }}>
+          {cand.title || cand.video_id}
+        </a>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', display: 'flex',
+                                       gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          {cand.channel && <span className="wrap-any">{cand.channel}</span>}
+          {cand.view_count != null && (
+            <span style={{ color: 'var(--ink-4)' }}>{fmtViews(cand.view_count)} views</span>
+          )}
+        </div>
+
+        {(cand.is_music || cand.is_short || cand.already_processed) && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+            {cand.is_music && (
+              <span className="chip" style={{ fontSize: 10, color: 'var(--warn)',
+                                              borderColor: 'oklch(0.78 0.15 60 / 0.3)' }}>
+                Music — reupload
+              </span>
+            )}
+            {cand.is_short && <span className="chip" style={{ fontSize: 10 }}>Short</span>}
+            {cand.already_processed && (
+              cand.existing_job_id ? (
+                <button className="chip" onClick={() => onJumpResult(cand.existing_job_id)}
+                        style={{ fontSize: 10, color: 'var(--accent)', cursor: 'pointer',
+                                 borderColor: 'var(--accent-dim)' }}>
+                  Already processed →
+                </button>
+              ) : (
+                <span className="chip" style={{ fontSize: 10 }}>Already processed</span>
+              )
+            )}
+          </div>
+        )}
+
+        <div style={{ flex: 1 }}/>
+
+        {state.phase === 'queued' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
+            <span style={{ color: 'var(--accent)' }}>✓ Queued</span>
+            <button className="chip" onClick={onJumpProcessing}
+                    style={{ fontSize: 10, color: 'var(--accent)', cursor: 'pointer',
+                             borderColor: 'var(--accent-dim)' }}>
+              {String(state.jobId).slice(0, 8)} → watch
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <select className="field" value={lang} onChange={e => setLang(e.target.value)}
+                    style={{ flex: 1, fontSize: 11.5, padding: '5px 8px' }}>
+              {LANGS.filter(l => l.c !== 'auto').map(l => (
+                <option key={l.c} value={l.c} style={{ background: '#16161c' }}>{l.n}</option>
+              ))}
+            </select>
+            <button className="btn btn-primary" onClick={dub}
+                    disabled={state.phase === 'sending'}
+                    style={{ padding: '5px 12px', fontSize: 11.5 }}>
+              {state.phase === 'sending' ? '…' : 'Dub'}
+            </button>
+          </div>
+        )}
+        {state.phase === 'error' && (
+          <div className="wrap-any" style={{ fontSize: 10.5, color: 'var(--err)', lineHeight: 1.4 }}>
+            {state.msg}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DiscoverView({ onJumpResult, onJumpProcessing }) {
+  const [country, setCountry] = useState(() => _lsGet('scout_country', 'global'));
+  const [category, setCategory] = useState('');
+  const [includeShorts, setIncludeShorts] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr('');
+    try {
+      const params = new URLSearchParams({ limit: '20' });
+      // "global" is the absence of a country filter, not a country slug.
+      if (country && country !== 'global') params.set('country', country);
+      if (category.trim()) params.set('category', category.trim());
+      if (includeShorts) params.set('include_shorts', 'true');
+      const r = await fetch('/api/scout/trending?' + params.toString());
+      const d = await r.json();
+      if (!r.ok || d.error) { setErr(d.error || `HTTP ${r.status}`); }
+      else setData(d);
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setLoading(false); }
+  }, [country, category, includeShorts]);
+
+  // Fetch once when the tab opens; after that the Refresh button owns it —
+  // the server caches upstream results, but there's no reason to hammer
+  // mostviewed.today on every keystroke in the category box.
+  useEffect(() => { load(); }, []);
+  useEffect(() => { _lsSet('scout_country', country); }, [country]);
+
+  const candidates = data?.candidates || [];
+
+  return (
+    <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 6, flexWrap: 'wrap' }}>
+          <div className="serif" style={{ fontSize: 'clamp(22px, 6vw, 32px)' }}>Discover</div>
+          <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+            trending on YouTube · pick one, pick a language, dub it
+          </span>
+        </div>
+        {data?.source && (
+          <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)', marginBottom: 14 }}>
+            via {data.source === 'mostviewed' ? 'mostviewed.today' : 'yt-dlp fallback'}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 18 }}>
+          <div style={{ minWidth: 140 }}>
+            <Field label="Country">
+              <Select value={country} onChange={setCountry}>
+                {SCOUT_COUNTRIES.map(([v, n]) => (
+                  <option key={v} value={v} style={{ background: '#16161c' }}>{n}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <div style={{ minWidth: 160 }}>
+            <Field label="Category (optional)">
+              <input className="field" value={category} onChange={e => setCategory(e.target.value)}
+                     placeholder="e.g. gaming, music, shorts"/>
+            </Field>
+          </div>
+          <label className="mono" style={{ fontSize: 10.5, color: 'var(--ink-2)', display: 'flex',
+                                           alignItems: 'center', gap: 6, cursor: 'pointer',
+                                           paddingBottom: 9 }}>
+            <input type="checkbox" checked={includeShorts}
+                   onChange={e => setIncludeShorts(e.target.checked)}
+                   style={{ accentColor: 'var(--accent)' }}/>
+            include shorts
+          </label>
+          <button className="btn" onClick={load} disabled={loading}>
+            {I.refresh} {loading ? 'Fetching…' : 'Refresh'}
+          </button>
+        </div>
+
+        {err && (
+          <div style={{ padding: '10px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12,
+                        background: 'oklch(0.7 0.2 25 / 0.08)', border: '1px solid oklch(0.7 0.2 25 / 0.3)',
+                        color: 'var(--err)' }} className="wrap-any">
+            {err}
+          </div>
+        )}
+
+        {loading && !data && (
+          <div style={{ color: 'var(--ink-3)', fontSize: 12 }}>Fetching trending videos…</div>
+        )}
+        {!loading && !err && data && candidates.length === 0 && (
+          <div style={{ color: 'var(--ink-3)', fontSize: 12 }}>No candidates returned — try another country or include shorts.</div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+          {candidates.map(c => (
+            <ScoutCard key={c.video_id || c.url} cand={c}
+                       onJumpResult={onJumpResult} onJumpProcessing={onJumpProcessing}/>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ROOT APP
 // ═══════════════════════════════════════════════════════════════════
 function App() {
@@ -2668,6 +3445,7 @@ function App() {
   const [voicePresets, setVoicePresets] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [sphereOn, setSphereOn] = useState(true);
+  const [publishPending, setPublishPending] = useState([]);
   const [selectedResultJobId, setSelectedResultJobId] = useState(null);
   const [selectedReviewJobId, setSelectedReviewJobId] = useState(null);
   const narrow = useIsNarrow();
@@ -2690,7 +3468,9 @@ function App() {
     fetch('/api/voices').then(r => r.json()).then(d => setVoicePresets(d.presets || [])).catch(() => {});
   }, [view]);
 
-  // Jobs polling
+  // Jobs polling. The publish inbox rides the same cadence — staged uploads
+  // only change when a human or the uploader acts, so it needs no faster loop.
+  // A 404 (backend without publish routes) just leaves the inbox empty.
   useEffect(() => {
     let stopped = false;
     const fetchJobs = async () => {
@@ -2698,6 +3478,13 @@ function App() {
         const r = await fetch('/api/jobs');
         const d = await r.json();
         if (!stopped) setJobs(d.jobs || []);
+      } catch (_) {}
+      try {
+        const r = await fetch('/api/publish/pending');
+        if (r.ok) {
+          const d = await r.json();
+          if (!stopped) setPublishPending(d.pending || []);
+        }
       } catch (_) {}
     };
     fetchJobs();
@@ -2732,6 +3519,7 @@ function App() {
         runningJob={runningJob}
         awaitingReviewCount={awaitingReviewCount}
         system={system}
+        publishPendingCount={publishPending.length}
         narrow={narrow} open={navOpen} onClose={() => setNavOpen(false)}
       />
 
@@ -2801,11 +3589,19 @@ function App() {
           />
         )}
 
+        {view === 'discover' && (
+          <DiscoverView
+            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
+            onJumpProcessing={() => setView('processing')}
+          />
+        )}
+
         {view === 'history' && (
           <HistoryView
             jobs={jobs}
             system={system}
             voicePresets={voicePresets}
+            publishPending={publishPending}
             onJumpProcessing={() => setView('processing')}
             onJumpReview={(id) => { setSelectedReviewJobId(id); setView('review'); }}
             onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
