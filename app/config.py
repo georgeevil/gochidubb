@@ -67,6 +67,13 @@ class UserConfig:
     tts_speed: str = "balanced"          # "fast" | "balanced" | "quality"
     warmup_on_start: bool = False        # pre-load VoxCPM at server start
 
+    # ── FFmpeg (extract / render) ─────────────────────────────────────
+    # Soft timeout: while ffmpeg keeps reporting encode progress the deadline
+    # is extended, so long videos can render past this. It only becomes a
+    # hard kill once no progress is seen for ffmpeg_stall_timeout seconds.
+    ffmpeg_timeout: int = 600
+    ffmpeg_stall_timeout: int = 120
+
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
     server_port: int = 8910
@@ -113,6 +120,8 @@ def _load_config() -> UserConfig:
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
         "GOCHIDUBB_WARMUP": "warmup_on_start",
+        "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
+        "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)
