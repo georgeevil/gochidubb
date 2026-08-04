@@ -894,7 +894,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
           fontSize: 10, color: 'var(--ink-4)', marginTop: 2, minWidth: 0,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
-          · {(runningJob.source_label || runningJob.source || runningJob.id).slice(0, 50)}
+          · {(runningJob.title || runningJob.source_label || runningJob.source || runningJob.id).slice(0, 50)}
         </span>
       )}
       <div style={{ flex: 1, minWidth: 8 }}/>
@@ -2168,7 +2168,7 @@ function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCance
       <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
           <div className="serif wrap-any" style={{ fontSize: 'clamp(16px, 4.4vw, 24px)' }}>
-            Processing: {runningJob.source_label || runningJob.id}
+            Processing: {runningJob.title || runningJob.source_label || runningJob.id}
           </div>
           <StatusBadge status={runningJob.status}/>
           <div style={{ flex: 1, minWidth: 160 }}>
@@ -2210,7 +2210,7 @@ function ReviewView({ jobs, selectedJobId, voicePresets, onContinued, onCancel, 
   }
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--pad)', background: 'var(--bg)' }}>
-      <div className="serif" style={{ fontSize: 24 }}>Review: {job.source_label || job.id}</div>
+      <div className="serif" style={{ fontSize: 24 }}>Review: {job.title || job.source_label || job.id}</div>
       <button className="btn btn-primary" style={{ marginLeft: 20 }} onClick={onContinued}>Continue</button>
     </div>
   );
@@ -2238,7 +2238,7 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
     <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column',
                     alignItems: 'center', gap: 20 }}>
-        <div className="serif" style={{ fontSize: 24 }}>{job.source_label || job.id}</div>
+        <div className="serif" style={{ fontSize: 24 }}>{job.title || job.source_label || job.id}</div>
         <video src={`/outputs/${job.id}/dubbed_video.mp4`} controls
                style={{ maxWidth: '100%', maxHeight: '55vh' }}/>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -2271,7 +2271,7 @@ function HistoryView({ jobs, system, voicePresets, onJumpProcessing, onJumpRevie
           <div key={j.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 10 }}>
               <StatusBadge status={j.status}/>
-              <div style={{ flex: 1 }}>{j.source_label || j.source || j.id}</div>
+              <div style={{ flex: 1 }}>{j.title || j.source_label || j.source || j.id}</div>
               {j.failed_stage && (
                 <span className="mono" style={{ fontSize: 10.5, color: 'var(--err)' }}>
                   failed at {j.failed_stage}

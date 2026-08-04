@@ -397,7 +397,7 @@ No GPU? It still runs — just expect long jobs. The pipeline auto-falls back to
 | Token | Required? | What for | Where to get |
 |---|---|---|---|
 | Hugging Face token (`HF_TOKEN`) | Only for multi-speaker diarization | Downloading pyannote diarization weights — gated by free terms-of-use acceptance | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — also accept terms at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) |
-| YouTube cookies (`YT_DLP_COOKIES_FROM_BROWSER`) | Only for age-restricted / member-only YouTube videos | yt-dlp downloads via your existing browser session | Auto — set to `chrome`, `firefox`, `edge` etc. |
+| YouTube cookies (`YT_DLP_COOKIES_FROM_BROWSER`) | Only for age-restricted / member-only YouTube videos | yt-dlp downloads & metadata probes via your existing browser session | Set to a browser name — `firefox` is the most reliable on macOS (Chrome/Safari keychains often block access); `chrome`, `edge`, `safari` also work. Alternative: `YT_DLP_COOKIEFILE=/path/to/cookies.txt` (Netscape format). Both are also editable as `ytdlp_cookies_from_browser` / `ytdlp_cookiefile` in Settings. |
 | OpenAI / ElevenLabs / Anthropic keys | **Never.** | — | — |
 
 What "phones home" by default:
@@ -529,7 +529,7 @@ Open the System tab → Models → click "Install" on `aya-expanse:8b` (best mul
 <details>
 <summary><b>YouTube download fails / SSL error</b></summary>
 
-Update yt-dlp: `venv\Scripts\activate && pip install -U yt-dlp`. If it's an age-restricted or region-blocked video, set `YT_DLP_COOKIES_FROM_BROWSER=chrome` in `.env`. For SSL errors, check firewall/VPN/corporate proxy.
+Update yt-dlp: `venv\Scripts\activate && pip install -U yt-dlp`. If it's an age-restricted or region-blocked video, set `YT_DLP_COOKIES_FROM_BROWSER=firefox` in `.env` (firefox is the most reliable on macOS; `chrome`/`edge`/`safari` also work but their keychains can block access). If browser cookie extraction fails, export a Netscape `cookies.txt` and point `YT_DLP_COOKIEFILE=/path/to/cookies.txt` at it. For SSL errors, check firewall/VPN/corporate proxy.
 
 </details>
 

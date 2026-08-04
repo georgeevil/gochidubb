@@ -74,6 +74,11 @@ class UserConfig:
     ffmpeg_timeout: int = 600
     ffmpeg_stall_timeout: int = 120
 
+    # ── Downloader (yt-dlp) ───────────────────────────────────────────
+    ytdlp_cookies_from_browser: str = ""   # e.g. "firefox", "chrome", "safari"
+    ytdlp_cookiefile: str = ""             # path to Netscape cookies.txt
+    max_source_duration_sec: int = 0       # 0 = no pre-download duration gate
+
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
     server_port: int = 8910
@@ -122,6 +127,9 @@ def _load_config() -> UserConfig:
         "GOCHIDUBB_WARMUP": "warmup_on_start",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
+        "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",
+        "YT_DLP_COOKIEFILE": "ytdlp_cookiefile",
+        "MAX_SOURCE_DURATION_SEC": "max_source_duration_sec",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)
