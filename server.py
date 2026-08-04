@@ -2703,16 +2703,20 @@ async def scout_dub(request: _ScoutRequest):
             is_music = bool(cand and cand.get("is_music"))
         mode = "reupload" if is_music else "dub"
 
-    if body.get("scheduled_at"):
-        return JSONResponse(
-            {"error": "scheduled_at is not supported on single dubs yet — "
-                      "use POST /api/dub/batch with scheduled_at, or omit it"},
-            501)
+    try:
+        scheduled_at = float(body.get("scheduled_at") or 0.0)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "scheduled_at must be unix epoch seconds"}, 400)
 
     # Reuse the exact same submission path as POST /api/dub (no duplication:
-    # start_dub is called directly with the URL branch inputs).
+    # start_dub is called directly with the URL branch inputs). video and
+    # reference MUST be passed explicitly: calling the function directly
+    # bypasses FastAPI's dependency injection, so their declared defaults
+    # are `File(None)` sentinel objects — truthy, and without .filename.
     resp = await start_dub(
         source=url,
+        video=None,
+        reference=None,
         source_lang=str(body.get("source_lang") or "auto"),
         target_lang=target_lang,
         model=str(body.get("model") or "gemma4:e4b"),
@@ -2727,6 +2731,7 @@ async def scout_dub(request: _ScoutRequest):
         auto_denoise=bool(body.get("auto_denoise", False)),
         lip_sync=bool(body.get("lip_sync", False)),
         mode=mode,
+        scheduled_at=scheduled_at,
     )
     if isinstance(resp, JSONResponse):
         return resp  # start_dub validation error — pass it through
@@ -2841,6 +2846,7 @@ async def start_dub(
     auto_denoise: bool = Form(False),
     lip_sync: bool = Form(False),  # if True, auto-run Wav2Lip after pipeline completes
     mode: str = Form("dub"),  # "dub" | "reupload" (3E: reupload = no dubbing)
+    scheduled_at: float = Form(0.0),  # unix epoch seconds; 0 = start immediately
 ):
     mode = normalize_job_mode(mode)
     if mode is None:
@@ -2964,9 +2970,33 @@ async def start_dub(
         with open(ref_path, "wb") as f:
             shutil.copyfileobj(reference.file, f)
 
+    # Deferred start (mirrors /api/dub/batch): when scheduled_at is in the
+    # future, park the job as status='scheduled' with the full pipeline args
+    # stashed in _pending_args — the _scheduler_loop enqueues it when the
+    # time arrives (and survives restarts, since both persist to disk).
+    now = time.time()
+    is_scheduled = scheduled_at > now + 10  # 10s grace for clock skew
+    pipeline_args = {
+        "source": actual_source,
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "model": model,
+        "keep_bg": keep_bg,
+        "whisper_model": whisper_model,
+        "reference_audio": ref_path,
+        "speaker_mode": speaker_mode,
+        "context_hint": context_hint,
+        "voice_style": voice_style,
+        "voice_preset": voice_preset,
+        "tts_speed": tts_speed,
+        "wizard_mode": wizard_mode,
+        "auto_denoise": auto_denoise,
+        "mode": mode,
+    }
+
     jobs[job_id] = {
         "id": job_id,
-        "status": "queued",
+        "status": "scheduled" if is_scheduled else "queued",
         "progress": 0,
         "source": actual_source,
         "source_type": source_type,
@@ -2984,34 +3014,26 @@ async def start_dub(
         "lip_sync": bool(lip_sync),
         "mode": mode,
         "created": time.time(),
-        "step_detail": "Queued...",
+        "step_detail": ("Scheduled..." if is_scheduled else "Queued..."),
+        "scheduled_at": scheduled_at if is_scheduled else 0,
+        "_pending_args": (dict(pipeline_args) if is_scheduled else None),
         **({"meta": meta, "title": meta.get("title"),
             "_source_info": source_info} if meta else {}),
         **({"duplicate_check": duplicate_check} if duplicate_check else {}),
     }
     save_job(jobs[job_id])
 
+    if is_scheduled:
+        log.info(f"[schedule] Job {job_id} deferred until "
+                 f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(scheduled_at))}")
+        return {"job_id": job_id, "scheduled_at": scheduled_at,
+                **(duplicate_check or {})}
+
     # Dispatch to pipeline — via queue if GPU is busy, else directly.
     # Multiple simultaneous dub requests would OOM the 12GB 3080 Ti
     # (WhisperX large-v3 + VoxCPM + pyannote = 9-10GB each). The queue
     # ensures only ONE GPU-heavy job runs at a time; others wait.
-    await enqueue_job(job_id, {
-        "source": actual_source,
-        "source_lang": source_lang,
-        "target_lang": target_lang,
-        "model": model,
-        "keep_bg": keep_bg,
-        "whisper_model": whisper_model,
-        "reference_audio": ref_path,
-        "speaker_mode": speaker_mode,
-        "context_hint": context_hint,
-        "voice_style": voice_style,
-        "voice_preset": voice_preset,
-        "tts_speed": tts_speed,
-        "wizard_mode": wizard_mode,
-        "auto_denoise": auto_denoise,
-        "mode": mode,
-    })
+    await enqueue_job(job_id, pipeline_args)
 
     return {"job_id": job_id, **(duplicate_check or {})}
 
@@ -7615,6 +7637,19 @@ async def list_jobs(
         # Shallow-copy so we don't mutate the in-memory job store
         enriched.append({**j, **info})
     return {"jobs": enriched}
+
+
+@app.get("/api/languages")
+async def list_supported_languages():
+    """Canonical supported target-language codes (28).
+
+    Derived from the edge-tts fallback voice map in pipeline/synthesizer.py
+    — the one place every dubbable language must be registered, since
+    edge-tts is the floor every target language falls back to when VoxCPM2
+    is unavailable. The CLI/MCP `languages` listing reads this instead of
+    hardcoding a stale subset.
+    """
+    return {"languages": list(EdgeTTSFallback.VOICE_MAP.keys())}
 
 
 @app.get("/api/download/{job_id}")

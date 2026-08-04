@@ -39,7 +39,7 @@ except ImportError:
           file=sys.stderr)
     sys.exit(1)
 
-from gochidubb_client import GoChiDUBBClient, GoChiDUBBError, DEFAULT_URL
+from gochidubb_client import GoChiDUBBClient, DEFAULT_URL
 
 
 mcp = FastMCP(
@@ -51,7 +51,12 @@ mcp = FastMCP(
         "that cycles through N languages), or re-dub existing jobs without "
         "re-uploading. Always prefer `wait=True` when the user expects a "
         "finished video; otherwise return the job_id so they can poll. "
-        "Source can be a YouTube/direct URL or a local file path."
+        "Source can be a YouTube/direct URL or a local file path. "
+        "Also: discover trending videos (gochidubb_scout_trending), check "
+        "for platform duplicates, inspect per-stage quality reports, and "
+        "stage uploads for publishing — but the actual upload only happens "
+        "through gochidubb_publish_approve, which requires explicit human "
+        "confirmation first."
     ),
 )
 
@@ -81,9 +86,14 @@ async def gochidubb_dub(
     source_lang: str = "auto",
     model: Optional[str] = None,
     voice_preset: str = "auto",
+    voice_style: str = "",
     tts_speed: str = "balanced",
     keep_bg: bool = False,
+    auto_denoise: bool = False,
     context_hint: str = "",
+    wizard_mode: str = "auto",
+    mode: str = "dub",
+    scheduled_at: Optional[float] = None,
     wait: bool = False,
     wait_timeout: float = 1800.0,
 ) -> dict:
@@ -95,10 +105,19 @@ async def gochidubb_dub(
         source_lang: 'auto' (default) or explicit code.
         model: Ollama translation model name. Default = server's default.
         voice_preset: Voice preset key, or 'auto' for source-cloned voice.
+        voice_style: Free-text voice style hint (overrides preset cloning).
         tts_speed: 'fast' | 'balanced' | 'quality'.
         keep_bg: Preserve background music under the new dub.
+        auto_denoise: Denoise the voice reference before cloning.
         context_hint: Free-text hint for translator (e.g. "tech podcast").
+        wizard_mode: 'auto', or 'review_translation'/'review_transcript' to
+            pause the job for human review at that checkpoint.
+        mode: 'dub' (full pipeline) or 'reupload' (download + remux only —
+            for music videos where dubbing makes no sense).
+        scheduled_at: unix epoch seconds; a future timestamp parks the job
+            as status='scheduled' and the server starts it at that time.
         wait: If True, block until job finishes and return final status + url.
+            Ignored for scheduled jobs (they start later).
         wait_timeout: Max seconds to wait when wait=True.
 
     Returns dict with `job_id`. If wait=True, also `status` and `url`.
@@ -107,11 +126,14 @@ async def gochidubb_dub(
     res = await c.submit_dub(
         source, target_lang,
         source_lang=source_lang, model=model,
-        voice_preset=voice_preset, tts_speed=tts_speed,
-        keep_bg=keep_bg, context_hint=context_hint,
+        voice_preset=voice_preset, voice_style=voice_style,
+        tts_speed=tts_speed,
+        keep_bg=keep_bg, auto_denoise=auto_denoise,
+        context_hint=context_hint, wizard_mode=wizard_mode,
+        mode=mode, scheduled_at=scheduled_at,
     )
     job_id = res.get("job_id")
-    if wait and job_id:
+    if wait and job_id and not res.get("scheduled_at"):
         final = await c.wait_for_job(job_id, timeout=wait_timeout)
         res["status"] = final.get("status")
         res["error"] = final.get("error")
@@ -148,7 +170,8 @@ async def gochidubb_compare(
     if wait and res.get("batch_id"):
         jobs = await c.wait_for_batch(res["batch_id"], timeout=wait_timeout)
         res["jobs"] = [{
-            "id": j.get("id"), "lang": j.get("target_lang"),
+            "id": j.get("id"), "title": j.get("title"),
+            "lang": j.get("target_lang"),
             "status": j.get("status"), "error": j.get("error"),
             "url": c.output_url(j["id"]) if j.get("status") == "complete" else None,
         } for j in jobs]
@@ -219,7 +242,8 @@ async def gochidubb_redub(
             bid = res["batch_id"]
             jobs = await c.wait_for_batch(bid, timeout=wait_timeout)
             res["jobs"] = [{
-                "id": j["id"], "lang": j.get("target_lang"),
+                "id": j["id"], "title": j.get("title"),
+                "lang": j.get("target_lang"),
                 "status": j.get("status"),
                 "url": c.output_url(j["id"]) if j.get("status") == "complete" else None,
             } for j in jobs]
@@ -252,14 +276,19 @@ async def gochidubb_list_jobs(
     limit: int = 20,
     status: Optional[str] = None,
     batch_id: Optional[str] = None,
+    since: float = 0,
 ) -> list[dict]:
-    """List recent jobs, newest first.
+    """List recent jobs, newest first (filtered server-side).
 
-    status: filter by 'complete'|'error'|'queued'|'running'|...
+    status: filter by 'complete'|'error'|'queued'|'scheduled'|'running'|...
+        Comma-separated sets work too ('queued,running').
     batch_id: filter to a specific batch (quick_test, showcase, redub).
+    since: unix epoch — only jobs created at/after this time.
+    Each job dict includes `title` (real video title when known).
     """
     c = await _get_client()
-    return await c.list_jobs(limit=limit, status=status, batch_id=batch_id)
+    return await c.list_jobs(limit=limit, status=status, batch_id=batch_id,
+                             since=since)
 
 
 @mcp.tool()
@@ -328,6 +357,145 @@ async def gochidubb_list_voices() -> list[dict]:
     """Available voice presets registered in the server."""
     c = await _get_client()
     return await c.list_voices()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Quality & audit — read-only diagnostics
+# ─────────────────────────────────────────────────────────────────────
+@mcp.tool()
+async def gochidubb_quality_report(job_id: str) -> dict:
+    """Per-stage quality report for a job: 0-100 scores (asr, translation,
+    tts, timing, loudness) + overall + actionable verdicts.
+
+    Each verdict's `suggested_action` names an existing server capability
+    (retry_tts / edit_translations / regenerate_segment / retranslate), so
+    you can act on the report mechanically. Stages with `available: false`
+    were not measured — do not treat them as perfect."""
+    c = await _get_client()
+    return await c.get_quality(job_id)
+
+
+@mcp.tool()
+async def gochidubb_audit_job(job_id: str) -> dict:
+    """Artifact-loss audit for a job: word coverage between pipeline stages,
+    segment idx integrity, and TTS QA verdicts. Findings carry severity
+    'loss' (real content lost), 'warn', or 'info', with the offending
+    segments listed. `ok: false` means at least one loss finding."""
+    c = await _get_client()
+    return await c.audit(job_id)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Publish — stage/approve/cancel with a human gate
+# ─────────────────────────────────────────────────────────────────────
+@mcp.tool()
+async def gochidubb_publish_stage(
+    job_id: str,
+    platform: str = "vk",
+    export_preset: Optional[str] = None,
+) -> dict:
+    """Stage a completed dub for publishing. NEVER uploads anything.
+
+    Builds title/description metadata (translated when available), runs a
+    warn-only duplicate check against the platform, and optionally renders
+    an export preset first. Returns the staged `publish` block including
+    `duplicate_warnings` and `duplicate_verdict`
+    (likely_duplicate|possible|clear|unchecked) — show these to the human
+    before asking them to approve. The upload itself only happens after
+    gochidubb_publish_approve."""
+    c = await _get_client()
+    return await c.publish_stage(job_id, platform=platform,
+                                 export_preset=export_preset)
+
+
+@mcp.tool()
+async def gochidubb_publish_approve(
+    job_id: str,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict:
+    """HUMAN-APPROVAL GATE: approving a staged publish TRIGGERS the actual
+    upload to the platform. Only call this after the human user has
+    explicitly confirmed they want the video uploaded — never call it
+    autonomously, even if staging looked clean. Optional title/description
+    override the staged metadata before the upload is enqueued."""
+    c = await _get_client()
+    return await c.publish_approve(job_id, title=title, description=description)
+
+
+@mcp.tool()
+async def gochidubb_publish_cancel(job_id: str) -> dict:
+    """Withdraw a staged/approved/failed publish so it never uploads.
+    Fails with 409 while an upload is already in flight."""
+    c = await _get_client()
+    return await c.publish_cancel(job_id)
+
+
+@mcp.tool()
+async def gochidubb_publish_pending() -> list[dict]:
+    """Review inbox: all publishes still needing (or doing) work — staged
+    awaiting human approval, approved/uploading in progress, or failed.
+    Each row has job_id, title and the full `publish` state."""
+    c = await _get_client()
+    return await c.publish_pending()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Scout — trending discovery + duplicate checking
+# ─────────────────────────────────────────────────────────────────────
+@mcp.tool()
+async def gochidubb_scout_trending(
+    category: Optional[str] = None,
+    country: Optional[str] = None,
+    limit: int = 20,
+    include_shorts: bool = False,
+) -> dict:
+    """Trending YouTube video candidates (mostviewed.today, with a yt-dlp
+    fallback — `source` in the response says which one served).
+
+    Candidates carry title, channel, duration_sec, view_count, rank,
+    `is_music` (category 10 — dub these with mode='reupload', not a voice
+    dub) and `already_processed`/`existing_job_id` (this server has dubbed
+    that video before — skip or redub instead)."""
+    c = await _get_client()
+    return await c.scout_trending(category=category, country=country,
+                                  limit=limit, include_shorts=include_shorts)
+
+
+@mcp.tool()
+async def gochidubb_scout_dub(
+    url_or_video_id: str,
+    target_lang: str,
+    mode: str = "auto",
+    scheduled_at: Optional[float] = None,
+) -> dict:
+    """Send a scout candidate straight into the dub pipeline.
+
+    mode 'auto' (default) routes music candidates to 'reupload' (download +
+    remux, no voice dub — dubbing a music video makes no sense) and
+    everything else to 'dub'. Pass 'dub' or 'reupload' to force.
+    scheduled_at (unix epoch) defers the start to that time. Returns
+    job_id, resolved mode, and any duplicate warnings from the pre-check."""
+    c = await _get_client()
+    return await c.scout_dub(url_or_video_id, target_lang, mode=mode,
+                             scheduled_at=scheduled_at)
+
+
+@mcp.tool()
+async def gochidubb_check_duplicate(
+    title: str,
+    duration_sec: Optional[float] = None,
+    alt_title: Optional[str] = None,
+) -> dict:
+    """Does a similar video already exist on the target platform (VK)?
+
+    Warn-only metadata search: title similarity + duration within ±5s.
+    Returns {matches, verdict: likely_duplicate|possible|clear}. Pass the
+    original-language title as alt_title when checking a translated one —
+    platform search recall is much better in the video's own language."""
+    c = await _get_client()
+    return await c.check_duplicate(title, duration_sec=duration_sec,
+                                   alt_title=alt_title)
 
 
 if __name__ == "__main__":
