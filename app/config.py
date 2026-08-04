@@ -13,7 +13,7 @@ Usage:
 import json
 import logging
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 log = logging.getLogger("gochidubb.config")
@@ -66,6 +66,7 @@ class UserConfig:
     tts_engine: str = "voxcpm"           # "voxcpm" | "f5tts" | "edge-tts"
     tts_speed: str = "balanced"          # "fast" | "balanced" | "quality"
     warmup_on_start: bool = False        # pre-load VoxCPM at server start
+    qa_same_language: bool = False       # whisper-roundtrip QA on same-language dubs too
 
     # ── FFmpeg (extract / render) ─────────────────────────────────────
     # Soft timeout: while ffmpeg keeps reporting encode progress the deadline
@@ -125,6 +126,7 @@ def _load_config() -> UserConfig:
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
         "GOCHIDUBB_WARMUP": "warmup_on_start",
+        "GOCHIDUBB_QA_SAME_LANGUAGE": "qa_same_language",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
         "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",

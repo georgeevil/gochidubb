@@ -111,18 +111,19 @@ class TestAccelerator:
 
 
 class TestTtsQaNotice:
-    def test_warns_when_qa_cannot_load_off_cuda(self):
+    def test_informs_about_cpu_fallback_off_cuda(self):
+        """QA auto-resolves to CPU off NVIDIA now — an info note, not a bug."""
         ns = diag._tts_qa_notices({"cuda": False})
-        assert [n["code"] for n in ns] == ["tts_qa.device_unavailable"]
+        assert [n["code"] for n in ns] == ["tts_qa.cpu_fallback"]
 
     def test_silent_on_cuda(self):
         assert diag._tts_qa_notices({"cuda": True}) == []
 
-    def test_says_not_measured_rather_than_good(self):
-        """qa=0.00 looks like evidence of quality; it is the absence of it."""
+    def test_never_claims_unmeasured_is_perfect(self):
+        """Unmeasured segments report a null score, never a fake 0.00."""
         n = diag._tts_qa_notices({"cuda": False})[0]
-        assert "not measured" in n["detail"]
-        assert n["severity"] == "warn"
+        assert "null" in n["detail"]
+        assert n["severity"] == "info"
 
 
 class TestHfProbe:

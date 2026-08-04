@@ -3,10 +3,8 @@
 Audio transcription using faster-whisper (optimized for Apple Silicon)
 """
 
-import os
 import logging
 from typing import List, Dict, Optional, Tuple
-import numpy as np
 import torch
 import multiprocessing  # For detecting CPU cores
 
@@ -20,6 +18,33 @@ try:
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
     logger.warning("faster-whisper not installed. Install with: pip install faster-whisper")
+
+
+def word_confidence_stats(words) -> Dict[str, float]:
+    """Aggregate per-word ASR confidences into segment-level stats.
+
+    Args:
+        words: list of word dicts as produced by transcribe() — each may
+            carry a 'probability' float (0..1). Non-dict entries and
+            missing/non-numeric probabilities are ignored.
+
+    Returns:
+        {'word_conf_mean': ..., 'word_conf_min': ...} rounded to 4 places,
+        or {} when no usable probabilities exist (never fabricates a value).
+    """
+    probs = []
+    for w in words or ():
+        if not isinstance(w, dict):
+            continue
+        p = w.get('probability')
+        if isinstance(p, (int, float)) and not isinstance(p, bool):
+            probs.append(float(p))
+    if not probs:
+        return {}
+    return {
+        'word_conf_mean': round(sum(probs) / len(probs), 4),
+        'word_conf_min': round(min(probs), 4),
+    }
 
 
 def get_optimal_thread_count() -> int:
@@ -149,6 +174,10 @@ def transcribe(
                 'end': segment.end,
                 'text': segment.text,
                 'language': detected_lang,
+                # ASR confidence signals — kept so downstream (checkpoints,
+                # UI, diagnostics) can flag low-confidence source segments.
+                'avg_logprob': getattr(segment, 'avg_logprob', None),
+                'no_speech_prob': getattr(segment, 'no_speech_prob', None),
                 'words': []
             }
             

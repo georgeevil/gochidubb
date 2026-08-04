@@ -120,6 +120,26 @@ def _set_seed(seed):
         pass
 
 
+def _record_qa(seg, score, transcript, diag, attempts, tier):
+    """Attach QA outcome to the segment dict.
+
+    seg['qa_score'] stays for backward compat (None when unmeasured);
+    seg['qa'] carries the full diagnostics for checkpoints/UI.
+    """
+    diag = diag or {}
+    seg["qa_score"] = score
+    seg["qa_transcript"] = transcript
+    seg["qa"] = {
+        "score": score,
+        "measured": bool(diag.get("measured", score is not None)),
+        "cer": diag.get("cer"),
+        "detected_lang": diag.get("detected_lang"),
+        "lang_match": diag.get("lang_match"),
+        "attempts": attempts,
+        "tier": tier,
+    }
+
+
 def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
                target_lang: str = "ru", enable_qa: bool = True):
     """Try selected tiers in order with optional post-synth QA.
@@ -129,8 +149,13 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     up to 2 more times. This catches VoxCPM's occasional gibberish output
     that its own retry_badcase doesn't detect.
 
-    Returns (ok, tier_used, err). On success sets seg['qa_score'] and
-    seg['qa_transcript'] for diagnostic logging.
+    A QA result of score=None means "not measured" (whisper unavailable
+    or ASR crashed) — the segment is accepted as-is with NO retries and
+    NO degraded fallback, and seg['qa']['measured'] is False so callers
+    can tell "passed" apart from "couldn't check".
+
+    Returns (ok, tier_used, err). On success sets seg['qa_score'],
+    seg['qa_transcript'] and a seg['qa'] diagnostics dict.
     """
     import soundfile as sf
 
@@ -248,8 +273,31 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
         MAX_QA_RETRIES = 0
 
     last_err = None
-    best_score = 2.0  # worse than any real score
+    best_score = None       # best REAL (measured) score seen so far
     best_transcript = ""
+    best_diag = None
+    attempts = 0            # QA-checked generate attempts for this segment
+
+    def _run_qa(check_fn):
+        nonlocal attempts, best_score, best_transcript, best_diag
+        score, transcript, diag = check_fn(
+            out_path, text, target_lang=target_lang,
+        )
+        attempts += 1
+        measured = bool(diag.get("measured", score is not None))
+        if measured and (best_score is None or score < best_score):
+            best_score = score
+            best_transcript = transcript
+            best_diag = diag
+        _log_event(event="qa_check", idx=seg["idx"], tier=_current_tier,
+                   score=round(score, 3) if score is not None else None,
+                   measured=measured,
+                   cer=diag.get("cer"),
+                   detected_lang=diag.get("detected_lang"),
+                   lang_match=diag.get("lang_match"),
+                   transcript_preview=transcript[:60])
+        return score, transcript, diag
+
     for idx, kw in tiers:
         _current_tier = idx  # closure-visible for _try_generate's log
         try:
@@ -271,20 +319,18 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
                 # Module not deployed — skip QA gracefully
                 return (True, idx, None)
 
-        score, transcript, diag = check_segment_quality(
-            out_path, text, target_lang=target_lang,
-        )
-        if score < best_score:
-            best_score = score
-            best_transcript = transcript
-        _log_event(event="qa_check", idx=seg["idx"], tier=idx,
-                   score=round(score, 3), cer=diag.get("cer"),
-                   detected_lang=diag.get("detected_lang"),
-                   transcript_preview=transcript[:60])
+        score, transcript, diag = _run_qa(check_segment_quality)
+
+        if score is None:
+            # QA could not measure this segment (whisper unavailable /
+            # ASR crashed). Accept the audio as-is without any claim of
+            # quality — retrying on an unmeasurable signal would burn
+            # compute and (worse) risk voice drift for nothing.
+            _record_qa(seg, None, transcript, diag, attempts, idx)
+            return (True, idx, None)
 
         if is_acceptable(score):
-            seg["qa_score"] = score
-            seg["qa_transcript"] = transcript
+            _record_qa(seg, score, transcript, diag, attempts, idx)
             return (True, idx, None)
 
         # Bad score — retry with different seeds on same tier before
@@ -296,15 +342,13 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
                        prev_score=round(score, 3))
             try:
                 _try_generate(kw, new_seed)
-                score, transcript, diag = check_segment_quality(
-                    out_path, text, target_lang=target_lang,
-                )
-                if score < best_score:
-                    best_score = score
-                    best_transcript = transcript
+                score, transcript, diag = _run_qa(check_segment_quality)
+                if score is None:
+                    # QA went dark mid-retry — accept without claim.
+                    _record_qa(seg, None, transcript, diag, attempts, idx)
+                    return (True, idx, None)
                 if is_acceptable(score):
-                    seg["qa_score"] = score
-                    seg["qa_transcript"] = transcript
+                    _record_qa(seg, score, transcript, diag, attempts, idx)
                     return (True, idx, None)
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
@@ -313,10 +357,11 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     # All tiers + retries exhausted; if we produced *something*, accept it
     # with a warning. The alternative would be silence which is worse.
     if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-        seg["qa_score"] = best_score
-        seg["qa_transcript"] = best_transcript
+        _record_qa(seg, best_score, best_transcript,
+                   best_diag or {"measured": best_score is not None},
+                   attempts, 0)
         _log_event(event="qa_fallback", idx=seg["idx"],
-                   score=round(best_score, 3),
+                   score=round(best_score, 3) if best_score is not None else None,
                    msg="all retries failed QA, using last output")
         # Use the tier from the final attempt; log as tier 0 to mark "degraded"
         return (True, 0, None)
@@ -388,7 +433,8 @@ def _process_job(model, job):
                     qa_regens += 1  # degraded = QA couldn't recover
                 _log_event(event="segment", idx=seg["idx"], ok=True, tier=tier,
                            text_preview=seg["text"][:40],
-                           qa_score=seg.get("qa_score"))
+                           qa_score=seg.get("qa_score"),
+                           qa=seg.get("qa"))
             else:
                 _log_event(event="segment", idx=seg["idx"], ok=False, error=err,
                            text_preview=seg["text"][:40])
@@ -397,8 +443,19 @@ def _process_job(model, job):
                        error=f"{type(e).__name__}: {e}",
                        traceback=traceback.format_exc())
 
+    # Honest QA accounting: how many segments got a REAL measurement vs.
+    # how many were passed without a claim (whisper unavailable etc.).
+    qa_measured = sum(
+        1 for seg in segments if (seg.get("qa") or {}).get("measured")
+    )
+    qa_unmeasured = sum(
+        1 for seg in segments
+        if seg.get("qa") is not None and not seg["qa"].get("measured")
+    )
     _log_event(event="done", ok=ok, total=total, tier_stats=tier_stats,
-               qa_regens=qa_regens)
+               qa_regens=qa_regens,
+               qa_measured_count=qa_measured,
+               qa_unmeasured_count=qa_unmeasured)
 
 
 def main(job_path):
