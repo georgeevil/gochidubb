@@ -40,6 +40,16 @@ bin/ffmpeg*
 bin/ffprobe*
 bin/yt-dlp*
 
+# Local scratch — notes, sample media, exploratory scripts
+product.txt
+selfware.toml
+test.webm
+test_audio.wav
+# Exploratory scripts, not pytest tests (see CLAUDE.md)
+tests/manual_test_*.py
+# Working copies of the UI kept alongside the real one
+static/*copy*.html
+
 # OS
 .DS_Store
 Thumbs.db
