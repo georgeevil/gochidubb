@@ -74,6 +74,11 @@ class UserConfig:
     ffmpeg_timeout: int = 600
     ffmpeg_stall_timeout: int = 120
 
+    # ── Publishing ────────────────────────────────────────────────────
+    # Attribution appended to published-video descriptions. {source_url}
+    # is replaced with the original video URL (see pipeline/publisher.py).
+    publish_description_template: str = "Original: {source_url}"
+
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
     server_port: int = 8910
@@ -122,6 +127,7 @@ def _load_config() -> UserConfig:
         "GOCHIDUBB_WARMUP": "warmup_on_start",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
+        "PUBLISH_DESCRIPTION_TEMPLATE": "publish_description_template",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)
