@@ -53,7 +53,8 @@ def _print_json(obj) -> None:
 
 def _print_job(j: dict, *, short: bool = False) -> None:
     if short:
-        line = f"{j.get('id', '?')[:8]}  {j.get('status', '?'):>12}  -> {j.get('target_lang', '?'):>3}  {j.get('source_label', '')[:60]}"
+        label = j.get("title") or j.get("source_label", "")
+        line = f"{j.get('id', '?')[:8]}  {j.get('status', '?'):>12}  -> {j.get('target_lang', '?'):>3}  {label[:60]}"
         if j.get("error"):
             line += f"  err: {j['error'][:80]}"
         print(line)

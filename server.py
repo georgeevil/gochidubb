@@ -167,7 +167,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from pipeline.downloader import download_video
+from pipeline.downloader import download_video, probe_metadata, curate_metadata
 from pipeline.audio import (
     extract_audio, extract_audio_hq, separate_background, get_duration,
     SeparationAborted,
@@ -1361,7 +1361,12 @@ async def _blocking(fn, *args, **kwargs):
 
 async def _stage_download(job, work, ctx, update, perf):
     update(step_detail="Getting video...")
-    video_path = await _blocking(download_video, ctx["source"], str(work))
+    # Full yt-dlp info dict probed at submit time (URL sources only) —
+    # popped here so the transient blob doesn't linger on the job dict;
+    # download_video persists it as <work>/source_info.json.
+    source_info = job.pop("_source_info", None)
+    video_path = await _blocking(
+        download_video, ctx["source"], str(work), info=source_info)
     duration = await _blocking(get_duration, video_path)
     ctx["video_path"] = video_path
     ctx["duration"] = duration
@@ -2521,6 +2526,28 @@ async def start_dub(
     else:
         return JSONResponse({"error": "Provide a YouTube URL or upload a video"}, 400)
 
+    # ── Probe URL metadata (title/duration) before creating the job ────
+    # Probe failures never block submission; the download stage will
+    # surface real errors. `meta` is a small curated dict persisted on the
+    # job; `source_info` is the full yt-dlp blob (transient, never hits DB).
+    meta = None
+    source_info = None
+    if source_type == "url":
+        source_info = await asyncio.to_thread(probe_metadata, actual_source)
+        if source_info:
+            meta = curate_metadata(source_info)
+            dur = meta.get("duration") or 0
+            if cfg.max_source_duration_sec > 0 and dur > cfg.max_source_duration_sec:
+                return JSONResponse({
+                    "error": (
+                        f"Video is {int(dur)}s long — over the configured limit of "
+                        f"{cfg.max_source_duration_sec}s (max_source_duration_sec). "
+                        f"Pick a shorter video or raise the limit in Settings."
+                    )
+                }, 400)
+            if meta.get("title"):
+                source_label = meta["title"]
+
     ref_path = ""
     if reference and reference.filename:
         ref_ext = Path(reference.filename).suffix or ".wav"
@@ -2548,6 +2575,8 @@ async def start_dub(
         "lip_sync": bool(lip_sync),
         "created": time.time(),
         "step_detail": "Queued...",
+        **({"meta": meta, "title": meta.get("title"),
+            "_source_info": source_info} if meta else {}),
     }
     save_job(jobs[job_id])
 
@@ -2663,9 +2692,28 @@ async def start_batch_dub(
             # Just leave status=scheduled; the scheduler task will pick it up
             log.info(f"[schedule] Job {jid} deferred until {scheduled_at}")
 
+    skipped = []  # URLs rejected by the duration gate: [{source, error}]
     for url in url_list:
         if not url:
             continue
+        # Probe metadata per URL — failures never block submission.
+        meta = None
+        source_info = await asyncio.to_thread(probe_metadata, url)
+        if source_info:
+            meta = curate_metadata(source_info)
+            dur = meta.get("duration") or 0
+            if cfg.max_source_duration_sec > 0 and dur > cfg.max_source_duration_sec:
+                skipped.append({
+                    "source": url,
+                    "error": (f"Video is {int(dur)}s long — over the configured "
+                              f"limit of {cfg.max_source_duration_sec}s "
+                              f"(max_source_duration_sec)"),
+                })
+                log.warning(f"[batch] Skipping {url}: duration {dur}s > "
+                            f"{cfg.max_source_duration_sec}s limit")
+                continue
+        url_label = ((meta or {}).get("title")
+                     or url[:60] + ("..." if len(url) > 60 else ""))
         jid = uuid.uuid4().hex[:8]
         jobs[jid] = {
             "id": jid,
@@ -2673,7 +2721,9 @@ async def start_batch_dub(
             "progress": 0,
             "source": url,
             "source_type": "url",
-            "source_label": url[:60] + ("..." if len(url) > 60 else ""),
+            "source_label": url_label,
+            **({"meta": meta, "title": meta.get("title"),
+                "_source_info": source_info} if meta else {}),
             "target_lang": target_lang,
             "model": model,
             "speaker_mode": speaker_mode,
@@ -2777,12 +2827,15 @@ async def start_batch_dub(
     else:
         log.info(f"[batch] {batch_id}: enqueued {len(job_ids)} jobs "
                  f"(label: {batch_label or 'untitled'})")
-    return {
+    resp = {
         "batch_id": batch_id,
         "job_ids": job_ids,
         "count": len(job_ids),
         "label": batch_label,
     }
+    if skipped:
+        resp["skipped"] = skipped
+    return resp
 
 
 @app.get("/api/dub/batch/{batch_id}")
@@ -4154,10 +4207,17 @@ async def redub_job(
                     "original_source": orig_source,
                 }, 400)
     else:
-        # URL source — pass through. download_video() should hit cache.
-        if not orig_source:
+        # URL source — reuse the already-downloaded source_video.mp4 from
+        # the original job's work dir when it still exists, instead of
+        # hitting the network again. Falls back to the URL otherwise.
+        cached = OUTPUT_DIR / job_id / "source_video.mp4"
+        if cached.exists():
+            src_for_new_jobs = str(cached)
+            log.info(f"[redub] Reusing downloaded source: {cached}")
+        elif orig_source:
+            src_for_new_jobs = orig_source
+        else:
             return JSONResponse({"error": "Original job has no source URL"}, 400)
-        src_for_new_jobs = orig_source
 
     # ── Validate / fallback the Ollama model ──────────────────────────
     chosen_model = model or orig.get("model", "aya-expanse:8b")
@@ -4188,7 +4248,8 @@ async def redub_job(
         "context_hint": orig.get("context_hint", ""),
         "source_lang": orig.get("source_lang", "auto"),
     }
-    label_base = orig.get("source_label", "") or Path(orig_source).name or job_id
+    label_base = (orig.get("title") or orig.get("source_label", "")
+                  or Path(orig_source).name or job_id)
 
     def _build_job_dict(jid: str, lang: str, extra: dict | None = None) -> dict:
         d = {
@@ -4215,6 +4276,11 @@ async def redub_job(
             "scheduled_at": 0,
             "_pending_args": None,
         }
+        # Carry curated metadata / real title over from the original job
+        if orig.get("meta"):
+            d["meta"] = orig["meta"]
+        if orig.get("title"):
+            d["title"] = orig["title"]
         if extra:
             d.update(extra)
         return d
