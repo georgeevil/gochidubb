@@ -230,12 +230,26 @@ class _QuietPolling(logging.Filter):
         "/api/voices",
         "/outputs/",       # range-requests for video playback after completion
     )
+    # Only the *successful* noise is worth hiding. Suppressing failures too
+    # makes a broken /outputs range-request (the UI's video player silently
+    # never loading) invisible in the logs with nothing to grep for.
+    # uvicorn logs '%s - "%s %s HTTP/%s" %d' — the status code is the last
+    # field, with no trailing space. The "Not Found" phrase you see in the
+    # console is added afterwards by uvicorn's AccessFormatter, so it is NOT
+    # part of record.getMessage(). Don't require anything after the digits.
+    _STATUS_RE = re.compile(r'"\s+(\d{3})(?:\s|$)')
+
     def filter(self, record):
         try:
             msg = record.getMessage()
         except Exception:
             return True
-        return not any(q in msg for q in self._QUIET_SUBSTRINGS)
+        if not any(q in msg for q in self._QUIET_SUBSTRINGS):
+            return True
+        m = self._STATUS_RE.search(msg)
+        if m and int(m.group(1)) >= 400:
+            return True     # keep errors
+        return False
 
 
 for _logger_name in ("uvicorn.access", "httpx", "httpcore"):

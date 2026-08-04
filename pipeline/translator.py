@@ -591,11 +591,19 @@ async def _get_default_model() -> str:
     # Last resort
     return "Qwen/Qwen2.5-14B-Instruct"
 
+# Last model list logged at INFO by check_lm_studio. The status probe runs on
+# every /api/jobs poll (~every 2s), so logging the full catalog each time buries
+# the Logs tab. Only announce it when the set actually changes.
+_last_logged_lm_models: Optional[List[str]] = None
+
+
 async def check_lm_studio() -> Tuple[bool, List[str]]:
     """Check if LM Studio is running and return available models."""
+    global _last_logged_lm_models
+
     if not USE_LM_STUDIO:
         return False, []
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -605,11 +613,17 @@ async def check_lm_studio() -> Tuple[bool, List[str]]:
                 if response.status == 200:
                     data = await response.json()
                     models = [m["id"] for m in data.get("data", [])]
-                    log.info(f"LM Studio running with models: {models}")
+                    if models != _last_logged_lm_models:
+                        log.info(f"LM Studio running with models: {models}")
+                        _last_logged_lm_models = models
+                    else:
+                        log.debug(f"LM Studio running with models: {models}")
                     return True, models
+                _last_logged_lm_models = None
                 return False, []
     except Exception as e:
         log.debug(f"LM Studio not available: {e}")
+        _last_logged_lm_models = None
         return False, []
 
 
