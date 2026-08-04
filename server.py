@@ -2056,13 +2056,20 @@ async def _stage_assemble(job, work, ctx, update, perf):
     update(step_detail="Assembling dubbed audio...")
     segments = [dict(s) for s in ctx["segments"]]
     dubbed_wav = str(work / "dubbed_audio.wav")
-    await _blocking(
+    asm_info = await _blocking(
         assemble_dubbed_audio,
         segments, ctx["duration"], dubbed_wav,
         ctx.get("sample_rate", 48000), apply_loudnorm=True,
     )
     _save_placements(work, segments)
     ctx["dubbed_wav"] = dubbed_wav
+    # Persist what the assembler measured (previously log-only): how many
+    # segments needed atempo stretching, and the ffmpeg loudnorm measurement
+    # (input/output LUFS, true peak, LRA) parsed from print_format=json.
+    if isinstance(asm_info, dict):
+        perf["stretched_count"] = asm_info.get("stretched_count")
+        if asm_info.get("loudnorm"):
+            perf["loudnorm"] = asm_info["loudnorm"]
     try:
         perf["wav_mb"] = round(os.path.getsize(dubbed_wav) / 1024 / 1024, 1)
     except OSError:
@@ -5086,6 +5093,18 @@ def _stage_artifacts(job_id: str, work: Path, spec: dict, cp: Optional[dict]) ->
     return out
 
 
+# Which quality-rollup entry (pipeline/quality.py stage names) colors which
+# pipeline stage in the UI timeline. Timing lives on `assemble` (stretch and
+# drift happen there); loudness on `merge` (it measures the final track).
+_STAGE_QUALITY_KEY = {
+    "transcribe": "asr",
+    "translate": "translation",
+    "tts": "tts",
+    "assemble": "timing",
+    "merge": "loudness",
+}
+
+
 def build_stage_report(job_id: str) -> dict:
     """Per-stage status, artifacts and timings for one job.
 
@@ -5166,6 +5185,16 @@ def build_stage_report(job_id: str) -> dict:
             "degraded": bool(st_notices) and state in ("done", "stale"),
         })
 
+    # Per-stage quality chips for the UI timeline. Read ONLY the stored
+    # rollup (job["quality"], persisted by GET /api/dub/{id}/quality) —
+    # never recompute here: this report is polled while jobs run.
+    qual = job.get("quality") or {}
+    qstages = qual.get("stages") or {}
+    for s in stages:
+        q = qstages.get(_STAGE_QUALITY_KEY.get(s["id"], ""))
+        if q and q.get("available"):
+            s["quality_score"] = q.get("score")
+
     total = sum(s["duration_sec"] or 0 for s in stages)
     return {
         "job_id": job_id,
@@ -5175,6 +5204,7 @@ def build_stage_report(job_id: str) -> dict:
         "failed_stage": job.get("failed_stage"),
         "total_duration_sec": round(total, 3),
         "gpu_backend": gpu_backend(),
+        "quality_overall": qual.get("overall"),
         "stages": stages,
         "notices": merge_notices(*[s["notices"] for s in stages]),
     }
@@ -5212,6 +5242,105 @@ async def get_job_metrics(job_id: str):
         "stages": ordered,
         "history": data.get("history", []),
     }
+
+
+def _quality_inputs(job_id: str):
+    """Gather everything the quality scorers need from disk.
+
+    Segments come from the NEWEST checkpoint that has any — the same
+    walk-backwards idea as `_latest_checkpoint`, but skipping checkpoints
+    whose payload carries no segment list (download/extract). Placements and
+    the loudnorm measurement are optional; scorers report available=False
+    when they are missing.
+    """
+    segments: list = []
+    seg_stage = None
+    for stage in CHECKPOINT_ORDER_DESC:
+        cp = _load_checkpoint(job_id, stage)
+        if cp and cp.get("segments"):
+            segments, seg_stage = cp["segments"], stage
+            break
+    work = OUTPUT_DIR / job_id
+    placements = _load_placements(work)
+    loudnorm = (((load_metrics(work).get("stages") or {}).get("assemble") or {})
+                .get("detail") or {}).get("loudnorm")
+    return segments, seg_stage, placements, loudnorm
+
+
+@app.get("/api/dub/{job_id}/quality")
+async def get_job_quality(job_id: str):
+    """Full per-stage quality report + 0-100 rollup + actionable verdicts.
+
+    Computed on demand from persisted artifacts (checkpoints,
+    tts_placements.json, metrics.json) — nothing is re-transcribed or
+    re-rendered. Each verdict's `suggested_action` names an existing route
+    (retry_tts / edit_translations / regenerate_segment / retranslate) so
+    agents can act on the report mechanically. The small rollup is stored on
+    the job as `job["quality"]` once the job is complete, which is what
+    `/api/quality/trends` and the stage-report chips read.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    from pipeline.quality import full_report
+    segments, seg_stage, placements, loudnorm = await asyncio.to_thread(
+        _quality_inputs, job_id)
+    if not segments and not placements:
+        return JSONResponse(
+            {"error": "No checkpoints with segments — job has no artifacts "
+                      "to score yet"}, 404)
+    report = full_report(segments, placements, loudnorm)
+    job = jobs[job_id]
+    if job.get("status") == "complete":
+        # Recompute-and-overwrite: cheap, and it picks up granular re-runs
+        # (retry_tts / regenerate_segment) that changed the checkpoints.
+        job["quality"] = report["rollup"]
+        save_job(job)
+    return {
+        "job_id": job_id,
+        "segments_from": seg_stage,
+        "n_segments": len(segments),
+        **report,
+    }
+
+
+@app.get("/api/quality/trends")
+async def quality_trends(limit: int = 50):
+    """Stored quality rollups across recent completed jobs.
+
+    Reads ONLY `job["quality"]` (persisted by GET /api/dub/{id}/quality on
+    completed jobs) — computing full reports for 50 jobs would mean loading
+    50 checkpoint files, so jobs without a stored rollup are skipped rather
+    than scored here.
+    """
+    limit = max(1, min(int(limit), 200))
+    rows = [
+        {
+            "job_id": job.get("id"),
+            "title": job.get("title") or job.get("source_label")
+                     or job.get("source"),
+            "target_lang": job.get("target_lang"),
+            "created": job.get("created"),
+            "quality": job.get("quality"),
+        }
+        for job in jobs.values()
+        if job.get("status") == "complete" and job.get("quality")
+    ]
+    rows.sort(key=lambda r: r.get("created") or 0, reverse=True)
+    return {"jobs": rows[:limit]}
+
+
+@app.get("/api/dub/{job_id}/audit")
+async def get_job_audit(job_id: str):
+    """Artifact-loss audit (word coverage, idx integrity, QA verdicts).
+
+    Same engine as `python tools/audit_job.py <id>` — findings carry
+    severity loss/warn/info plus the offending segments, and `counts`
+    totals them per severity.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    from tools.audit_job import audit_job as _audit_job
+    return await asyncio.to_thread(_audit_job, OUTPUT_DIR / job_id)
 
 
 @app.post("/api/dub/{job_id}/retry_stage/{stage}")

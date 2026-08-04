@@ -58,6 +58,11 @@ STAGE_CHECKPOINTS = [
 # coverage is the real check; anywhere else a changed count means loss.
 RESHAPING = {"diarize"}
 
+# Mirrors pipeline/tts_qa.QA_THRESHOLD — kept as a literal (like
+# STAGE_CHECKPOINTS above) so this tool can audit an output directory
+# without importing the pipeline.
+QA_BAD_SCORE = 0.4
+
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -339,6 +344,58 @@ def _check_tts(segs: List[dict], work: Path, findings: List[Finding]) -> None:
             "warn", "tts",
             f"{len(empty)} synthesized wavs are suspiciously small (<1 KB)",
             items=empty[:20]))
+
+    # ── Roundtrip-QA verdicts persisted by the TTS worker ─────────────
+    # seg["qa"] = {score, measured, cer, detected_lang, lang_match,
+    # attempts, tier}. A segment can have audio on disk and still be
+    # garbled — QA already caught it; surface that instead of making the
+    # user listen for it.
+    qa_degraded, qa_bad = [], []
+    qa_present = qa_unmeasured = 0
+    for s in segs:
+        qa = s.get("qa")
+        if not isinstance(qa, dict):
+            continue
+        qa_present += 1
+        entry = {"idx": s.get("idx"),
+                 "start": round(float(s.get("start", 0)), 2),
+                 "text": (s.get("translated_text") or s.get("text") or "")[:80],
+                 "cer": qa.get("cer"), "detected_lang": qa.get("detected_lang"),
+                 "tier": qa.get("tier")}
+        if qa.get("tier") == 0:
+            # tier 0 = every tier and retry failed QA; the worker kept the
+            # last take anyway because silence would be worse.
+            qa_degraded.append(entry)
+            continue
+        if not qa.get("measured"):
+            qa_unmeasured += 1
+            continue
+        score = qa.get("score")
+        if (score is not None and score > QA_BAD_SCORE) or qa.get("lang_match") is False:
+            qa_bad.append(entry)
+
+    if qa_degraded:
+        findings.append(Finding(
+            "warn", "tts",
+            f"{len(qa_degraded)}/{len(segs)} segments kept a take that failed "
+            f"QA on every retry (degraded, tier 0)",
+            detail="These are the segments most likely to sound garbled or in "
+                   "the wrong language. Regenerate them individually or retry "
+                   "TTS with a different seed.",
+            items=qa_degraded[:20]))
+    if qa_bad:
+        findings.append(Finding(
+            "warn", "tts",
+            f"{len(qa_bad)} segments measured bad on ASR roundtrip "
+            f"(QA score > {QA_BAD_SCORE} or wrong detected language) but were "
+            f"accepted",
+            items=qa_bad[:20]))
+    if qa_present and qa_unmeasured:
+        findings.append(Finding(
+            "info", "tts",
+            f"{qa_unmeasured}/{qa_present} segments have no measured QA score "
+            f"(whisper unavailable or ASR failed) — their quality is unknown, "
+            f"not perfect"))
 
     # Stale audio from earlier runs is not a loss, but it is the single most
     # confusing thing to find when hand-checking a job directory — 188 wavs
