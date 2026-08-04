@@ -131,6 +131,44 @@ def classify_matches(matches: list) -> str:
     return "clear"
 
 
+# ── Publish state machine (Phase 3C) ───────────────────────────────────
+# The server's publish routes and upload worker validate every status change
+# through can_transition() so the full matrix lives in one testable place.
+#
+#   stage    -> "staged"     allowed from anything except an in-flight upload
+#                            (re-staging overwrites the previous publish dict)
+#   approve  -> "approved"   only from "staged" or "failed" (retry path)
+#   cancel   -> "cancelled"  from staged/approved/failed; never mid-upload
+#   upload   -> "uploading"  worker-only, from "approved"
+
+PUBLISH_STATUSES = (
+    "staged", "approved", "uploading", "uploaded", "failed", "cancelled",
+)
+
+# Statuses that belong in the review inbox (GET /api/publish/pending).
+PUBLISH_PENDING_STATUSES = ("staged", "approved", "uploading", "failed")
+
+_PUBLISH_ACTION_SOURCES = {
+    # None means "no publish dict yet" — staging a fresh job is always legal.
+    "stage": {None, "staged", "approved", "uploaded", "failed", "cancelled"},
+    "approve": {"staged", "failed"},
+    "cancel": {"staged", "approved", "failed"},
+    "upload": {"approved"},
+}
+
+
+def can_transition(from_status, action: str) -> bool:
+    """True when `action` is a legal publish transition from `from_status`.
+
+    `from_status` is the current publish.status (or None/"" when the job has
+    never been staged). Unknown actions are never legal.
+    """
+    allowed = _PUBLISH_ACTION_SOURCES.get(action)
+    if allowed is None:
+        return False
+    return (from_status or None) in allowed
+
+
 def build_publish_meta(job: dict) -> PublishMeta:
     """Derive PublishMeta from a finished job dict.
 

@@ -292,3 +292,53 @@ class TestBuildBatchPrompt:
         # The context lines must not be numbered — only the work is
         assert "1. Then you sweep." in prompt
         assert "1. Take the guard." not in prompt
+
+
+class TestTranslateTexts:
+    """translate_texts() — the metadata (title/description) helper, 3D."""
+
+    def test_translates_each_string_in_order(self, monkeypatch):
+        import asyncio
+        calls = []
+
+        async def fake_translate_text(text, target_lang, model="m", **kw):
+            calls.append((text, target_lang, model))
+            return f"[{target_lang}] {text}"
+
+        monkeypatch.setattr(T, "translate_text", fake_translate_text)
+        out = asyncio.run(T.translate_texts(
+            ["My Title", "A description"], "ru", model="qwen3:8b"))
+        assert out == ["[ru] My Title", "[ru] A description"]
+        assert [c[0] for c in calls] == ["My Title", "A description"]
+        assert all(c[2] == "qwen3:8b" for c in calls)
+
+    def test_empty_list(self, monkeypatch):
+        import asyncio
+
+        async def fake_translate_text(*a, **kw):  # pragma: no cover
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(T, "translate_text", fake_translate_text)
+        assert asyncio.run(T.translate_texts([], "ru")) == []
+
+    def test_failures_propagate(self, monkeypatch):
+        import asyncio
+
+        async def fake_translate_text(*a, **kw):
+            raise T.LMStudioError("backend down")
+
+        monkeypatch.setattr(T, "translate_text", fake_translate_text)
+        with pytest.raises(T.LMStudioError):
+            asyncio.run(T.translate_texts(["Title"], "ru"))
+
+    def test_context_hint_forwarded(self, monkeypatch):
+        import asyncio
+        seen = {}
+
+        async def fake_translate_text(text, target_lang, model="m", **kw):
+            seen.update(kw)
+            return text
+
+        monkeypatch.setattr(T, "translate_text", fake_translate_text)
+        asyncio.run(T.translate_texts(["x"], "ru", context_hint="a vlog"))
+        assert seen.get("context_hint") == "a vlog"

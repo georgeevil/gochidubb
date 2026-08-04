@@ -287,3 +287,50 @@ def test_vk_upload_missing_file():
     up = VKUploader(access_token="tok", group_id="")
     with pytest.raises(PublishError, match="not found"):
         asyncio.run(up.upload("/nonexistent/video.mp4", PublishMeta(title="t")))
+
+
+# ── can_transition (Phase 3C state machine) ──────────────────────────
+
+def test_can_transition_full_matrix():
+    """Exhaustive matrix: every (from_status, action) pair."""
+    from pipeline.publisher import PUBLISH_STATUSES, can_transition
+
+    expected = {
+        # action: set of from-statuses where it is legal (None = never staged)
+        "stage": {None, "staged", "approved", "uploaded", "failed", "cancelled"},
+        "approve": {"staged", "failed"},
+        "cancel": {"staged", "approved", "failed"},
+        "upload": {"approved"},
+    }
+    all_from = [None] + list(PUBLISH_STATUSES)
+    for action, legal in expected.items():
+        for frm in all_from:
+            assert can_transition(frm, action) is (frm in legal), (
+                f"can_transition({frm!r}, {action!r})"
+            )
+
+
+def test_can_transition_never_from_uploading():
+    from pipeline.publisher import can_transition
+    for action in ("stage", "approve", "cancel", "upload"):
+        assert can_transition("uploading", action) is False
+
+
+def test_can_transition_unknown_action():
+    from pipeline.publisher import can_transition
+    assert can_transition("staged", "publish") is False
+    assert can_transition(None, "") is False
+
+
+def test_can_transition_empty_status_means_unstaged():
+    from pipeline.publisher import can_transition
+    # "" and None both mean "no publish dict yet" — staging is legal.
+    assert can_transition("", "stage") is True
+    assert can_transition(None, "stage") is True
+    assert can_transition("", "approve") is False
+
+
+def test_pending_statuses_cover_inbox_states():
+    from pipeline.publisher import PUBLISH_PENDING_STATUSES
+    assert set(PUBLISH_PENDING_STATUSES) == {
+        "staged", "approved", "uploading", "failed"}
