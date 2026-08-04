@@ -2343,6 +2343,117 @@ async def system_status():
     return status
 
 
+# ─────────────────────────────────────────────────────────────
+# API: Trend scout — discover popular YouTube videos to dub
+# ─────────────────────────────────────────────────────────────
+from fastapi import Request as _ScoutRequest  # noqa: E402  (route-local import; top import block owned elsewhere)
+
+
+@app.get("/api/scout/trending")
+async def scout_trending(category: str = "", country: str = "",
+                         limit: int = 20, include_shorts: bool = False):
+    """Trending video candidates from mostviewed.today (yt-dlp fallback).
+
+    Each candidate carries `already_processed` (+ `existing_job_id`) matched
+    against jobs this server has already run, so agents can skip duplicates.
+    """
+    from app import scout
+    try:
+        result = await scout.fetch_trending(
+            category=category or None,
+            country=country or None,
+            limit=max(1, min(int(limit or 20), 100)),
+            include_shorts=include_shorts,
+        )
+    except Exception as e:
+        log.warning(f"[scout] trending fetch failed: {e}")
+        return JSONResponse({"error": str(e)}, 502)
+    scout.annotate_already_processed(result["candidates"], jobs)
+    return result
+
+
+@app.post("/api/scout/dub")
+async def scout_dub(request: _ScoutRequest):
+    """Convenience: submit a scout candidate straight into the dub pipeline.
+
+    JSON body: {video_id or url, target_lang, mode?: "dub"|"reupload"|"auto",
+    is_music?, scheduled_at?, + optional pass-through of the usual dub params
+    (source_lang, model, keep_bg, whisper_model, speaker_mode, context_hint,
+    voice_style, voice_preset, tts_speed, wizard_mode, auto_denoise,
+    lip_sync)}. mode "auto" resolves to "reupload" for music candidates
+    (category 10), else "dub". v1: "dub" reuses the exact POST /api/dub
+    submission path; "reupload" returns 501 until the pipeline grows the mode.
+    """
+    from app import scout
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("body must be a JSON object")
+    except Exception:
+        return JSONResponse({"error": "JSON object body required"}, 400)
+
+    video_id = str(body.get("video_id") or "").strip()
+    url = str(body.get("url") or "").strip()
+    if not url and video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+    if not url:
+        return JSONResponse({"error": "Provide video_id or url"}, 400)
+
+    target_lang = str(body.get("target_lang") or "").strip()
+    if not target_lang:
+        return JSONResponse({"error": "target_lang is required"}, 400)
+
+    mode = str(body.get("mode") or "auto").strip().lower()
+    if mode not in ("dub", "reupload", "auto"):
+        return JSONResponse(
+            {"error": f"Unknown mode {mode!r} (dub|reupload|auto)"}, 400)
+    if mode == "auto":
+        is_music = body.get("is_music")
+        if is_music is None and video_id:
+            cand = scout.find_cached_candidate(video_id)
+            is_music = bool(cand and cand.get("is_music"))
+        mode = "reupload" if is_music else "dub"
+
+    if mode == "reupload":
+        return JSONResponse(
+            {"error": "reupload mode lands in the next milestone"}, 501)
+    if body.get("scheduled_at"):
+        return JSONResponse(
+            {"error": "scheduled_at is not supported on single dubs yet — "
+                      "use POST /api/dub/batch with scheduled_at, or omit it"},
+            501)
+
+    # Reuse the exact same submission path as POST /api/dub (no duplication:
+    # start_dub is called directly with the URL branch inputs).
+    resp = await start_dub(
+        source=url,
+        source_lang=str(body.get("source_lang") or "auto"),
+        target_lang=target_lang,
+        model=str(body.get("model") or "gemma4:e4b"),
+        keep_bg=bool(body.get("keep_bg", False)),
+        whisper_model=str(body.get("whisper_model") or "large-v3"),
+        speaker_mode=str(body.get("speaker_mode") or "main"),
+        context_hint=str(body.get("context_hint") or ""),
+        voice_style=str(body.get("voice_style") or ""),
+        voice_preset=str(body.get("voice_preset") or "auto"),
+        tts_speed=str(body.get("tts_speed") or "balanced"),
+        wizard_mode=str(body.get("wizard_mode") or "auto"),
+        auto_denoise=bool(body.get("auto_denoise", False)),
+        lip_sync=bool(body.get("lip_sync", False)),
+    )
+    if isinstance(resp, JSONResponse):
+        return resp  # start_dub validation error — pass it through
+
+    job_id = resp.get("job_id")
+    if video_id and job_id and job_id in jobs:
+        # Record provenance so already_processed matching works even before
+        # the downloader-metadata probe populates job["meta"] on its own.
+        jobs[job_id].setdefault("meta", {}).setdefault("video_id", video_id)
+        jobs[job_id]["scout"] = {"video_id": video_id}
+        save_job(jobs[job_id])
+    return {**resp, "mode": "dub"}
+
+
 @app.post("/api/diagnostics/run")
 async def run_diagnostics(token: str = Form("")):
     """Deep environment check — the only place that touches the network.
