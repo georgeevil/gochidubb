@@ -1,23 +1,23 @@
 #!/usr/bin/env python
-"""TachiDUBB Studio — CLI for local AI video dubbing.
+"""GoChiDUBB Studio — CLI for local AI video dubbing.
 
-Talks to a running TachiDUBB server via HTTP. Server must already be up
+Talks to a running GoChiDUBB server via HTTP. Server must already be up
 (start.bat or `python server.py`). Default URL = http://localhost:8910,
-override with env var `TACHIDUBB_URL`.
+override with env var `GOCHIDUBB_URL`.
 
 Examples:
     # Dub a YouTube short into French
-    python tools/tachidubb_cli.py dub https://youtu.be/abc --lang fr --wait
+    python tools/gochidubb_cli.py dub https://youtu.be/abc --lang fr --wait
 
     # Re-dub job 5038e404 into 5 languages, stitched as showcase
-    python tools/tachidubb_cli.py redub 5038e404 --langs es,fr,de,ja,pt --mode showcase --wait
+    python tools/gochidubb_cli.py redub 5038e404 --langs es,fr,de,ja,pt --mode showcase --wait
 
     # Quick-test (separate side-by-side dubs)
-    python tools/tachidubb_cli.py compare ./clip.mp4 --langs es,fr --trim 60
+    python tools/gochidubb_cli.py compare ./clip.mp4 --langs es,fr --trim 60
 
     # Show what's available
-    python tools/tachidubb_cli.py system
-    python tools/tachidubb_cli.py jobs --status complete
+    python tools/gochidubb_cli.py system
+    python tools/gochidubb_cli.py jobs --status complete
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ try:
 except Exception:
     pass
 
-from tachidubb_client import TachiDUBBClient, TachiDUBBError, DEFAULT_URL
+from gochidubb_client import GoChiDUBBClient, GoChiDUBBError, DEFAULT_URL
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ def _print_job(j: dict, *, short: bool = False) -> None:
 # ─────────────────────────────────────────────────────────────────────
 # Subcommand handlers — each is async, takes args namespace
 # ─────────────────────────────────────────────────────────────────────
-async def cmd_dub(c: TachiDUBBClient, a) -> None:
+async def cmd_dub(c: GoChiDUBBClient, a) -> None:
     res = await c.submit_dub(
         a.source, a.lang,
         source_lang=a.source_lang, model=a.model,
@@ -85,7 +85,7 @@ async def cmd_dub(c: TachiDUBBClient, a) -> None:
             sys.exit(2)
 
 
-async def cmd_compare(c: TachiDUBBClient, a) -> None:
+async def cmd_compare(c: GoChiDUBBClient, a) -> None:
     res = await c.submit_compare(
         a.source, a.langs, trim_seconds=a.trim,
         source_lang=a.source_lang, model=a.model,
@@ -101,7 +101,7 @@ async def cmd_compare(c: TachiDUBBClient, a) -> None:
             _print_job(j, short=True)
 
 
-async def cmd_showcase(c: TachiDUBBClient, a) -> None:
+async def cmd_showcase(c: GoChiDUBBClient, a) -> None:
     res = await c.submit_showcase(
         a.source, a.langs, trim_seconds=a.trim,
         source_lang=a.source_lang, model=a.model,
@@ -120,7 +120,7 @@ async def cmd_showcase(c: TachiDUBBClient, a) -> None:
             _print_json(info)
 
 
-async def cmd_redub(c: TachiDUBBClient, a) -> None:
+async def cmd_redub(c: GoChiDUBBClient, a) -> None:
     res = await c.redub(a.job_id, a.langs, mode=a.mode)
     _print_json(res)
     if a.wait:
@@ -143,7 +143,7 @@ async def cmd_redub(c: TachiDUBBClient, a) -> None:
                 sys.exit(2)
 
 
-async def cmd_status(c: TachiDUBBClient, a) -> None:
+async def cmd_status(c: GoChiDUBBClient, a) -> None:
     j = await c.get_job(a.job_id)
     if a.json:
         _print_json(j)
@@ -153,7 +153,7 @@ async def cmd_status(c: TachiDUBBClient, a) -> None:
             print(f"      url: {c.output_url(a.job_id)}")
 
 
-async def cmd_jobs(c: TachiDUBBClient, a) -> None:
+async def cmd_jobs(c: GoChiDUBBClient, a) -> None:
     jobs = await c.list_jobs(limit=a.limit, status=a.status, batch_id=a.batch)
     if a.json:
         _print_json(jobs)
@@ -165,7 +165,7 @@ async def cmd_jobs(c: TachiDUBBClient, a) -> None:
         _print_job(j, short=True)
 
 
-async def cmd_wait(c: TachiDUBBClient, a) -> None:
+async def cmd_wait(c: GoChiDUBBClient, a) -> None:
     final = await c.wait_for_job(a.job_id, timeout=a.timeout)
     if a.json:
         _print_json(final)
@@ -175,12 +175,12 @@ async def cmd_wait(c: TachiDUBBClient, a) -> None:
         sys.exit(2)
 
 
-async def cmd_showcase_status(c: TachiDUBBClient, a) -> None:
+async def cmd_showcase_status(c: GoChiDUBBClient, a) -> None:
     info = await c.get_showcase(a.batch_id)
     _print_json(info)
 
 
-async def cmd_showcase_rebuild(c: TachiDUBBClient, a) -> None:
+async def cmd_showcase_rebuild(c: GoChiDUBBClient, a) -> None:
     res = await c.rebuild_showcase(a.batch_id)
     _print_json(res)
     if a.wait:
@@ -188,15 +188,15 @@ async def cmd_showcase_rebuild(c: TachiDUBBClient, a) -> None:
         print(f"[done] {c.showcase_url(a.batch_id)}")
 
 
-async def cmd_cancel(c: TachiDUBBClient, a) -> None:
+async def cmd_cancel(c: GoChiDUBBClient, a) -> None:
     _print_json(await c.cancel_job(a.job_id))
 
 
-async def cmd_delete(c: TachiDUBBClient, a) -> None:
+async def cmd_delete(c: GoChiDUBBClient, a) -> None:
     _print_json(await c.delete_job(a.job_id))
 
 
-async def cmd_system(c: TachiDUBBClient, a) -> None:
+async def cmd_system(c: GoChiDUBBClient, a) -> None:
     s = await c.system_status()
     if a.json:
         _print_json(s)
@@ -220,16 +220,16 @@ async def cmd_system(c: TachiDUBBClient, a) -> None:
         print(f"          models: {', '.join(names[:6])}{'...' if len(names) > 6 else ''}")
 
 
-async def cmd_languages(c: TachiDUBBClient, a) -> None:
+async def cmd_languages(c: GoChiDUBBClient, a) -> None:
     print(",".join(await c.list_languages()))
 
 
-async def cmd_models(c: TachiDUBBClient, a) -> None:
+async def cmd_models(c: GoChiDUBBClient, a) -> None:
     for m in await c.list_models():
         print(m)
 
 
-async def cmd_voices(c: TachiDUBBClient, a) -> None:
+async def cmd_voices(c: GoChiDUBBClient, a) -> None:
     for v in await c.list_voices():
         if isinstance(v, dict):
             print(f"{v.get('name', '?'):<20} {v.get('lang', '?'):<6} {v.get('description', '')}")
@@ -255,10 +255,10 @@ def _add_common_dub_opts(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="tachidubb",
-        description="Command-line interface for TachiDUBB Studio.",
+        prog="gochidubb",
+        description="Command-line interface for GoChiDUBB Studio.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Server URL: env TACHIDUBB_URL (default %s)" % DEFAULT_URL,
+        epilog="Server URL: env GOCHIDUBB_URL (default %s)" % DEFAULT_URL,
     )
     p.add_argument("--url", default=DEFAULT_URL, help="Override server URL for this call")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -339,11 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _main_async(args) -> int:
-    async with TachiDUBBClient(base_url=args.url) as c:
+    async with GoChiDUBBClient(base_url=args.url) as c:
         try:
             await args.handler(c, args)
             return 0
-        except TachiDUBBError as e:
+        except GoChiDUBBError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
 

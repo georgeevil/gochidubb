@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 echo -e "${B}"
 echo "╔══════════════════════════════════════════════╗"
-echo "║    TachiDUBB Studio — AI Video Dubbing       ║"
+echo "║    GoChiDUBB Studio — AI Video Dubbing       ║"
 echo "║    by TachikomaRed and smolemaru             ║"
 echo "╚══════════════════════════════════════════════╝"
 echo -e "${N}"
@@ -126,7 +126,7 @@ if [[ "${REPLY:-1}" == "1" ]]; then
     echo ""
     read -p "$(echo -e ${Y}'Is LM Studio running with local server enabled? [Y/n]: '${N})" -n 1 -r; echo ""
     if [[ $REPLY =~ ^[Nn]$ ]]; then
-        warn "Please start LM Studio and enable local server before running TachiDUBB"
+        warn "Please start LM Studio and enable local server before running GoChiDUBB"
     else
         # Test connection to LM Studio
         if curl -s http://localhost:1234/v1/models &>/dev/null; then
@@ -157,9 +157,9 @@ LM_STUDIO_URL=http://localhost:1234/v1
 # macOS compatibility
 PYTORCH_ENABLE_MPS_FALLBACK=1
 TORCHCODEC_USE_TORCHAUDIO=1
-TACHIDUBB_USE_WHISPERX=0
+GOCHIDUBB_USE_WHISPERX=0
 WHISPER_MODEL=base
-TACHIDUBB_WARMUP=0
+GOCHIDUBB_WARMUP=0
 EOF
 else
     ok "Using Ollama"
@@ -204,9 +204,9 @@ OLLAMA_MODEL=qwen3:8b
 # macOS compatibility
 PYTORCH_ENABLE_MPS_FALLBACK=1
 TORCHCODEC_USE_TORCHAUDIO=1
-TACHIDUBB_USE_WHISPERX=0
+GOCHIDUBB_USE_WHISPERX=0
 WHISPER_MODEL=base
-TACHIDUBB_WARMUP=0
+GOCHIDUBB_WARMUP=0
 EOF
 fi
 
@@ -253,12 +253,12 @@ fi
 if [[ "$OSTYPE" == "darwin"* ]]; then
     export PYTORCH_ENABLE_MPS_FALLBACK=1
     export TORCHCODEC_USE_TORCHAUDIO=1
-    export TACHIDUBB_USE_WHISPERX=0
+    export GOCHIDUBB_USE_WHISPERX=0
 fi
 
 echo ""
 echo "╔═════════════════════════════════════════════════════════╗"
-echo "║  TachiDUBB Studio — http://localhost:8910              ║"
+echo "║  GoChiDUBB Studio — http://localhost:8910              ║"
 echo "╠═════════════════════════════════════════════════════════╣"
 if [ "${USE_LM_STUDIO:-1}" = "1" ]; then
     echo "║  Translation: LM Studio (${LM_STUDIO_URL:-http://localhost:1234/v1})  ║"

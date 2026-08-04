@@ -96,9 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The server binds `127.0.0.1` instead of `0.0.0.0`.** It has no
   authentication of any kind, so the old default offered job control, every
   transcript, `/api/logs` and `/api/config` to every device on the network —
-  including whatever wifi a laptop happens to be on. `TACHIDUBB_HOST=0.0.0.0`
+  including whatever wifi a laptop happens to be on. `GOCHIDUBB_HOST=0.0.0.0`
   restores the old behaviour deliberately, and startup prints a warning
-  whenever the bind is not loopback. `TACHIDUBB_PORT` is now honoured too.
+  whenever the bind is not loopback. `GOCHIDUBB_PORT` is now honoured too.
 
 ### Fixed
 - **The UI froze for the entire run of a job.** Stage handlers are `async def`
@@ -245,13 +245,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource-sampled)
 - Stitched multilingual showcase reel rendering with per-language `· LL ·` badges
 - Resume-from-checkpoint for jobs that errored mid-pipeline
-- `tachidubb_rebuild_showcase` (MCP) / `showcase-rebuild` (CLI) — re-stitch without re-dubbing
-- `tachidubb_list_models` — query installed Ollama translation models
+- `gochidubb_rebuild_showcase` (MCP) / `showcase-rebuild` (CLI) — re-stitch without re-dubbing
+- `gochidubb_list_models` — query installed Ollama translation models
 - `examples/` directory with ready-to-run dub, showcase, and agent scripts
-- **Server process manager** (`tools/tachidubb_serverctl.py`) — start, stop, restart,
+- **Server process manager** (`tools/gochidubb_serverctl.py`) — start, stop, restart,
   status, and logs commands with PID file tracking and orphan detection.
   Prevents lingering server processes after agentic code changes.
-- **PID file** (`server.py` writes `.tachidubb.pid` on startup, cleans up on shutdown)
+- **PID file** (`server.py` writes `.gochidubb.pid` on startup, cleans up on shutdown)
 - **Signal handling** (`SIGTERM`/`SIGINT`) for graceful shutdown from external kill commands
 - **`--reload` flag** support for development auto-reload
 - **macOS launchd integration** (`install-launchd` command) for auto-start on login
@@ -275,8 +275,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-speaker diarization (pyannote, optional)
 - Background music preservation (audio-separator, optional)
 - Persistent job history
-- MCP server (`tools/tachidubb_mcp.py`) — Claude Code / agent integration
-- CLI (`tools/tachidubb_cli.py`) — scriptable from any shell
-- Claude Code skill (`.claude/skills/tachidubb/SKILL.md`)
+- MCP server (`tools/gochidubb_mcp.py`) — Claude Code / agent integration
+- CLI (`tools/gochidubb_cli.py`) — scriptable from any shell
+- Claude Code skill (`.claude/skills/gochidubb/SKILL.md`)
 - Whisper-roundtrip QA on synthesized segments with seed-mutation retries
 - Tiered TTS fallback: VoxCPM2 cloning → VoxCPM2 reference → voice design → edge-tts

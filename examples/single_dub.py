@@ -12,11 +12,11 @@ from pathlib import Path
 
 # Allow running from the repo root without installing
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from tachidubb_client import TachiDUBBClient  # noqa: E402
+from gochidubb_client import GoChiDUBBClient  # noqa: E402
 
 
 async def run(source: str, lang: str) -> int:
-    async with TachiDUBBClient() as c:
+    async with GoChiDUBBClient() as c:
         submitted = await c.submit_dub(source=source, target_lang=lang)
         job_id = submitted["job_id"]
         print(f"Submitted {job_id} — polling...")

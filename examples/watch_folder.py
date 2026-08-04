@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from tachidubb_client import TachiDUBBClient  # noqa: E402
+from gochidubb_client import GoChiDUBBClient  # noqa: E402
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
 
@@ -23,7 +23,7 @@ VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
 async def run(folder: Path, langs: list[str], poll: int) -> int:
     seen: set[Path] = set()
     print(f"Watching {folder} for new videos (langs={langs}, poll={poll}s) — Ctrl+C to stop")
-    async with TachiDUBBClient() as c:
+    async with GoChiDUBBClient() as c:
         try:
             while True:
                 for p in sorted(folder.iterdir()):

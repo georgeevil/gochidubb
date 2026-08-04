@@ -1,11 +1,11 @@
-"""TachiDUBB Studio — async HTTP client shared by the CLI and MCP server.
+"""GoChiDUBB Studio — async HTTP client shared by the CLI and MCP server.
 
 Wraps the FastAPI endpoints in `server.py` with a typed Python interface.
-Both `tachidubb_cli.py` and `tachidubb_mcp.py` use this so we keep the
+Both `gochidubb_cli.py` and `gochidubb_mcp.py` use this so we keep the
 HTTP contract in one place.
 
-Server URL is configurable via env var `TACHIDUBB_URL` (default
-http://localhost:8910). The TachiDUBB server must already be running —
+Server URL is configurable via env var `GOCHIDUBB_URL` (default
+http://localhost:8910). The GoChiDUBB server must already be running —
 this client does not start it.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any, Optional
 import httpx
 
 
-DEFAULT_URL = os.environ.get("TACHIDUBB_URL", "http://localhost:8910")
+DEFAULT_URL = os.environ.get("GOCHIDUBB_URL", "http://localhost:8910")
 
 # Active statuses — used by wait_for_completion to know when to stop polling.
 _ACTIVE = {
@@ -29,19 +29,19 @@ _ACTIVE = {
 _TERMINAL = {"complete", "error", "cancelled"}
 
 
-class TachiDUBBError(RuntimeError):
+class GoChiDUBBError(RuntimeError):
     """Raised when the server returns a non-2xx response or a JSON error field."""
 
 
-class TachiDUBBClient:
-    """Async client. Use as `async with TachiDUBBClient() as c:` or call
+class GoChiDUBBClient:
+    """Async client. Use as `async with GoChiDUBBClient() as c:` or call
     `await c.aclose()` manually."""
 
     def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 120.0):
         self.base_url = base_url.rstrip("/")
         self._http = httpx.AsyncClient(timeout=timeout)
 
-    async def __aenter__(self) -> "TachiDUBBClient":
+    async def __aenter__(self) -> "GoChiDUBBClient":
         return self
 
     async def __aexit__(self, *_exc) -> None:
@@ -64,7 +64,7 @@ class TachiDUBBClient:
             return {}
         if r.status_code >= 400:
             err = data.get("error") or data.get("detail") or f"HTTP {r.status_code}"
-            raise TachiDUBBError(err)
+            raise GoChiDUBBError(err)
         return data
 
     @staticmethod
@@ -74,11 +74,11 @@ class TachiDUBBClient:
         URLs go into the `source` form field (yt-dlp downloads them).
         Local file paths become a multipart `video` upload.
         """
-        if TachiDUBBClient._is_url(source):
+        if GoChiDUBBClient._is_url(source):
             return None, {"source": source}
         p = Path(source).expanduser().resolve()
         if not p.exists():
-            raise TachiDUBBError(f"Source file not found: {p}")
+            raise GoChiDUBBError(f"Source file not found: {p}")
         # httpx will close the file handle when the request finishes
         f = open(p, "rb")
         return {"video": (p.name, f, "application/octet-stream")}, {}
@@ -253,7 +253,7 @@ class TachiDUBBClient:
         try:
             d = await self._request("GET", "/api/voice_presets")
             return d.get("presets", []) if isinstance(d, dict) else []
-        except TachiDUBBError:
+        except GoChiDUBBError:
             return []
 
     # ── result / output URLs ─────────────────────────────────────────
@@ -274,7 +274,7 @@ class TachiDUBBClient:
     ) -> dict:
         """Poll until job reaches a terminal state. Returns the final job dict.
 
-        Raises TachiDUBBError on timeout. Status 'error' is NOT raised — the
+        Raises GoChiDUBBError on timeout. Status 'error' is NOT raised — the
         caller inspects `result["status"]` and `result["error"]`.
         """
         start = time.monotonic()
@@ -282,13 +282,13 @@ class TachiDUBBClient:
         while time.monotonic() - start < timeout:
             try:
                 last = await self.get_job(job_id)
-            except TachiDUBBError:
+            except GoChiDUBBError:
                 # Job might not be flushed to disk yet; keep trying briefly
                 pass
             if last.get("status") in _TERMINAL:
                 return last
             await asyncio.sleep(poll)
-        raise TachiDUBBError(
+        raise GoChiDUBBError(
             f"Timeout after {timeout}s waiting for {job_id} (last status={last.get('status')})")
 
     async def wait_for_batch(
@@ -306,7 +306,7 @@ class TachiDUBBClient:
             if jobs and all(j.get("status") in _TERMINAL for j in jobs):
                 return jobs
             await asyncio.sleep(poll)
-        raise TachiDUBBError(f"Timeout after {timeout}s waiting for batch {batch_id}")
+        raise GoChiDUBBError(f"Timeout after {timeout}s waiting for batch {batch_id}")
 
     async def wait_for_showcase(
         self,
@@ -323,6 +323,6 @@ class TachiDUBBClient:
             if info.get("status") == "ready":
                 return info
             if info.get("status") == "error":
-                raise TachiDUBBError(f"Showcase assembly failed: {info.get('error', '?')}")
+                raise GoChiDUBBError(f"Showcase assembly failed: {info.get('error', '?')}")
             await asyncio.sleep(poll)
-        raise TachiDUBBError(f"Timeout after {timeout}s waiting for showcase {batch_id}")
+        raise GoChiDUBBError(f"Timeout after {timeout}s waiting for showcase {batch_id}")

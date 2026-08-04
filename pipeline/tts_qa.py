@@ -35,7 +35,7 @@ import re
 import time
 from typing import Optional, Tuple
 
-log = logging.getLogger("tachidubb.tts_qa")
+log = logging.getLogger("gochidubb.tts_qa")
 
 _whisper_model = None
 _whisper_model_size = None
@@ -184,9 +184,9 @@ def check_segment_quality(
 def is_acceptable(score: float, threshold: float = 0.4) -> bool:
     """Default quality threshold. CER <= 0.4 + no major lang mismatch = OK.
 
-    Tunable via TACHIDUBB_QA_THRESHOLD env var if user wants stricter/looser."""
+    Tunable via GOCHIDUBB_QA_THRESHOLD env var if user wants stricter/looser."""
     try:
-        threshold = float(os.environ.get("TACHIDUBB_QA_THRESHOLD", threshold))
+        threshold = float(os.environ.get("GOCHIDUBB_QA_THRESHOLD", threshold))
     except ValueError:
         pass
     return score <= threshold

@@ -127,7 +127,7 @@ class TestIsAcceptable:
         assert is_acceptable(0.2, threshold=0.25) is True
 
     def test_with_env_override(self, monkeypatch):
-        monkeypatch.setenv("TACHIDUBB_QA_THRESHOLD", "0.5")
+        monkeypatch.setenv("GOCHIDUBB_QA_THRESHOLD", "0.5")
         # Re-import to pick up env? No — function reads env on each call.
         assert is_acceptable(0.45) is True
         assert is_acceptable(0.55) is False

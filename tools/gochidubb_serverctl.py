@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""TachiDUBB Server Manager — start, stop, restart, and monitor the server.
+"""GoChiDUBB Server Manager — start, stop, restart, and monitor the server.
 
 Usage:
-    python tools/tachidubb_serverctl.py start     # Start server in background
-    python tools/tachidubb_serverctl.py stop      # Graceful stop
-    python tools/tachidubb_serverctl.py restart   # Restart (stop + start)
-    python tools/tachidubb_serverctl.py status    # Check if running
-    python tools/tachidubb_serverctl.py logs      # Tail server logs
-    python tools/tachidubb_serverctl.py foreground # Run in foreground (for dev)
+    python tools/gochidubb_serverctl.py start     # Start server in background
+    python tools/gochidubb_serverctl.py stop      # Graceful stop
+    python tools/gochidubb_serverctl.py restart   # Restart (stop + start)
+    python tools/gochidubb_serverctl.py status    # Check if running
+    python tools/gochidubb_serverctl.py logs      # Tail server logs
+    python tools/gochidubb_serverctl.py foreground # Run in foreground (for dev)
 
-The server writes a PID file to {project_root}/.tachidubb.pid on startup
+The server writes a PID file to {project_root}/.gochidubb.pid on startup
 and removes it on clean shutdown. The manager uses this to track the process.
 
 On macOS, a launchd plist is also provided for auto-start on login.
@@ -28,13 +28,13 @@ from pathlib import Path
 # ── Paths ──────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 SERVER_SCRIPT = PROJECT_ROOT / "server.py"
-PID_FILE = PROJECT_ROOT / ".tachidubb.pid"
-LOG_FILE = PROJECT_ROOT / "tachidubb.log"
+PID_FILE = PROJECT_ROOT / ".gochidubb.pid"
+LOG_FILE = PROJECT_ROOT / "gochidubb.log"
 VENV_PYTHON = PROJECT_ROOT / "venv" / "bin" / "python"
 # Fallback: use system python if venv not found
 FALLBACK_PYTHON = sys.executable
 
-log = logging.getLogger("tachidubb.serverctl")
+log = logging.getLogger("gochidubb.serverctl")
 
 
 def _python() -> str:
@@ -69,7 +69,7 @@ def _remove_pid() -> None:
 
 
 def _is_running(pid: int | None) -> bool:
-    """Check if a process with the given PID is alive and is a TachiDUBB server."""
+    """Check if a process with the given PID is alive and is a GoChiDUBB server."""
     if pid is None:
         return False
     try:
@@ -81,7 +81,7 @@ def _is_running(pid: int | None) -> bool:
 
 
 def _find_server_processes() -> list[int]:
-    """Find all TachiDUBB server processes (not just the one in the PID file).
+    """Find all GoChiDUBB server processes (not just the one in the PID file).
 
     Uses `ps` to find python processes running server.py. This catches
     orphaned processes whose PID file was deleted or stale.
@@ -125,22 +125,22 @@ def cmd_status() -> dict:
     }
 
     if running:
-        print(f"✅ TachiDUBB server is RUNNING (PID {pid})")
+        print(f"✅ GoChiDUBB server is RUNNING (PID {pid})")
     else:
-        print("❌ TachiDUBB server is NOT running")
+        print("❌ GoChiDUBB server is NOT running")
         if pid is not None:
             print(f"   Stale PID file found: {pid} (process no longer exists)")
             _remove_pid()
 
     if orphaned:
         print(f"⚠️  Found {len(orphaned)} orphaned server process(es): {orphaned}")
-        print("   Run 'tachidubb-serverctl stop' to clean them up")
+        print("   Run 'gochidubb-serverctl stop' to clean them up")
 
     return info
 
 
 def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> None:
-    """Start the TachiDUBB server.
+    """Start the GoChiDUBB server.
 
     Args:
         daemon: If True, run in background (detached). If False, run in foreground.
@@ -162,12 +162,12 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
     if reload:
         cmd.append("--reload")
 
-    print(f"🚀 Starting TachiDUBB server on port {port}...")
+    print(f"🚀 Starting GoChiDUBB server on port {port}...")
 
     # server.py takes its port from the environment, not argv — without this
     # `--port` printed the number above and then started on 8910 anyway.
     env = dict(os.environ)
-    env["TACHIDUBB_PORT"] = str(port)
+    env["GOCHIDUBB_PORT"] = str(port)
 
     if daemon:
         # Start in background: redirect stdout/stderr to log file
@@ -200,7 +200,7 @@ def cmd_start(daemon: bool = True, port: int = 8910, reload: bool = False) -> No
 
 
 def cmd_stop(force: bool = False) -> None:
-    """Stop the TachiDUBB server gracefully.
+    """Stop the GoChiDUBB server gracefully.
 
     Args:
         force: If True, use SIGKILL instead of SIGTERM.
@@ -255,7 +255,7 @@ def cmd_stop(force: bool = False) -> None:
 
 def cmd_restart(port: int = 8910, reload: bool = False) -> None:
     """Restart the server (stop + start)."""
-    print("🔄 Restarting TachiDUBB server...")
+    print("🔄 Restarting GoChiDUBB server...")
     cmd_stop()
     # Brief pause to ensure port is released
     time.sleep(1)
@@ -323,7 +323,7 @@ def cmd_logs(follow: bool = False, lines: int = 30) -> None:
 def cmd_install_launchd() -> None:
     """Install a macOS launchd plist for auto-start on login.
 
-    This creates ~/Library/LaunchAgents/com.tachidubb.server.plist
+    This creates ~/Library/LaunchAgents/com.gochidubb.server.plist
     which starts the server automatically when you log in.
     """
     if sys.platform != "darwin":
@@ -332,7 +332,7 @@ def cmd_install_launchd() -> None:
 
     plist_dir = Path.home() / "Library" / "LaunchAgents"
     plist_dir.mkdir(parents=True, exist_ok=True)
-    plist_path = plist_dir / "com.tachidubb.server.plist"
+    plist_path = plist_dir / "com.gochidubb.server.plist"
 
     python = _python()
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -341,7 +341,7 @@ def cmd_install_launchd() -> None:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.tachidubb.server</string>
+    <string>com.gochidubb.server</string>
     <key>ProgramArguments</key>
     <array>
         <string>{python}</string>
@@ -369,13 +369,13 @@ def cmd_install_launchd() -> None:
 """
     plist_path.write_text(plist_content)
     print(f"✅ Created {plist_path}")
-    print("   To load it now: launchctl load ~/Library/LaunchAgents/com.tachidubb.server.plist")
-    print("   To unload:      launchctl unload ~/Library/LaunchAgents/com.tachidubb.server.plist")
+    print("   To load it now: launchctl load ~/Library/LaunchAgents/com.gochidubb.server.plist")
+    print("   To unload:      launchctl unload ~/Library/LaunchAgents/com.gochidubb.server.plist")
 
 
 def cmd_uninstall_launchd() -> None:
     """Remove the macOS launchd plist."""
-    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.tachidubb.server.plist"
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.gochidubb.server.plist"
     if plist_path.exists():
         # Try to unload first
         subprocess.run(
@@ -392,17 +392,17 @@ def cmd_uninstall_launchd() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="TachiDUBB Server Manager",
+        description="GoChiDUBB Server Manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python tools/tachidubb_serverctl.py start
-  python tools/tachidubb_serverctl.py stop
-  python tools/tachidubb_serverctl.py restart
-  python tools/tachidubb_serverctl.py status
-  python tools/tachidubb_serverctl.py logs --follow
-  python tools/tachidubb_serverctl.py foreground --reload
-  python tools/tachidubb_serverctl.py install-launchd
+  python tools/gochidubb_serverctl.py start
+  python tools/gochidubb_serverctl.py stop
+  python tools/gochidubb_serverctl.py restart
+  python tools/gochidubb_serverctl.py status
+  python tools/gochidubb_serverctl.py logs --follow
+  python tools/gochidubb_serverctl.py foreground --reload
+  python tools/gochidubb_serverctl.py install-launchd
         """,
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")

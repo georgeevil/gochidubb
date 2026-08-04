@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-log = logging.getLogger("tachidubb.config")
+log = logging.getLogger("gochidubb.config")
 
 # ─── Project paths ──────────────────────────────────────────────────────
 BASE = Path(__file__).parent.parent.resolve()
@@ -111,8 +111,8 @@ def _load_config() -> UserConfig:
         "VOXCPM_STEPS": "voxcpm_steps",
         "OLLAMA_URL": "ollama_url",
         "WHISPER_MODEL": "whisper_model",
-        "TACHIDUBB_OPEN_BROWSER": "open_browser",
-        "TACHIDUBB_WARMUP": "warmup_on_start",
+        "GOCHIDUBB_OPEN_BROWSER": "open_browser",
+        "GOCHIDUBB_WARMUP": "warmup_on_start",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)

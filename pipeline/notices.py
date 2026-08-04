@@ -1,6 +1,6 @@
 """Structured, user-facing setup notices.
 
-TachiDUBB runs on the user's own machine, so there is nobody watching a
+GoChiDUBB runs on the user's own machine, so there is nobody watching a
 terminal. Anything that tells the user "your environment is wrong, here is how
 to fix it" has to reach the UI, not just `log.warning`. This module is the
 shared vocabulary for that.
@@ -107,7 +107,7 @@ def worst_severity(notices: Iterable[Dict[str, Any]]) -> str:
 # Redaction
 # ═════════════════════════════════════════════════════════════════════
 # Notices and captured log lines are served over HTTP. The server binds
-# loopback by default, but TACHIDUBB_HOST can open it to the network, and
+# loopback by default, but GOCHIDUBB_HOST can open it to the network, and
 # anything that quotes a config value or an exception message would then leak a
 # credential. Scrub before storing, not before rendering: the buffer itself
 # should never hold the secret, whatever the bind address happens to be.

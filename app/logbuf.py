@@ -1,6 +1,6 @@
 """In-memory log capture, so nothing important is console-only.
 
-TachiDUBB is a local app: the user launches it, a browser opens, and the
+GoChiDUBB is a local app: the user launches it, a browser opens, and the
 terminal is usually behind the browser window or gone entirely (`start.sh` runs
 `serverctl foreground`, which writes no log file at all). Anything that only
 reaches stderr effectively did not happen.
@@ -22,7 +22,7 @@ existing stream handlers to the original stream objects before teeing, so
 handler output bypasses the tee entirely.
 
 Everything is redacted on the way in (see pipeline/notices.redact). The buffer
-is served over HTTP, and TACHIDUBB_HOST can put that on the network, so a
+is served over HTTP, and GOCHIDUBB_HOST can put that on the network, so a
 credential that reaches the deque is one bind address away from the LAN.
 """
 from __future__ import annotations

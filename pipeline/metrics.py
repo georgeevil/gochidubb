@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-log = logging.getLogger("tachidubb.metrics")
+log = logging.getLogger("gochidubb.metrics")
 
 # ── Optional probes ──────────────────────────────────────────────────
 try:
@@ -243,7 +243,7 @@ class ResourceSampler:
         except Exception:
             pass
         self._thread = threading.Thread(
-            target=self._run, name="tachidubb-perf-sampler", daemon=True,
+            target=self._run, name="gochidubb-perf-sampler", daemon=True,
         )
         self._thread.start()
         return self

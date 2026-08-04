@@ -4,22 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TachiDUBB Studio: a local, offline AI video dubbing pipeline (YouTube URL or file → voice-cloned dub in 28 languages). Everything runs on the user's machine — no cloud, no API keys required by default. FastAPI server on port 8910 with a static UI (`static/index.html`), an MCP server, and a CLI — all three drive the same backend.
+GoChiDUBB Studio: a local, offline AI video dubbing pipeline (YouTube URL or file → voice-cloned dub in 28 languages). Everything runs on the user's machine — no cloud, no API keys required by default. FastAPI server on port 8910 with a static UI (`static/index.html`), an MCP server, and a CLI — all three drive the same backend.
 
 ## Common commands
 
-The `venv/` python is the one to use (`venv/bin/python` on macOS/Linux, `venv\Scripts\python.exe` on Windows). `tools/tachidubb_serverctl.py` picks it up automatically.
+The `venv/` python is the one to use (`venv/bin/python` on macOS/Linux, `venv\Scripts\python.exe` on Windows). `tools/gochidubb_serverctl.py` picks it up automatically.
 
 ```bash
 # Run server (foreground dev mode with auto-reload)
-python tools/tachidubb_serverctl.py foreground --reload
+python tools/gochidubb_serverctl.py foreground --reload
 
 # Run server (background, PID-tracked; survives terminal close)
-python tools/tachidubb_serverctl.py start
-python tools/tachidubb_serverctl.py stop        # graceful SIGTERM, force-kills after 10s
-python tools/tachidubb_serverctl.py restart
-python tools/tachidubb_serverctl.py status      # detects orphaned processes
-python tools/tachidubb_serverctl.py logs --follow
+python tools/gochidubb_serverctl.py start
+python tools/gochidubb_serverctl.py stop        # graceful SIGTERM, force-kills after 10s
+python tools/gochidubb_serverctl.py restart
+python tools/gochidubb_serverctl.py status      # detects orphaned processes
+python tools/gochidubb_serverctl.py logs --follow
 
 # Lint (CI-equivalent — this is all CI runs on push/PR)
 ruff check .
@@ -34,7 +34,7 @@ pytest tests/test_translator.py::test_name -v
 pytest -k "assembler and not slow"    # filter by expression
 ```
 
-Always use `tools/tachidubb_serverctl.py` rather than raw `python server.py &` — the manager writes `.tachidubb.pid` and cleans up orphans left behind by agentic restarts. `restart` is idempotent even if the previous process crashed.
+Always use `tools/gochidubb_serverctl.py` rather than raw `python server.py &` — the manager writes `.gochidubb.pid` and cleans up orphans left behind by agentic restarts. `restart` is idempotent even if the previous process crashed.
 
 `tests/manual_test_*.py` files are exploratory scripts, not pytest tests — don't run them under pytest.
 
@@ -74,7 +74,7 @@ Job lifecycle: `POST /api/dub` (single), `/api/dub/batch` (compare — N indepen
 
 ### Persistence
 
-`app/db.py` is a thin SQLite wrapper over `tachidubb.db` (project root). Schema is one `jobs` table with a JSON blob column and virtual columns (`status`, `created`, `batch_id`) extracted via `json_extract` for indexed queries. On startup it migrates any legacy `jobs_db/*.json` files. Large transient fields (`transcript`, `transcript_raw`, `_pending_args`) are stripped by `_strip_large_fields` before persist — but keep in mind the in-memory `jobs` dict is the source of truth during a live run.
+`app/db.py` is a thin SQLite wrapper over `gochidubb.db` (project root). Schema is one `jobs` table with a JSON blob column and virtual columns (`status`, `created`, `batch_id`) extracted via `json_extract` for indexed queries. On startup it migrates any legacy `jobs_db/*.json` files. Large transient fields (`transcript`, `transcript_raw`, `_pending_args`) are stripped by `_strip_large_fields` before persist — but keep in mind the in-memory `jobs` dict is the source of truth during a live run.
 
 ### Configuration layering (highest wins)
 
@@ -89,21 +89,21 @@ Translation backend is dual: `USE_LM_STUDIO=1` (default) hits an OpenAI-compatib
 ### Three parallel access paths
 
 - **UI**: `static/index.html` (single-page JS, no build step, no framework) — talks to `/api/*`
-- **CLI**: `tools/tachidubb_cli.py` (subcommands: `dub`, `compare`, `showcase`, `redub`, `status`, `jobs`, `wait`, `showcase-status`, `showcase-rebuild`, `cancel`, `delete`, `system`, `languages`, `models`, `voices`) — all HTTP calls via `tools/tachidubb_client.py`
-- **MCP**: `tools/tachidubb_mcp.py` exposes `tachidubb_dub`, `tachidubb_compare`, `tachidubb_showcase`, `tachidubb_redub`, `tachidubb_get_job`, `tachidubb_list_jobs`, `tachidubb_get_showcase`, `tachidubb_rebuild_showcase`, `tachidubb_cancel_job`, `tachidubb_delete_job`, `tachidubb_system_status`, `tachidubb_list_languages`, `tachidubb_list_models`, `tachidubb_list_voices`
+- **CLI**: `tools/gochidubb_cli.py` (subcommands: `dub`, `compare`, `showcase`, `redub`, `status`, `jobs`, `wait`, `showcase-status`, `showcase-rebuild`, `cancel`, `delete`, `system`, `languages`, `models`, `voices`) — all HTTP calls via `tools/gochidubb_client.py`
+- **MCP**: `tools/gochidubb_mcp.py` exposes `gochidubb_dub`, `gochidubb_compare`, `gochidubb_showcase`, `gochidubb_redub`, `gochidubb_get_job`, `gochidubb_list_jobs`, `gochidubb_get_showcase`, `gochidubb_rebuild_showcase`, `gochidubb_cancel_job`, `gochidubb_delete_job`, `gochidubb_system_status`, `gochidubb_list_languages`, `gochidubb_list_models`, `gochidubb_list_voices`
 
-All three respect `TACHIDUBB_URL` (default `http://localhost:8910`) so any of them can drive a remote box. The CLI and MCP both go through `TachiDUBBClient` in `tools/tachidubb_client.py` — if you're adding a capability, add the API route to `server.py` first, then a client method, then wire up CLI/MCP.
+All three respect `GOCHIDUBB_URL` (default `http://localhost:8910`) so any of them can drive a remote box. The CLI and MCP both go through `GoChiDUBBClient` in `tools/gochidubb_client.py` — if you're adding a capability, add the API route to `server.py` first, then a client method, then wire up CLI/MCP.
 
 ## Non-obvious things to know
 
 - **speechbrain/k2 stub block at the top of `server.py` is load-bearing.** It pre-populates `sys.modules` with empty stubs for `k2` and several `speechbrain.integrations.k2_fsa.*` paths BEFORE any pipeline import. WhisperX and pyannote transitively walk speechbrain's namespace, and on Windows the real `k2` wheel doesn't exist. Do not move imports above this block or remove the stubs.
 - **Windows FFmpeg DLL registration block (also in `server.py`)** uses `os.add_dll_directory` because Python 3.8+ ignores PATH for DLL loading. Adds any dir containing `avformat*.dll` so `torchcodec` can find them.
-- **VoxCPM2 warmup is off by default** (`TACHIDUBB_WARMUP=0`). Reason: translation LLM gets full GPU first; VoxCPM2 loads lazily on first synth. Only turn on if you have VRAM to burn.
+- **VoxCPM2 warmup is off by default** (`GOCHIDUBB_WARMUP=0`). Reason: translation LLM gets full GPU first; VoxCPM2 loads lazily on first synth. Only turn on if you have VRAM to burn.
 - **Translation is batched, and the batch reply is never trusted blindly.** `pipeline/translator.py` sends N numbered subtitle lines per request (auto-sized from `LM_STUDIO_CONTEXT_LENGTH`, override with `TRANSLATE_BATCH_SIZE`) instead of one request per segment. `_parse_numbered_lines` requires a strictly-sequential 1:1 reply; anything else (a merged line, an extra line, commentary) makes `_translate_group` split the batch in half and retry, down to single lines. Don't "fix" the parser to be lenient — a reply that's one line short would shift every later subtitle onto the wrong audio segment.
 - **QA retries must not mutate the RNG seed mid-job** — this was a real bug that produced two different voices for retried segments in the same speaker. `pipeline/tts_worker.py` fixes it. If touching retry logic, keep seeds deterministic per (job, speaker, segment_idx).
 - **Ollama model catalog is in `pipeline/models.py::MODEL_CATALOG`** — `POST /api/models/pull` streams progress from `ollama pull` back to the UI.
 - **Do not add new dependencies without discussing** (per `CONTRIBUTING.md`). The stack is intentionally lean.
-- **No `print` in pipeline code** — use `logging.getLogger("tachidubb.<module>")`.
+- **No `print` in pipeline code** — use `logging.getLogger("gochidubb.<module>")`.
 
 ## Testing notes
 

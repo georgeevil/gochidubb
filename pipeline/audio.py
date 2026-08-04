@@ -12,7 +12,7 @@ import subprocess
 
 from .notices import notice
 
-log = logging.getLogger("tachidubb.audio")
+log = logging.getLogger("gochidubb.audio")
 
 
 def _run(cmd, desc="", timeout=600):

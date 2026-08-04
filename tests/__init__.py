@@ -1,1 +1,1 @@
-"""Tests for TachiDUBB pipeline modules."""
+"""Tests for GoChiDUBB pipeline modules."""
