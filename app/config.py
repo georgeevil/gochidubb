@@ -80,6 +80,11 @@ class UserConfig:
     ytdlp_cookiefile: str = ""             # path to Netscape cookies.txt
     max_source_duration_sec: int = 0       # 0 = no pre-download duration gate
 
+    # ── Publishing ────────────────────────────────────────────────────
+    # Attribution appended to published-video descriptions. {source_url}
+    # is replaced with the original video URL (see pipeline/publisher.py).
+    publish_description_template: str = "Original: {source_url}"
+
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
     server_port: int = 8910
@@ -132,6 +137,7 @@ def _load_config() -> UserConfig:
         "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",
         "YT_DLP_COOKIEFILE": "ytdlp_cookiefile",
         "MAX_SOURCE_DURATION_SEC": "max_source_duration_sec",
+        "PUBLISH_DESCRIPTION_TEMPLATE": "publish_description_template",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)

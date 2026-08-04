@@ -6522,6 +6522,55 @@ async def patch_config(body: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Secrets — platform credentials (VK token etc.)
+# ═══════════════════════════════════════════════════════════════════════
+# Deliberately NOT part of UserConfig: GET /api/config is unauthenticated,
+# so tokens live in secrets.json (chmod 600) via app/secrets.py instead.
+# These routes never echo values — status is presence booleans only.
+# ═══════════════════════════════════════════════════════════════════════
+
+from fastapi import Request  # noqa: E402  (kept local to this route region)
+from app import secrets as app_secrets  # noqa: E402
+
+
+@app.post("/api/secrets")
+async def set_secrets(request: Request):
+    """Store platform credentials. Accepts a JSON object body
+    ({"vk_access_token": "..."}), a form field `body` holding the same
+    JSON, or plain form key/value pairs. Only keys known to app.secrets
+    are accepted (400 otherwise). Values are never echoed back."""
+    ctype = request.headers.get("content-type", "")
+    try:
+        if "application/json" in ctype:
+            updates = await request.json()
+        else:
+            form = await request.form()
+            if "body" in form:
+                updates = json.loads(form["body"])
+            else:
+                updates = {k: v for k, v in form.items()}
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid body: {e}"}, 400)
+    unknown = sorted(k for k in updates if k not in app_secrets.KNOWN_SECRETS)
+    if unknown:
+        return JSONResponse({
+            "error": f"Unknown secret key(s): {', '.join(unknown)}. "
+                     f"Known: {', '.join(sorted(app_secrets.KNOWN_SECRETS))}",
+        }, 400)
+    for k, v in updates.items():
+        app_secrets.set_secret(k, "" if v is None else str(v))
+    return {"ok": True, "status": app_secrets.secret_status()}
+
+
+@app.get("/api/secrets/status")
+async def get_secrets_status():
+    """Presence booleans per known secret key — never the values."""
+    return app_secrets.secret_status()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Glossary — user-editable term overrides
 # ═══════════════════════════════════════════════════════════════════════
 # The translator ships with a built-in BJJ glossary baked into
