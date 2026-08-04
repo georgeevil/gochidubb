@@ -10,22 +10,17 @@ import os
 import shutil
 import subprocess
 
+from .ffmpeg_run import run_ffmpeg
 from .notices import notice
 
 log = logging.getLogger("gochidubb.audio")
 
 
-def _run(cmd, desc="", timeout=600):
+def _run(cmd, desc="", timeout=None):
+    """Run ffmpeg with a soft timeout: extended while the encode reports
+    progress, killed only once progress stalls (see pipeline/ffmpeg_run.py)."""
     log.info(f"[{desc}] {' '.join(str(c) for c in cmd[:8])}")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if r.returncode != 0:
-        # Include stdout too — ffmpeg sometimes prints the real reason there
-        # (e.g. "No audio frames to encode") while stderr is generic.
-        log.debug(
-            f"[{desc}] exit={r.returncode} stdout={r.stdout[:400]!r} "
-            f"stderr={r.stderr[:400]!r}"
-        )
-        raise RuntimeError(f"{desc} failed: {r.stderr[:400]}")
+    r = run_ffmpeg(cmd, desc=desc, logger=log, timeout=timeout)
     log.debug(f"[{desc}] ok stderr={r.stderr[:200]!r}")
     return r
 

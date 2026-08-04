@@ -3,6 +3,8 @@ import logging
 import os
 import subprocess
 
+from .ffmpeg_run import run_ffmpeg
+
 log = logging.getLogger("gochidubb.assembler")
 
 # Target peak after per-segment peak-normalization (avoids whisper-vs-shout jumps
@@ -15,12 +17,12 @@ LN_TP = -1.5    # true peak dBTP
 LN_LRA = 11     # loudness range
 
 
-def _run(cmd, desc="", timeout=600):
+def _run(cmd, desc="", timeout=None):
+    """Run ffmpeg with a soft timeout: extended while the encode reports
+    progress, killed only once progress stalls (see pipeline/ffmpeg_run.py).
+    Long renders therefore never die mid-encode at an arbitrary cutoff."""
     log.info(f"[{desc}]")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if r.returncode != 0:
-        raise RuntimeError(f"{desc} failed: {r.stderr[:400]}")
-    return r
+    return run_ffmpeg(cmd, desc=desc, logger=log, timeout=timeout)
 
 
 def format_srt_time(seconds: float) -> str:

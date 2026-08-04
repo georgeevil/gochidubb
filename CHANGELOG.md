@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Long videos no longer die at the final render with `timed out after 600
+  seconds`.** The ffmpeg timeout in the merge/extract stages is now *soft*
+  (`pipeline/ffmpeg_run.py`): ffmpeg runs with `-progress pipe:1`, and as long
+  as the encode position keeps advancing the deadline is extended — a working
+  x264 render of a 2-hour source is never killed mid-encode. A genuinely hung
+  ffmpeg is still killed once no progress is seen for a stall window past the
+  soft deadline. Tunable via `ffmpeg_timeout` / `ffmpeg_stall_timeout` in
+  config (env: `GOCHIDUBB_FFMPEG_TIMEOUT`, `GOCHIDUBB_FFMPEG_STALL_TIMEOUT`).
+
 ### Added
 - **Setup problems are visible in the UI instead of the console.** A stage could
   finish successfully and still not have done what the user assumed, and nothing
