@@ -296,6 +296,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-map", "[v]", "-map", "[out]",
                 "-c:v", "libx264", "-preset", "veryfast",
                 "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
                 output_path,
             ], "merge with bg + extend")
         else:
@@ -309,6 +310,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]",
                 "-map", "0:v", "-map", "[out]",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
                 output_path,
             ], "merge with bg")
     else:
@@ -320,6 +322,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-map", "[v]", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "veryfast",
                 "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
                 output_path,
             ], "merge a+v + extend")
         else:
@@ -328,6 +331,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-i", video_path, "-i", dubbed_audio_path,
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
                 output_path,
             ], "merge a+v")
     return output_path
