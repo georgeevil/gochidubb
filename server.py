@@ -168,7 +168,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Res
 from fastapi.staticfiles import StaticFiles
 
 from pipeline.downloader import download_video
-from pipeline.audio import extract_audio, extract_audio_hq, separate_background, get_duration
+from pipeline.audio import (
+    extract_audio, extract_audio_hq, separate_background, get_duration,
+    SeparationAborted,
+)
 from pipeline.transcriber import transcribe
 from pipeline.diarizer import (
     diarize_speakers, assign_speakers_to_segments,
@@ -367,8 +370,43 @@ class JobCancelled(Exception):
     pass
 
 
+# Set once uvicorn begins tearing down, so long in-process computations
+# (demucs) can bail out instead of pinning an executor thread the event loop
+# will later join with no timeout.
+_shutting_down = False
+
+
 def _cancel_requested(job_id: str) -> bool:
     return bool(job_id in jobs and jobs[job_id].get("cancel_requested"))
+
+
+def _should_abort_long_work(job_id: str):
+    """Predicate handed to pipeline stages that can poll for an early exit."""
+    def _check() -> bool:
+        return _shutting_down or _cancel_requested(job_id)
+    return _check
+
+
+def _mark_interrupted(job_id: str) -> None:
+    """Park a job that a shutdown caught mid-run on a non-active status.
+
+    Anything still holding an in-flight status ('merging', 'extracting', ...)
+    reads as a running job to the UI and to `serverctl status` forever, since
+    the process that was running it is gone.
+    """
+    j = jobs.get(job_id)
+    if not j or j.get("status") in ("complete", "cancelled", "error"):
+        return
+    j["status"] = "interrupted"
+    j["step_detail"] = "Interrupted by server shutdown"
+    j.setdefault(
+        "error",
+        "Interrupted by server shutdown — retry from the last checkpoint",
+    )
+    try:
+        save_job(j)
+    except Exception as e:
+        log.debug(f"[queue] could not persist interrupted status: {e}")
 
 
 def _maybe_terminate_tts_worker():
@@ -387,12 +425,99 @@ def _maybe_terminate_tts_worker():
                 log.info("[cancel] TTS worker terminated")
             except Exception as e:
                 log.debug(f"[cancel] TTS worker terminate failed: {e}")
+            # Reap it. Dropping the handle without waiting leaves a zombie,
+            # and a worker that ignores SIGTERM (mid-CUDA-call, say) would
+            # otherwise survive us entirely — it is spawned without its own
+            # process group, so nothing else will clean it up.
+            import subprocess
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception as e:
+                    log.debug(f"[cancel] TTS worker kill failed: {e}")
+            except Exception as e:
+                log.debug(f"[cancel] TTS worker reap failed: {e}")
             try:
                 tts._worker_proc = None
             except Exception:
                 pass
     except Exception as e:
         log.debug(f"[cancel] _maybe_terminate_tts_worker error: {e}")
+
+
+# The multiprocessing resource tracker unlinks POSIX semaphores/shared memory
+# that a dying process failed to release. Killing it is what turns the benign
+# "leaked semaphore objects to clean up at shutdown" warning into an actual
+# kernel-namespace leak, so it is excluded from every sweep below.
+_PROTECTED_CHILD_MARKERS = ("multiprocessing.resource_tracker",
+                            "multiprocessing.semaphore_tracker",
+                            "resource_tracker.main")
+
+
+def _terminate_child_processes(timeout: float = 5.0) -> int:
+    """SIGTERM then SIGKILL every live descendant (ffmpeg, yt-dlp, TTS daemon).
+
+    Shutting down cancels the queue worker, but that only raises CancelledError
+    at the `await` — the worker thread underneath is still blocked in
+    run_ffmpeg's `proc.wait()` loop and cannot be interrupted. asyncio then
+    calls loop.shutdown_default_executor(), which joins that thread with no
+    timeout on 3.11, so the process hangs until ffmpeg finishes on its own
+    (potentially tens of minutes) and has to be SIGKILLed from outside.
+
+    Killing the children first lets those threads unwind in ~1s.
+
+    Returns the number of processes terminated.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return 0  # psutil is in requirements but treated as optional
+    try:
+        me = psutil.Process(os.getpid())
+        children = me.children(recursive=True)
+    except Exception as e:
+        log.debug(f"[shutdown] could not enumerate children: {e}")
+        return 0
+
+    victims = []
+    for p in children:
+        try:
+            cmdline = " ".join(p.cmdline())
+        except Exception:
+            cmdline = ""
+        if any(m in cmdline for m in _PROTECTED_CHILD_MARKERS):
+            continue
+        victims.append(p)
+
+    if not victims:
+        return 0
+
+    names = []
+    for p in victims:
+        try:
+            names.append(f"{p.name()}[{p.pid}]")
+        except Exception:
+            names.append(f"?[{p.pid}]")
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+    _, alive = psutil.wait_procs(victims, timeout=timeout)
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    if alive:
+        psutil.wait_procs(alive, timeout=2)
+
+    log.info(f"[shutdown] terminated {len(victims)} child process(es): "
+             f"{', '.join(names)}")
+    return len(victims)
 
 
 async def enqueue_job(job_id, pipeline_args):
@@ -510,6 +635,18 @@ async def _job_queue_worker():
                 jobs[job_id]["status"] = "cancelled"
                 jobs[job_id].pop("cancel_requested", None)
                 save_job(jobs[job_id])
+        except asyncio.CancelledError:
+            # Shutdown. run_pipeline_stages already marked the job
+            # 'interrupted'; re-raise so this worker task actually stops.
+            log.warning(f"[queue] Job {job_id} interrupted (server shutting down)")
+            _mark_interrupted(job_id)
+            raise
+        except SeparationAborted:
+            # Same cause, but delivered as a normal exception from inside a
+            # worker thread. Do not re-raise — the loop is still healthy and
+            # will exit at its own cancellation point.
+            log.warning(f"[queue] Job {job_id} interrupted during separation")
+            _mark_interrupted(job_id)
         except Exception as e:
             log.error(f"[queue] Job {job_id} crashed: {e}", exc_info=True)
             if job_id in jobs:
@@ -965,7 +1102,20 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: cancel queue worker + scheduler so they don't hang the process
+    # Shutdown. Flag first so in-process work (demucs) bails at its next
+    # checkpoint, then children, then the asyncio tasks. Cancelling the queue
+    # worker only raises CancelledError at the `await` — the thread underneath
+    # stays blocked in run_ffmpeg's proc.wait() or inside torch until it
+    # finishes, and asyncio.run() joins that thread with no timeout. Without
+    # this a restart during a long extract or render hangs until SIGKILLed.
+    global _shutting_down
+    _shutting_down = True
+    try:
+        _maybe_terminate_tts_worker()
+        _terminate_child_processes()
+    except Exception as e:
+        log.warning(f"[shutdown] child cleanup failed: {e}")
+
     for t in (_queue_worker_task, _scheduler_task):
         if t and not t.done():
             t.cancel()
@@ -1259,12 +1409,20 @@ async def _stage_extract(job, work, ctx, update, perf):
             # so it reports what it could not do instead of only logging it.
             sep_notices = []
             _, bg_audio_path = await _blocking(
-                separate_background, audio_hq, str(work), notices=sep_notices)
+                separate_background, audio_hq, str(work), notices=sep_notices,
+                should_abort=_should_abort_long_work(job["id"]))
             log.info(f"[perf] · bg separation took {time.time()-bg_start:.1f}s")
             perf["bg_separated"] = not sep_notices
             if sep_notices:
                 perf["notices"] = sep_notices
                 diag.record_runtime_notices(sep_notices, job_id=job["id"])
+        except SeparationAborted:
+            # Demucs stopped early because we asked it to. Must not be
+            # swallowed like a separation failure — the job is going away.
+            perf["bg_separated"] = "aborted"
+            if _cancel_requested(job["id"]):
+                raise JobCancelled("cancelled during background separation")
+            raise
         except Exception as e:
             log.warning(f"BG separation skipped: {e}")
             perf["bg_separated"] = "failed"
@@ -2015,6 +2173,20 @@ async def run_pipeline_stages(
         # Re-raise so _job_queue_worker marks the job as 'cancelled'
         # rather than 'error'. Logging is handled upstream.
         log.info(f"Pipeline cancelled for {job_id}")
+        raise
+    except (asyncio.CancelledError, SeparationAborted) as e:
+        # Server shutdown mid-job. CancelledError is a BaseException on 3.11,
+        # so without this clause it sails past `except Exception` below and
+        # the job keeps whatever in-flight status it had — 'merging' forever,
+        # which the UI reads as a live job that never finishes.
+        job["failed_stage"] = job.get("stage_id", "")
+        update(
+            status="interrupted",
+            error="Interrupted by server shutdown — retry from the last checkpoint",
+            step_detail="Interrupted by server shutdown",
+        )
+        log.warning(f"[pipeline] job={job_id} interrupted at stage "
+                    f"'{job.get('stage_id')}' ({type(e).__name__})")
         raise
     except Exception as e:
         job["failed_stage"] = job.get("stage_id", "")
@@ -6562,6 +6734,17 @@ if __name__ == "__main__":
         atexit.register(lambda: _PID_FILE.unlink(missing_ok=True))
     except OSError:
         pass  # Non-fatal — server manager will find us via `ps` fallback
+
+    # Backstop for exits that skip the lifespan teardown (crash, --reload
+    # respawn, SystemExit from the signal handler below): make sure no ffmpeg
+    # or TTS worker outlives us. atexit must never raise.
+    def _atexit_reap_children():
+        try:
+            _terminate_child_processes(timeout=2.0)
+        except Exception:
+            pass
+
+    atexit.register(_atexit_reap_children)
 
     # ── Signal handling for graceful shutdown ────────────────────────
     # When the server manager sends SIGTERM (or the user presses Ctrl+C),

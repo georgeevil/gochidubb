@@ -16,6 +16,22 @@ from .notices import notice
 log = logging.getLogger("gochidubb.audio")
 
 
+class SeparationAborted(Exception):
+    """Raised out of demucs' per-segment callback to stop separation early.
+
+    Demucs is the one pipeline stage that does minutes of uninterruptible work
+    *inside* our own process — no subprocess to kill, and Python cannot cancel
+    a thread. On a 40-minute source it can run for 20+ minutes, during which a
+    server shutdown could not complete (asyncio joins the executor thread with
+    no timeout) and a user cancel had no effect until the next stage boundary.
+
+    `apply_model` calls its `callback` once per ~8s segment and deliberately
+    re-raises whatever it throws (see demucs/apply.py, the `BaseException`
+    handler added "so that a KeyboardInterrupt raised from a callback" works),
+    so raising from there is the supported way to abort.
+    """
+
+
 def _run(cmd, desc="", timeout=None):
     """Run ffmpeg with a soft timeout: extended while the encode reports
     progress, killed only once progress stalls (see pipeline/ffmpeg_run.py)."""
@@ -96,11 +112,31 @@ def save_audio_tensor(path: str, wav, sr: int) -> None:
     sf.write(path, data, int(sr), subtype="PCM_16")
 
 
-def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
+def _demucs_device(torch):
+    """Pick the best device demucs can run on: cuda → mps → cpu."""
+    try:
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    try:
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _separate_demucs(audio_path: str, output_dir: str,
+                     should_abort=None) -> tuple[str, str]:
     """Separate vocals/background using Demucs (htdemucs_ft model).
 
     Demucs ships with torch — no extra install required if torch is present.
     Uses the fine-tuned htdemucs_ft model (best for speech/music separation).
+
+    `should_abort` is an optional zero-arg predicate polled once per ~8s
+    segment; when it returns True, SeparationAborted is raised out of
+    `apply_model` instead of grinding on for another 20 minutes.
 
     Returns (vocals_path, background_path) as 44.1kHz stereo WAVs.
     """
@@ -120,11 +156,13 @@ def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
     except ImportError as e:
         raise RuntimeError(f"demucs not installed — run: pip install demucs ({e})")
 
+    def _callback(_state):
+        if should_abort is not None and should_abort():
+            raise SeparationAborted("background separation aborted")
+
     try:
         model = get_model("htdemucs_ft")
         model.eval()
-        if torch.cuda.is_available():
-            model = model.cuda()
 
         wav, sr = load_audio_tensor(audio_path)
         # Demucs expects (batch, channels, time) at its native sample rate.
@@ -134,8 +172,30 @@ def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
         if wav.shape[0] == 1:
             wav = wav.repeat(2, 1)  # mono → stereo
 
-        with torch.no_grad():
-            sources = apply_model(model, wav.unsqueeze(0))
+        # `device` must be passed explicitly. apply_model defaults it to
+        # `mix.device` and moves the model there itself, so moving the model
+        # to the accelerator beforehand accomplished nothing — separation ran
+        # on CPU even on machines with a working GPU, at roughly one minute of
+        # compute per two minutes of audio.
+        device = _demucs_device(torch)
+        log.info(f"Demucs device: {device}")
+        try:
+            with torch.no_grad():
+                sources = apply_model(model, wav.unsqueeze(0), device=device,
+                                      callback=_callback)
+        except SeparationAborted:
+            raise
+        except Exception as e:
+            if device == "cpu":
+                raise
+            # MPS in particular still misses ops that demucs uses, and the
+            # failure is immediate rather than 20 minutes in. Losing the
+            # background entirely is a worse outcome than a slow CPU run.
+            log.warning(f"Demucs failed on {device} ({type(e).__name__}: {e}) "
+                        f"— retrying on CPU")
+            with torch.no_grad():
+                sources = apply_model(model, wav.unsqueeze(0), device="cpu",
+                                      callback=_callback)
 
         stems = model.sources  # e.g. ["drums", "bass", "other", "vocals"]
         vocals_idx = stems.index("vocals")
@@ -154,6 +214,11 @@ def _separate_demucs(audio_path: str, output_dir: str) -> tuple[str, str]:
         log.info("Demucs separation complete")
         return vocals_path, bg_path
 
+    except SeparationAborted:
+        # Not a demucs failure — the caller asked us to stop. Must not be
+        # rewritten into a RuntimeError, or separate_background would treat
+        # it as "demucs broken" and fall through to the silent background.
+        raise
     except Exception as e:
         # Installed but broken — say which, so the notice can offer a
         # remedy that matches the actual cause instead of a reinstall.
@@ -195,7 +260,8 @@ def _make_silent_bg(duration: float, output_dir: str) -> str:
 
 
 def separate_background(audio_path: str, output_dir: str,
-                        notices: list | None = None) -> tuple[str, str]:
+                        notices: list | None = None,
+                        should_abort=None) -> tuple[str, str]:
     """Separate vocals from background audio.
 
     Tries in order:
@@ -222,7 +288,12 @@ def separate_background(audio_path: str, output_dir: str,
 
     # Try Demucs first
     try:
-        return _separate_demucs(audio_path, output_dir)
+        return _separate_demucs(audio_path, output_dir,
+                                should_abort=should_abort)
+    except SeparationAborted:
+        # Shutdown or cancel — propagate. Falling through to the other
+        # backends would just start a second long computation nobody wants.
+        raise
     except RuntimeError as e:
         if "not installed" in str(e):
             log.info("Demucs not installed, trying audio-separator...")
