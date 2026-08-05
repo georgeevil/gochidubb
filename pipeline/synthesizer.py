@@ -9,6 +9,7 @@ bootstrap block first.
 import logging
 import os
 import random as _random
+import subprocess
 import sys
 import time
 import traceback
@@ -121,6 +122,14 @@ class BaseTTSEngine:
         """Free model memory / kill worker processes. Idempotent."""
         raise NotImplementedError
 
+    def last_run_stats(self) -> dict:
+        """Aggregate stats of the most recent synthesize_segments run.
+
+        Engines that track them return keys like tier_stats, qa_regens,
+        qa_measured_count, qa_unmeasured_count so the server can persist
+        them into the tts stage's perf metrics. Default: nothing."""
+        return {}
+
     def synthesize_segments(self, segments, output_dir,
                            speaker_refs=None, speaker_transcripts=None,
                            progress_callback=None, voice_seed=None,
@@ -186,6 +195,12 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         # failures as events rather than raising, so without this the caller
         # only knows "0 succeeded" and not why.
         self._last_segment_error = ""
+        # Aggregate stats of the most recent run (from the worker's "done"
+        # event) — surfaced to the server via last_run_stats().
+        self._last_run_stats = {}
+
+    def last_run_stats(self) -> dict:
+        return dict(self._last_run_stats)
 
     def last_failure_detail(self) -> str:
         """Human-readable cause of the last run's segment failures, if any.
@@ -387,6 +402,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         speaker_transcripts = speaker_transcripts or {}
         os.makedirs(output_dir, exist_ok=True)
         self._last_segment_error = ""  # fresh diagnosis per run
+        self._last_run_stats = {}      # fresh aggregate stats per run
 
         # ─── REFERENCE AUDIO PREPROCESSING ─────────────────────────────
         # VoxCPM is very sensitive to reference quality. Raw diarization-
@@ -501,6 +517,15 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                 f"Cross-lingual mode: cfg={base_cfg}, timesteps={base_timesteps}"
             )
 
+        # QA default: cross-lingual only (same-language cloning very rarely
+        # produces gibberish). Users can opt in to same-language QA via
+        # cfg.qa_same_language (env GOCHIDUBB_QA_SAME_LANGUAGE=1).
+        try:
+            from app.config import cfg as _user_cfg
+            qa_same_language = bool(getattr(_user_cfg, "qa_same_language", False))
+        except Exception:
+            qa_same_language = False
+
         job = {
             "model_id": self.model_id,
             "cfg_value": base_cfg,
@@ -512,7 +537,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
             "segments": seg_specs,
             "is_cross_lingual": is_cross_lingual,
             "target_lang": target_lang,
-            "enable_qa": is_cross_lingual,  # QA only when cross-lingual
+            "enable_qa": bool(is_cross_lingual or qa_same_language),
         }
 
         # Write job.json
@@ -541,6 +566,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         total = len(segments)
         done = 0
         results = {}
+        qa_unmeasured_warned = False
 
         # Force UTF-8 and disable noisy output in the child
         env = os.environ.copy()
@@ -669,9 +695,17 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                              f"(target_lang={evt.get('target_lang')})")
                 elif kind == "qa_check":
                     # Suppress individual qa_check logs; aggregated info already
-                    # appears in the "segment" event above. Only log when
-                    # diag is interesting.
-                    pass
+                    # appears in the "segment" event above. Exception: warn ONCE
+                    # per run when QA could not actually measure (whisper failed
+                    # to load / ASR crashed) so "no bad scores" is never read as
+                    # "all segments verified".
+                    if evt.get("measured") is False and not qa_unmeasured_warned:
+                        qa_unmeasured_warned = True
+                        log.warning(
+                            "QA could not measure segment quality (whisper "
+                            "unavailable or ASR failed) — segments are accepted "
+                            "without verification; qa scores will be null, not 0.0"
+                        )
                 elif kind == "qa_retry":
                     log.info(
                         f"  [qa] segment {evt.get('idx')+1} bad "
@@ -688,8 +722,17 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                     log.info(
                         f"TTS worker done: {evt.get('ok')}/{evt.get('total')} "
                         f"tiers={evt.get('tier_stats')} "
-                        f"qa_regens={evt.get('qa_regens', 0)}"
+                        f"qa_regens={evt.get('qa_regens', 0)} "
+                        f"qa_measured={evt.get('qa_measured_count', 0)} "
+                        f"qa_unmeasured={evt.get('qa_unmeasured_count', 0)}"
                     )
+                    # Keep for the server's perf metrics (see last_run_stats)
+                    self._last_run_stats = {
+                        "tier_stats": evt.get("tier_stats"),
+                        "qa_regens": evt.get("qa_regens", 0),
+                        "qa_measured_count": evt.get("qa_measured_count", 0),
+                        "qa_unmeasured_count": evt.get("qa_unmeasured_count", 0),
+                    }
                 elif kind == "job_done":
                     # Single job finished in daemon mode; break out of read loop
                     # but DO NOT kill the worker — it's waiting for the next job.
@@ -718,6 +761,11 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                     seg["qa_score"] = r.get("qa_score")
                 if r.get("tier") is not None:
                     seg["tts_tier"] = r.get("tier")
+                # Full QA diagnostics (score/measured/cer/detected_lang/
+                # lang_match/attempts/tier). score=None + measured=False
+                # means "not measured", NOT "perfect".
+                if r.get("qa") is not None:
+                    seg["qa"] = r.get("qa")
             else:
                 seg["audio_path"] = None
 

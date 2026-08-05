@@ -37,17 +37,43 @@ from typing import Optional, Tuple
 
 log = logging.getLogger("gochidubb.tts_qa")
 
+# Single source of truth for the pass/fail gate. Overridable at runtime
+# via the GOCHIDUBB_QA_THRESHOLD env var (read on every is_acceptable call).
+QA_THRESHOLD = 0.4
+
 _whisper_model = None
 _whisper_model_size = None
 
 
-def _get_whisper(device: str = "cuda", model_size: str = "base"):
+def _resolve_device(pref: str = "auto") -> str:
+    """Resolve a device preference to a concrete faster-whisper device.
+
+    "auto" → "cuda" when torch reports a usable CUDA device, else "cpu"
+    (Apple Silicon / AMD / CPU-only boxes run whisper on CPU with int8 —
+    slower but correct; the old hardcoded "cuda" default made the model
+    fail to load off NVIDIA and QA silently scored everything as perfect).
+    An explicit preference ("cuda"/"cpu") is passed through untouched.
+    """
+    if pref and pref != "auto":
+        return pref
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        # torch missing/broken — CPU is the only safe assumption
+        pass
+    return "cpu"
+
+
+def _get_whisper(device: str = "auto", model_size: str = "base"):
     """Load (or return cached) faster-whisper model for QA checks.
     We default to 'base' — small enough to be fast, large enough to
     transcribe intelligible speech reliably."""
     global _whisper_model, _whisper_model_size
     if _whisper_model is not None and _whisper_model_size == model_size:
         return _whisper_model
+    device = _resolve_device(device)
     try:
         from faster_whisper import WhisperModel
         compute = "float16" if device == "cuda" else "int8"
@@ -111,27 +137,38 @@ def check_segment_quality(
     target_text: str,
     target_lang: str = "ru",
     whisper_size: str = "base",
-) -> Tuple[float, str, dict]:
+) -> Tuple[Optional[float], str, dict]:
     """Run ASR on a TTS output and compare to what we asked TTS to speak.
 
     Returns:
         (score, transcript, diagnostics)
-        - score: 0.0 (perfect) to 1.0+ (wildly wrong). <= 0.35 is "acceptable",
-          0.35-0.6 is "suspect", > 0.6 is "bad — regenerate".
+        - score: 0.0 (perfect) to 1.0+ (wildly wrong), or None when the
+          check could not run at all (whisper unavailable / ASR crashed).
+          The gate is is_acceptable(): score <= QA_THRESHOLD (0.4 by
+          default) passes. For reporting, > ~0.6 is "bad — regenerate"
+          territory and scores just above the gate are "suspect".
         - transcript: what Whisper heard
         - diagnostics: dict with 'cer', 'detected_lang', 'lang_match',
-          'empty' keys for logging/UI display.
+          'empty', 'measured' keys for logging/UI display.
+          diag['measured'] is True only when ASR actually ran on the
+          audio; False means "not measured" — callers must not treat the
+          None score as evidence of quality (good or bad).
     """
-    diag = {"cer": 1.0, "detected_lang": "", "lang_match": False, "empty": False}
+    diag = {"cer": 1.0, "detected_lang": "", "lang_match": False, "empty": False,
+            "measured": False}
     if not os.path.exists(audio_path):
+        # A missing output file is a REAL failure, not an unmeasured one.
         diag["error"] = "audio file missing"
+        diag["measured"] = True
         return 1.0, "", diag
 
     model = _get_whisper(model_size=whisper_size)
     if model is None:
-        # Whisper unavailable — skip QA, assume OK so we don't block pipeline
+        # Whisper unavailable — QA cannot run. Return an honest
+        # "not measured" (score=None) instead of a fake perfect 0.0 so
+        # downstream never mistakes a skipped check for a passing one.
         diag["error"] = "whisper unavailable"
-        return 0.0, "", diag
+        return None, "", diag
 
     try:
         # Force language for better small-model accuracy on the target tongue.
@@ -147,13 +184,15 @@ def check_segment_quality(
         diag["detected_lang"] = info.language
         diag["lang_match"] = info.language == target_lang
         diag["empty"] = not transcript
+        diag["measured"] = True
     except Exception as e:
         log.warning(f"[qa] Whisper transcribe failed on {audio_path}: {e}")
         diag["error"] = str(e)
-        return 0.5, "", diag  # Neutral score on transcribe failure
+        return None, "", diag  # ASR crashed — not measured
 
     if not transcript:
         # TTS produced silence or unrecognizable output — very bad.
+        # ASR DID run here, so this is a real measurement.
         return 1.0, "", diag
 
     # Language mismatch is a fatal defect: if we asked for Russian and
@@ -181,10 +220,17 @@ def check_segment_quality(
     return score, transcript, diag
 
 
-def is_acceptable(score: float, threshold: float = 0.4) -> bool:
-    """Default quality threshold. CER <= 0.4 + no major lang mismatch = OK.
+def is_acceptable(score: Optional[float], threshold: float = QA_THRESHOLD) -> bool:
+    """Default quality gate. score <= QA_THRESHOLD (0.4) = OK.
+
+    score=None means "not measured" (whisper unavailable / ASR crashed).
+    That is accepted — pass-without-claim: a segment that CANNOT be
+    measured must not trigger regeneration retries. Callers that need to
+    distinguish "passed" from "unmeasured" must check diag['measured'].
 
     Tunable via GOCHIDUBB_QA_THRESHOLD env var if user wants stricter/looser."""
+    if score is None:
+        return True
     try:
         threshold = float(os.environ.get("GOCHIDUBB_QA_THRESHOLD", threshold))
     except ValueError:

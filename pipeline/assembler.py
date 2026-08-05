@@ -1,5 +1,7 @@
 """Time-aligned audio assembly, per-segment + global loudness normalization."""
+import json
 import logging
+import math
 import os
 import subprocess
 
@@ -40,7 +42,57 @@ def write_srt(segments, output_path):
             f.write(f"{i+1}\n{format_srt_time(seg['start'])} --> {format_srt_time(seg['end'])}\n{text}\n\n")
 
 
-def _normalize_loudness_inplace(wav_path: str) -> bool:
+def _parse_loudnorm_stderr(text: str) -> dict:
+    """Extract the loudnorm measurement JSON that `print_format=json` writes
+    to ffmpeg's stderr.
+
+    ffmpeg prints it as the last `{ ... }` block after a
+    `[Parsed_loudnorm_...]` banner, with every value as a *string* (including
+    "-inf" for silent input, which is not valid JSON-float territory). Returns
+    a dict of finite floats plus `normalization_type` as a string; {} when no
+    parseable block is present. Never raises — this feeds a metrics field,
+    not the render itself.
+    """
+    keep = ("input_i", "input_tp", "input_lra", "input_thresh",
+            "output_i", "output_tp", "output_lra", "output_thresh",
+            "target_offset")
+    try:
+        # Scan candidate JSON blocks last-to-first; the measurement block is
+        # the final one and is the only one containing "input_i".
+        end = len(text)
+        while True:
+            close = text.rfind("}", 0, end)
+            if close < 0:
+                return {}
+            open_ = text.rfind("{", 0, close)
+            if open_ < 0:
+                return {}
+            block = text[open_:close + 1]
+            if '"input_i"' in block:
+                try:
+                    raw = json.loads(block)
+                    break
+                except ValueError:
+                    pass
+            end = open_
+        out = {}
+        for k in keep:
+            try:
+                v = float(raw[k])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(v):
+                out[k] = v
+        nt = raw.get("normalization_type")
+        if isinstance(nt, str):
+            out["normalization_type"] = nt
+        return out
+    except Exception as e:
+        log.debug(f"loudnorm stderr parse failed: {e}")
+        return {}
+
+
+def _normalize_loudness_inplace(wav_path: str):
     """Apply ffmpeg loudnorm + anti-screech chain to wav_path in place.
 
     VoxCPM occasionally produces brief inter-segment pops/clicks and spiky
@@ -53,8 +105,14 @@ def _normalize_loudness_inplace(wav_path: str) -> bool:
     3. alimiter    — brick-wall limiter, catches any remaining transient
                      peaks above -1 dBTP that would otherwise clip post-loudnorm
 
-    Then loudnorm itself for broadcast-level consistency. Returns True on success.
+    Then loudnorm itself for broadcast-level consistency. `print_format=json`
+    makes loudnorm report its input/output measurements on stderr; that block
+    is parsed and returned so the caller can persist real loudness numbers.
+
+    Returns the measurement dict on success ({} when the stderr block could
+    not be parsed — non-fatal) or None when normalization itself failed.
     """
+    ln = f"loudnorm=I={LN_I}:TP={LN_TP}:LRA={LN_LRA}:print_format=json"
     try:
         tmp = wav_path + ".ln.wav"
         # Filter chain: declick → DC-block/rumble-cut → limit → normalize
@@ -62,30 +120,30 @@ def _normalize_loudness_inplace(wav_path: str) -> bool:
             "adeclick,"
             "highpass=f=20,"
             "alimiter=limit=0.95:level=disabled:attack=5:release=50,"
-            f"loudnorm=I={LN_I}:TP={LN_TP}:LRA={LN_LRA}"
+            + ln
         )
-        _run([
+        proc = _run([
             "ffmpeg", "-y", "-i", wav_path,
             "-af", af,
             "-ar", "48000", tmp,
         ], "loudnorm+declick+limit")
         os.replace(tmp, wav_path)
-        return True
+        return _parse_loudnorm_stderr(proc.stderr or "")
     except Exception as e:
         log.warning(f"loudnorm+anti-screech failed, trying plain loudnorm: {e}")
         # Fallback: just loudnorm without the pre-chain
         try:
             tmp = wav_path + ".ln.wav"
-            _run([
+            proc = _run([
                 "ffmpeg", "-y", "-i", wav_path,
-                "-af", f"loudnorm=I={LN_I}:TP={LN_TP}:LRA={LN_LRA}",
+                "-af", ln,
                 "-ar", "48000", tmp,
             ], "loudnorm-fallback")
             os.replace(tmp, wav_path)
-            return True
+            return _parse_loudnorm_stderr(proc.stderr or "")
         except Exception as e2:
             log.warning(f"loudnorm fallback also failed: {e2}")
-            return False
+            return None
 
 
 def _atempo_stretch(wav_path: str, speed: float) -> str:
@@ -119,6 +177,10 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
       segment's slot — slight overlap sounds FAR better than the chipmunk
       effect from aggressive pitch-shift.
     - Total audio may exceed total_duration; caller should NOT use -shortest.
+
+    Returns an info dict: {"output_path", "valid_count", "stretched_count",
+    "loudnorm"} — loudnorm is the ffmpeg measurement parsed from
+    `print_format=json` (None when loudnorm was skipped or failed).
     """
     import numpy as np
     import soundfile as sf
@@ -244,10 +306,16 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
     log.info(f"Assembled {valid_count} segments -> {output_path} ({actual_dur:.1f}s)")
 
     # Global loudness normalization so YouTube/TV playback matches broadcast levels
+    loudnorm_info = None
     if apply_loudnorm and valid_count > 0:
-        _normalize_loudness_inplace(output_path)
+        loudnorm_info = _normalize_loudness_inplace(output_path)
 
-    return output_path
+    return {
+        "output_path": output_path,
+        "valid_count": valid_count,
+        "stretched_count": stretched_count,
+        "loudnorm": loudnorm_info or None,
+    }
 
 
 def merge_audio_video(video_path, dubbed_audio_path, output_path,

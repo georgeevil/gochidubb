@@ -12,6 +12,8 @@ __pycache__/
 .claude/settings.local.json
 # Persisted UserConfig — holds hf_token in plaintext (app/config.py)
 config-user.json
+# Platform credentials store — VK token etc. (app/secrets.py)
+secrets.json
 
 # Server runtime artifacts
 .gochidubb.pid

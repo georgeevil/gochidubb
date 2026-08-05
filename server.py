@@ -167,7 +167,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from pipeline.downloader import download_video
+from pipeline.downloader import download_video, probe_metadata, curate_metadata
 from pipeline.audio import (
     extract_audio, extract_audio_hq, separate_background, get_duration,
     SeparationAborted,
@@ -327,6 +327,11 @@ def _free_gpu_memory():
 _job_queue: "asyncio.Queue[tuple]" = None  # set in lifespan
 _queue_worker_task = None
 _scheduler_task = None
+
+# Separate queue for platform uploads (Phase 3C). Uploads are network-bound,
+# not GPU-bound, so they must not wait behind (or block) the dub pipeline.
+_upload_queue: "asyncio.Queue[str]" = None  # set in lifespan; holds job_ids
+_upload_worker_task = None
 
 
 async def _scheduler_loop():
@@ -692,6 +697,96 @@ async def _job_queue_worker():
                 _apply_sleep_prevention(False)
 
 
+async def _enqueue_upload(job_id: str) -> None:
+    """Put an approved publish on the upload queue (creates it if needed)."""
+    global _upload_queue
+    if _upload_queue is None:
+        _upload_queue = asyncio.Queue()
+    await _upload_queue.put(job_id)
+    log.info(f"[publish] Job {job_id} queued for upload "
+             f"(position {_upload_queue.qsize()})")
+
+
+async def _upload_worker():
+    """Background worker — uploads approved publishes serially (Phase 3C).
+
+    Mirrors _job_queue_worker's shape: dequeue, run, persist the outcome.
+    Uploads are pure aiohttp awaits, so shutdown cancellation lands at the
+    in-flight await and unwinds cleanly — the CancelledError handler marks
+    the job failed (re-approvable) before the task exits, matching the
+    interrupt-in-flight-work behaviour the job worker got in 432de20.
+    """
+    from pipeline.publisher import PublishError, PublishMeta, get_uploader
+
+    log.info("[publish] Upload worker started")
+    while True:
+        try:
+            job_id = await _upload_queue.get()
+        except asyncio.CancelledError:
+            log.info("[publish] Upload worker cancelled, exiting")
+            return
+        job = jobs.get(job_id)
+        pub = (job or {}).get("publish")
+        try:
+            if not job or not isinstance(pub, dict):
+                log.warning(f"[publish] {job_id}: no publish state — skipping")
+                continue
+            if pub.get("status") != "approved":
+                # Cancelled (or re-staged) between approve and dequeue.
+                log.info(f"[publish] {job_id}: status is "
+                         f"{pub.get('status')!r}, not 'approved' — skipping")
+                continue
+
+            pub["status"] = "uploading"
+            pub["error"] = None
+            save_job(job)
+
+            file_rel = pub.get("file") or ""
+            file_path = str((BASE / file_rel).resolve())
+            meta = PublishMeta(
+                title=pub.get("title") or "",
+                description=pub.get("description") or "",
+                tags=list(pub.get("tags") or []),
+            )
+            log.info(f"[publish] {job_id}: uploading {file_rel} to "
+                     f"{pub.get('platform', 'vk')}")
+            uploader = get_uploader(pub.get("platform", "vk"))
+            result = await uploader.upload(file_path, meta)
+
+            pub.update(
+                status="uploaded",
+                url=result.get("url"),
+                platform_id=result.get("platform_id"),
+                uploaded_at=time.time(),
+                error=None,
+            )
+            save_job(job)
+            log.info(f"[publish] {job_id}: uploaded — {result.get('url')}")
+        except asyncio.CancelledError:
+            # Server shutdown mid-upload. VK upload URLs are single-use, so
+            # the transfer cannot resume — park it as failed + re-approvable.
+            if isinstance(pub, dict):
+                pub["status"] = "failed"
+                pub["error"] = ("Upload interrupted by server shutdown — "
+                                "approve again to retry")
+                if job:
+                    save_job(job)
+            log.warning(f"[publish] {job_id}: upload interrupted by shutdown")
+            raise
+        except PublishError as e:
+            pub["status"] = "failed"
+            pub["error"] = str(e)
+            save_job(job)
+            log.warning(f"[publish] {job_id}: upload failed: {e}")
+        except Exception as e:
+            pub["status"] = "failed"
+            pub["error"] = f"{type(e).__name__}: {e}"
+            save_job(job)
+            log.error(f"[publish] {job_id}: upload crashed: {e}", exc_info=True)
+        finally:
+            _upload_queue.task_done()
+
+
 def load_jobs_from_disk():
     loaded = load_all_jobs()
     jobs.update(loaded)
@@ -722,6 +817,21 @@ def load_jobs_from_disk():
             f"Marked {stale_count} stale job(s) as 'error' "
             f"(left over from previous server run)"
         )
+    # Same treatment for publishes the previous process left in flight: the
+    # in-memory upload queue is empty now, so "uploading"/"approved" would
+    # otherwise read as live forever. Mark them failed + re-approvable.
+    stale_pub = 0
+    for job in jobs.values():
+        pub = job.get("publish")
+        if isinstance(pub, dict) and pub.get("status") in ("uploading", "approved"):
+            pub["status"] = "failed"
+            pub["error"] = ("server restarted during upload — "
+                            "approve again to retry")
+            save_job(job)
+            stale_pub += 1
+    if stale_pub:
+        log.info(f"Marked {stale_pub} stale publish(es) as 'failed' "
+                 f"(left over from previous server run)")
     log.info(f"Loaded {len(jobs)} jobs from disk")
 
 
@@ -1041,12 +1151,17 @@ async def lifespan(app: FastAPI):
     # Initialize job queue + start serial worker. Using a single worker
     # ensures GPU-heavy pipelines don't collide and OOM the card.
     global _job_queue, _queue_worker_task, _scheduler_task
+    global _upload_queue, _upload_worker_task
     _job_queue = asyncio.Queue()
     _queue_worker_task = asyncio.create_task(_job_queue_worker())
     # Scheduler: polls every 30s looking for jobs with status='scheduled'
     # whose scheduled_at time has arrived. Survives restarts — status and
     # scheduled_at persist in the job dict on disk.
     _scheduler_task = asyncio.create_task(_scheduler_loop())
+    # Upload worker: drains the separate publish queue (network-bound, so it
+    # runs beside — never behind — the GPU job queue).
+    _upload_queue = asyncio.Queue()
+    _upload_worker_task = asyncio.create_task(_upload_worker())
 
     if os.getenv("GOCHIDUBB_OPEN_BROWSER", "1") == "1" and not os.getenv("DOCKER"):
         async def open_browser():
@@ -1130,7 +1245,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning(f"[shutdown] child cleanup failed: {e}")
 
-    for t in (_queue_worker_task, _scheduler_task):
+    for t in (_queue_worker_task, _scheduler_task, _upload_worker_task):
         if t and not t.done():
             t.cancel()
             try:
@@ -1231,6 +1346,32 @@ def _stage_index(stage_id: str) -> int:
         return -1
 
 
+# ── Job modes (Phase 3E) ────────────────────────────────────────────────
+# "dub" (default) walks every pipeline stage. "reupload" — for music videos
+# and other content that must not be dubbed — walks ONLY the download stage,
+# then _finalize_reupload() produces outputs/<id>/dubbed_video.mp4 (copy or
+# -c copy remux of the source) so publish/download/export keep working
+# unchanged. Everything else (transcribe → merge) never runs.
+JOB_MODES = ("dub", "reupload")
+
+
+def normalize_job_mode(mode) -> Optional[str]:
+    """Canonical job mode, or None when the value is not a known mode.
+
+    Empty/missing input means the default "dub" — only an explicit unknown
+    string is rejected.
+    """
+    m = str(mode or "dub").strip().lower()
+    return m if m in JOB_MODES else None
+
+
+def stages_for_mode(mode: str) -> list:
+    """Pipeline stage ids the runner walks for a job mode. Pure."""
+    if (str(mode or "dub").strip().lower()) == "reupload":
+        return ["download"]
+    return list(STAGE_ORDER)
+
+
 # Keys that must never be written to a checkpoint: transient handles and
 # internal control flags that would otherwise be replayed on resume.
 _CTX_PRIVATE_PREFIX = "_"
@@ -1284,9 +1425,17 @@ def _serialize_segments(segments: list) -> list:
             "text": s.get("text", ""),
             "speaker": s.get("speaker", "SPEAKER_00"),
         }
-        for opt in ("translated_text", "audio_path", "qa_score", "tts_tier"):
+        for opt in ("translated_text", "audio_path", "qa_score", "tts_tier",
+                    "qa", "avg_logprob", "no_speech_prob",
+                    "word_conf_mean", "word_conf_min"):
             if s.get(opt) is not None:
                 item[opt] = s.get(opt)
+        # Aggregate per-word ASR confidences the first time through (the
+        # words list itself is NOT serialized — only its summary survives
+        # checkpointing; later passes carry the stats via the loop above).
+        if s.get("words") and "word_conf_mean" not in item:
+            from pipeline.transcriber import word_confidence_stats
+            item.update(word_confidence_stats(s.get("words")))
         out.append(item)
     return out
 
@@ -1361,7 +1510,12 @@ async def _blocking(fn, *args, **kwargs):
 
 async def _stage_download(job, work, ctx, update, perf):
     update(step_detail="Getting video...")
-    video_path = await _blocking(download_video, ctx["source"], str(work))
+    # Full yt-dlp info dict probed at submit time (URL sources only) —
+    # popped here so the transient blob doesn't linger on the job dict;
+    # download_video persists it as <work>/source_info.json.
+    source_info = job.pop("_source_info", None)
+    video_path = await _blocking(
+        download_video, ctx["source"], str(work), info=source_info)
     duration = await _blocking(get_duration, video_path)
     ctx["video_path"] = video_path
     ctx["duration"] = duration
@@ -1762,6 +1916,7 @@ async def _stage_translate(job, work, ctx, update, perf):
             perf.update(model=model, translated=0, reused=len(prior_by_idx))
             ctx["segments"] = _serialize_segments(segments)
             _finalize_translation(job, work, ctx, update, perf)
+            await _maybe_translate_meta(job, ctx)
             return
     else:
         todo = segments
@@ -1820,6 +1975,11 @@ async def _stage_translate(job, work, ctx, update, perf):
             f"and 'only failed segments' to fix just those"
         )
 
+    # Translate the source title/description while the LLM is still loaded
+    # (3D) — doing it after the unload below would reload the model for two
+    # short strings.
+    await _maybe_translate_meta(job, ctx)
+
     # Unload the LLM from VRAM before TTS. Without this, Ollama's 9+ GB model
     # sits in VRAM during TTS, leaving too little room for VoxCPM (~4 GB).
     try:
@@ -1852,6 +2012,44 @@ async def _stage_translate(job, work, ctx, update, perf):
             f"'{model}' (check the logs above for timeouts or "
             f"budget-exhaustion warnings)."
         )
+
+
+async def _maybe_translate_meta(job, ctx) -> None:
+    """Translate the source title + description head into the target language.
+
+    Phase 3D: runs as a best-effort micro-step when the translate stage
+    completes, so build_publish_meta() can prefer job["meta_translated"].
+    Never fails the stage — a job without a translated title just publishes
+    under its original one (editable at approval time anyway).
+    """
+    meta = job.get("meta") or {}
+    title = (meta.get("title") or "").strip()
+    if not title or job.get("meta_translated"):
+        return
+    target = (ctx.get("target_lang") or "").strip().lower()
+    src = (ctx.get("effective_src") or ctx.get("source_lang")
+           or meta.get("language") or "").strip().lower()
+    if not target or target.split("-")[0] == src.split("-")[0]:
+        return  # same language (or unknown target) — nothing to translate
+    desc = (meta.get("description") or "")[:500].strip()
+    try:
+        from pipeline.translator import translate_texts
+        texts = [title] + ([desc] if desc else [])
+        out = await translate_texts(
+            texts, target,
+            model=ctx.get("model") or cfg.translation_model,
+            context_hint=ctx.get("context_hint") or None,
+        )
+        job["meta_translated"] = {
+            "title": out[0],
+            "description": out[1] if desc else "",
+        }
+        save_job(job)
+        log.info(f"[translate] meta title translated for {job['id']}: "
+                 f"{out[0][:80]!r}")
+    except Exception as e:
+        log.warning(f"[translate] meta title/description translation failed "
+                    f"(non-fatal): {e}")
 
 
 def _finalize_translation(job, work, ctx, update, perf) -> None:
@@ -2010,6 +2208,15 @@ async def _stage_tts(job, work, ctx, update, perf):
         synthesized=synth_ok, failed=len(segments) - synth_ok,
         sec_per_segment=round(took / max(synth_ok, 1), 2),
     )
+    # QA/tier aggregates from the worker's "done" event (tier_stats,
+    # qa_regens, qa_measured_count, qa_unmeasured_count) — previously
+    # log-only, now persisted with the stage metrics.
+    if hasattr(tts, "last_run_stats"):
+        try:
+            perf.update({k: v for k, v in (tts.last_run_stats() or {}).items()
+                         if v is not None})
+        except Exception:
+            pass
     if synth_ok == 0:
         # The worker reports per-segment failures as events rather than
         # raising, so name the actual cause here — "check model/GPU" sent us
@@ -2034,13 +2241,20 @@ async def _stage_assemble(job, work, ctx, update, perf):
     update(step_detail="Assembling dubbed audio...")
     segments = [dict(s) for s in ctx["segments"]]
     dubbed_wav = str(work / "dubbed_audio.wav")
-    await _blocking(
+    asm_info = await _blocking(
         assemble_dubbed_audio,
         segments, ctx["duration"], dubbed_wav,
         ctx.get("sample_rate", 48000), apply_loudnorm=True,
     )
     _save_placements(work, segments)
     ctx["dubbed_wav"] = dubbed_wav
+    # Persist what the assembler measured (previously log-only): how many
+    # segments needed atempo stretching, and the ffmpeg loudnorm measurement
+    # (input/output LUFS, true peak, LRA) parsed from print_format=json.
+    if isinstance(asm_info, dict):
+        perf["stretched_count"] = asm_info.get("stretched_count")
+        if asm_info.get("loudnorm"):
+            perf["loudnorm"] = asm_info["loudnorm"]
     try:
         perf["wav_mb"] = round(os.path.getsize(dubbed_wav) / 1024 / 1024, 1)
     except OSError:
@@ -2069,6 +2283,54 @@ async def _stage_merge(job, work, ctx, update, perf):
         step_detail="Done!",
     )
     log.info(f"Pipeline complete: {output_mp4}")
+
+
+async def _finalize_reupload(job, work, ctx, update):
+    """Reupload mode (3E): turn the downloaded source into the final output.
+
+    Publish, download and export all read outputs/<id>/dubbed_video.mp4, so
+    reupload jobs produce that same file: a hardlink/copy when the source is
+    already an MP4, else a lossless `ffmpeg -c copy` remux. No transcode —
+    a reupload must be bit-identical video/audio to the source.
+    """
+    import subprocess
+    src = Path(ctx["video_path"])
+    dst = work / "dubbed_video.mp4"
+    update(progress=90, step_detail="Preparing file for reupload...")
+
+    if src.resolve() != dst.resolve():
+        if dst.exists():
+            dst.unlink()
+        if src.suffix.lower() == ".mp4":
+            try:
+                os.link(src, dst)  # instant, zero extra disk
+            except OSError:
+                await _blocking(shutil.copyfile, src, dst)
+        else:
+            # .mkv / .webm container — remux streams into MP4 unchanged.
+            try:
+                await _blocking(
+                    subprocess.run,
+                    ["ffmpeg", "-y", "-i", str(src), "-c", "copy",
+                     "-movflags", "+faststart", str(dst)],
+                    check=True, capture_output=True, timeout=600,
+                )
+            except subprocess.CalledProcessError as e:
+                err = (e.stderr or b"").decode("utf-8", errors="replace")[-300:]
+                raise RuntimeError(
+                    f"Could not remux {src.name} into MP4 for reupload "
+                    f"(codec not MP4-compatible?): {err}"
+                )
+
+    ctx["output_mp4"] = str(dst)
+    update(
+        status="complete",
+        progress=100,
+        output_url=f"/outputs/{job['id']}/dubbed_video.mp4?v={int(time.time())}",
+        completed_at=time.time(),
+        step_detail="Ready to publish (reupload mode — source kept as-is)",
+    )
+    log.info(f"Reupload pipeline complete: {dst}")
 
 
 STAGE_HANDLERS = {
@@ -2169,14 +2431,20 @@ async def run_pipeline_stages(
         # the last stage's in-flight status — "diarizing" forever — which
         # reads as a hung job and blocks further stage retries.
         if stop_i < len(PIPELINE_STAGES) - 1:
-            last = STAGE_ORDER[stop_i]
-            update(
-                status="paused",
-                step_detail=f"Stopped after '{STAGE_BY_ID[last]['label']}' — "
-                            f"review the result, then retry or continue",
-                stage_id=None,
-                checkpoint_stage=PIPELINE_STAGES[stop_i]["checkpoint"],
-            )
+            if job.get("mode") == "reupload":
+                # Reupload mode (3E): the download IS the product. Produce
+                # dubbed_video.mp4 from the source and finish as complete —
+                # "paused for review" is for partial dub runs, not this.
+                await _finalize_reupload(job, work, ctx, update)
+            else:
+                last = STAGE_ORDER[stop_i]
+                update(
+                    status="paused",
+                    step_detail=f"Stopped after '{STAGE_BY_ID[last]['label']}' — "
+                                f"review the result, then retry or continue",
+                    stage_id=None,
+                    checkpoint_stage=PIPELINE_STAGES[stop_i]["checkpoint"],
+                )
 
         log.info(
             f"[perf] ═ pipeline job={job_id} finished "
@@ -2224,6 +2492,7 @@ async def run_pipeline(
     tts_speed: str = "balanced",
     wizard_mode: str = "auto",  # "auto" | "review_translation" | "review_transcript"
     auto_denoise: bool = True,  # apply ffmpeg denoise before WhisperX
+    mode: str = "dub",  # "dub" | "reupload" (3E: reupload = download only)
 ):
     """Main dubbing pipeline entry point.
 
@@ -2233,6 +2502,7 @@ async def run_pipeline(
     results before continuing."""
     job = jobs[job_id]
     job["wizard_mode"] = wizard_mode
+    job["mode"] = normalize_job_mode(mode) or "dub"
     ctx = {
         "source": source,
         "source_lang": source_lang,
@@ -2249,7 +2519,12 @@ async def run_pipeline(
         "wizard_mode": wizard_mode,
         "auto_denoise": auto_denoise,
     }
-    await run_pipeline_stages(job_id, ctx, start_stage="download")
+    # Reupload mode walks only the download stage; the driver's tail then
+    # finalizes dubbed_video.mp4 from the source (see _finalize_reupload).
+    stage_ids = stages_for_mode(job["mode"])
+    stop_after = stage_ids[-1] if len(stage_ids) < len(STAGE_ORDER) else ""
+    await run_pipeline_stages(
+        job_id, ctx, start_stage=stage_ids[0], stop_after=stop_after)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2357,6 +2632,120 @@ async def system_status():
     return status
 
 
+# ─────────────────────────────────────────────────────────────
+# API: Trend scout — discover popular YouTube videos to dub
+# ─────────────────────────────────────────────────────────────
+from fastapi import Request as _ScoutRequest  # noqa: E402  (route-local import; top import block owned elsewhere)
+
+
+@app.get("/api/scout/trending")
+async def scout_trending(category: str = "", country: str = "",
+                         limit: int = 20, include_shorts: bool = False):
+    """Trending video candidates from mostviewed.today (yt-dlp fallback).
+
+    Each candidate carries `already_processed` (+ `existing_job_id`) matched
+    against jobs this server has already run, so agents can skip duplicates.
+    """
+    from app import scout
+    try:
+        result = await scout.fetch_trending(
+            category=category or None,
+            country=country or None,
+            limit=max(1, min(int(limit or 20), 100)),
+            include_shorts=include_shorts,
+        )
+    except Exception as e:
+        log.warning(f"[scout] trending fetch failed: {e}")
+        return JSONResponse({"error": str(e)}, 502)
+    scout.annotate_already_processed(result["candidates"], jobs)
+    return result
+
+
+@app.post("/api/scout/dub")
+async def scout_dub(request: _ScoutRequest):
+    """Convenience: submit a scout candidate straight into the dub pipeline.
+
+    JSON body: {video_id or url, target_lang, mode?: "dub"|"reupload"|"auto",
+    is_music?, scheduled_at?, + optional pass-through of the usual dub params
+    (source_lang, model, keep_bg, whisper_model, speaker_mode, context_hint,
+    voice_style, voice_preset, tts_speed, wizard_mode, auto_denoise,
+    lip_sync)}. mode "auto" resolves to "reupload" for music candidates
+    (category 10), else "dub". Both modes reuse the exact POST /api/dub
+    submission path — reupload jobs walk only the download stage (3E).
+    """
+    from app import scout
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("body must be a JSON object")
+    except Exception:
+        return JSONResponse({"error": "JSON object body required"}, 400)
+
+    video_id = str(body.get("video_id") or "").strip()
+    url = str(body.get("url") or "").strip()
+    if not url and video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+    if not url:
+        return JSONResponse({"error": "Provide video_id or url"}, 400)
+
+    target_lang = str(body.get("target_lang") or "").strip()
+    if not target_lang:
+        return JSONResponse({"error": "target_lang is required"}, 400)
+
+    mode = str(body.get("mode") or "auto").strip().lower()
+    if mode not in ("dub", "reupload", "auto"):
+        return JSONResponse(
+            {"error": f"Unknown mode {mode!r} (dub|reupload|auto)"}, 400)
+    if mode == "auto":
+        is_music = body.get("is_music")
+        if is_music is None and video_id:
+            cand = scout.find_cached_candidate(video_id)
+            is_music = bool(cand and cand.get("is_music"))
+        mode = "reupload" if is_music else "dub"
+
+    try:
+        scheduled_at = float(body.get("scheduled_at") or 0.0)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "scheduled_at must be unix epoch seconds"}, 400)
+
+    # Reuse the exact same submission path as POST /api/dub (no duplication:
+    # start_dub is called directly with the URL branch inputs). video and
+    # reference MUST be passed explicitly: calling the function directly
+    # bypasses FastAPI's dependency injection, so their declared defaults
+    # are `File(None)` sentinel objects — truthy, and without .filename.
+    resp = await start_dub(
+        source=url,
+        video=None,
+        reference=None,
+        source_lang=str(body.get("source_lang") or "auto"),
+        target_lang=target_lang,
+        model=str(body.get("model") or "gemma4:e4b"),
+        keep_bg=bool(body.get("keep_bg", False)),
+        whisper_model=str(body.get("whisper_model") or "large-v3"),
+        speaker_mode=str(body.get("speaker_mode") or "main"),
+        context_hint=str(body.get("context_hint") or ""),
+        voice_style=str(body.get("voice_style") or ""),
+        voice_preset=str(body.get("voice_preset") or "auto"),
+        tts_speed=str(body.get("tts_speed") or "balanced"),
+        wizard_mode=str(body.get("wizard_mode") or "auto"),
+        auto_denoise=bool(body.get("auto_denoise", False)),
+        lip_sync=bool(body.get("lip_sync", False)),
+        mode=mode,
+        scheduled_at=scheduled_at,
+    )
+    if isinstance(resp, JSONResponse):
+        return resp  # start_dub validation error — pass it through
+
+    job_id = resp.get("job_id")
+    if video_id and job_id and job_id in jobs:
+        # Record provenance so already_processed matching works even before
+        # the downloader-metadata probe populates job["meta"] on its own.
+        jobs[job_id].setdefault("meta", {}).setdefault("video_id", video_id)
+        jobs[job_id]["scout"] = {"video_id": video_id}
+        save_job(jobs[job_id])
+    return {**resp, "mode": mode}
+
+
 @app.post("/api/diagnostics/run")
 async def run_diagnostics(token: str = Form("")):
     """Deep environment check — the only place that touches the network.
@@ -2456,9 +2845,18 @@ async def start_dub(
     wizard_mode: str = Form("auto"),  # "auto" | "review_translation" | "review_transcript"
     auto_denoise: bool = Form(False),
     lip_sync: bool = Form(False),  # if True, auto-run Wav2Lip after pipeline completes
+    mode: str = Form("dub"),  # "dub" | "reupload" (3E: reupload = no dubbing)
+    scheduled_at: float = Form(0.0),  # unix epoch seconds; 0 = start immediately
 ):
-    # Validate translation model exists in Ollama - fall back gracefully otherwise.
-    _ok, _installed = await check_ollama()
+    mode = normalize_job_mode(mode)
+    if mode is None:
+        return JSONResponse(
+            {"error": f"Unknown mode. Options: {list(JOB_MODES)}"}, 400)
+
+    # Validate translation model exists in Ollama - fall back gracefully
+    # otherwise. Reupload jobs never translate, so they skip the check —
+    # a machine with no LLM installed can still run reuploads.
+    _ok, _installed = (await check_ollama()) if mode == "dub" else (False, [])
     if _ok and model not in _installed:
         # Preference order: fast non-thinking translation-specialized
         # models first, then general purpose, then thinking models last.
@@ -2521,6 +2919,50 @@ async def start_dub(
     else:
         return JSONResponse({"error": "Provide a YouTube URL or upload a video"}, 400)
 
+    # ── Probe URL metadata (title/duration) before creating the job ────
+    # Probe failures never block submission; the download stage will
+    # surface real errors. `meta` is a small curated dict persisted on the
+    # job; `source_info` is the full yt-dlp blob (transient, never hits DB).
+    meta = None
+    source_info = None
+    if source_type == "url":
+        source_info = await asyncio.to_thread(probe_metadata, actual_source)
+        if source_info:
+            meta = curate_metadata(source_info)
+            dur = meta.get("duration") or 0
+            if cfg.max_source_duration_sec > 0 and dur > cfg.max_source_duration_sec:
+                return JSONResponse({
+                    "error": (
+                        f"Video is {int(dur)}s long — over the configured limit of "
+                        f"{cfg.max_source_duration_sec}s (max_source_duration_sec). "
+                        f"Pick a shorter video or raise the limit in Settings."
+                    )
+                }, 400)
+            if meta.get("title"):
+                source_label = meta["title"]
+
+    # ── Duplicate pre-check (4C, warn-only) ────────────────────────────
+    # If a VK token is configured, ask VK whether a similar video already
+    # exists BEFORE spending GPU-hours on the dub. Strictly best-effort:
+    # short timeout, any failure skips silently, never blocks submission.
+    duplicate_check = None
+    if meta and meta.get("title"):
+        from app.secrets import get_secret
+        if get_secret("vk_access_token"):
+            try:
+                from pipeline.publisher import VKUploader, classify_matches
+                _dup_matches = await asyncio.wait_for(
+                    VKUploader().search_similar(
+                        meta["title"], meta.get("duration")),
+                    timeout=6.0,
+                )
+                duplicate_check = {
+                    "duplicate_warnings": _dup_matches,
+                    "duplicate_verdict": classify_matches(_dup_matches),
+                }
+            except Exception as e:
+                log.debug(f"[dub] duplicate pre-check skipped: {e}")
+
     ref_path = ""
     if reference and reference.filename:
         ref_ext = Path(reference.filename).suffix or ".wav"
@@ -2528,9 +2970,33 @@ async def start_dub(
         with open(ref_path, "wb") as f:
             shutil.copyfileobj(reference.file, f)
 
+    # Deferred start (mirrors /api/dub/batch): when scheduled_at is in the
+    # future, park the job as status='scheduled' with the full pipeline args
+    # stashed in _pending_args — the _scheduler_loop enqueues it when the
+    # time arrives (and survives restarts, since both persist to disk).
+    now = time.time()
+    is_scheduled = scheduled_at > now + 10  # 10s grace for clock skew
+    pipeline_args = {
+        "source": actual_source,
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "model": model,
+        "keep_bg": keep_bg,
+        "whisper_model": whisper_model,
+        "reference_audio": ref_path,
+        "speaker_mode": speaker_mode,
+        "context_hint": context_hint,
+        "voice_style": voice_style,
+        "voice_preset": voice_preset,
+        "tts_speed": tts_speed,
+        "wizard_mode": wizard_mode,
+        "auto_denoise": auto_denoise,
+        "mode": mode,
+    }
+
     jobs[job_id] = {
         "id": job_id,
-        "status": "queued",
+        "status": "scheduled" if is_scheduled else "queued",
         "progress": 0,
         "source": actual_source,
         "source_type": source_type,
@@ -2546,33 +3012,30 @@ async def start_dub(
         "tts_speed": tts_speed,
         "wizard_mode": wizard_mode,
         "lip_sync": bool(lip_sync),
+        "mode": mode,
         "created": time.time(),
-        "step_detail": "Queued...",
+        "step_detail": ("Scheduled..." if is_scheduled else "Queued..."),
+        "scheduled_at": scheduled_at if is_scheduled else 0,
+        "_pending_args": (dict(pipeline_args) if is_scheduled else None),
+        **({"meta": meta, "title": meta.get("title"),
+            "_source_info": source_info} if meta else {}),
+        **({"duplicate_check": duplicate_check} if duplicate_check else {}),
     }
     save_job(jobs[job_id])
+
+    if is_scheduled:
+        log.info(f"[schedule] Job {job_id} deferred until "
+                 f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(scheduled_at))}")
+        return {"job_id": job_id, "scheduled_at": scheduled_at,
+                **(duplicate_check or {})}
 
     # Dispatch to pipeline — via queue if GPU is busy, else directly.
     # Multiple simultaneous dub requests would OOM the 12GB 3080 Ti
     # (WhisperX large-v3 + VoxCPM + pyannote = 9-10GB each). The queue
     # ensures only ONE GPU-heavy job runs at a time; others wait.
-    await enqueue_job(job_id, {
-        "source": actual_source,
-        "source_lang": source_lang,
-        "target_lang": target_lang,
-        "model": model,
-        "keep_bg": keep_bg,
-        "whisper_model": whisper_model,
-        "reference_audio": ref_path,
-        "speaker_mode": speaker_mode,
-        "context_hint": context_hint,
-        "voice_style": voice_style,
-        "voice_preset": voice_preset,
-        "tts_speed": tts_speed,
-        "wizard_mode": wizard_mode,
-        "auto_denoise": auto_denoise,
-    })
+    await enqueue_job(job_id, pipeline_args)
 
-    return {"job_id": job_id}
+    return {"job_id": job_id, **(duplicate_check or {})}
 
 
 @app.post("/api/dub/batch")
@@ -2663,9 +3126,28 @@ async def start_batch_dub(
             # Just leave status=scheduled; the scheduler task will pick it up
             log.info(f"[schedule] Job {jid} deferred until {scheduled_at}")
 
+    skipped = []  # URLs rejected by the duration gate: [{source, error}]
     for url in url_list:
         if not url:
             continue
+        # Probe metadata per URL — failures never block submission.
+        meta = None
+        source_info = await asyncio.to_thread(probe_metadata, url)
+        if source_info:
+            meta = curate_metadata(source_info)
+            dur = meta.get("duration") or 0
+            if cfg.max_source_duration_sec > 0 and dur > cfg.max_source_duration_sec:
+                skipped.append({
+                    "source": url,
+                    "error": (f"Video is {int(dur)}s long — over the configured "
+                              f"limit of {cfg.max_source_duration_sec}s "
+                              f"(max_source_duration_sec)"),
+                })
+                log.warning(f"[batch] Skipping {url}: duration {dur}s > "
+                            f"{cfg.max_source_duration_sec}s limit")
+                continue
+        url_label = ((meta or {}).get("title")
+                     or url[:60] + ("..." if len(url) > 60 else ""))
         jid = uuid.uuid4().hex[:8]
         jobs[jid] = {
             "id": jid,
@@ -2673,7 +3155,9 @@ async def start_batch_dub(
             "progress": 0,
             "source": url,
             "source_type": "url",
-            "source_label": url[:60] + ("..." if len(url) > 60 else ""),
+            "source_label": url_label,
+            **({"meta": meta, "title": meta.get("title"),
+                "_source_info": source_info} if meta else {}),
             "target_lang": target_lang,
             "model": model,
             "speaker_mode": speaker_mode,
@@ -2777,12 +3261,15 @@ async def start_batch_dub(
     else:
         log.info(f"[batch] {batch_id}: enqueued {len(job_ids)} jobs "
                  f"(label: {batch_label or 'untitled'})")
-    return {
+    resp = {
         "batch_id": batch_id,
         "job_ids": job_ids,
         "count": len(job_ids),
         "label": batch_label,
     }
+    if skipped:
+        resp["skipped"] = skipped
+    return resp
 
 
 @app.get("/api/dub/batch/{batch_id}")
@@ -4154,10 +4641,17 @@ async def redub_job(
                     "original_source": orig_source,
                 }, 400)
     else:
-        # URL source — pass through. download_video() should hit cache.
-        if not orig_source:
+        # URL source — reuse the already-downloaded source_video.mp4 from
+        # the original job's work dir when it still exists, instead of
+        # hitting the network again. Falls back to the URL otherwise.
+        cached = OUTPUT_DIR / job_id / "source_video.mp4"
+        if cached.exists():
+            src_for_new_jobs = str(cached)
+            log.info(f"[redub] Reusing downloaded source: {cached}")
+        elif orig_source:
+            src_for_new_jobs = orig_source
+        else:
             return JSONResponse({"error": "Original job has no source URL"}, 400)
-        src_for_new_jobs = orig_source
 
     # ── Validate / fallback the Ollama model ──────────────────────────
     chosen_model = model or orig.get("model", "aya-expanse:8b")
@@ -4188,7 +4682,8 @@ async def redub_job(
         "context_hint": orig.get("context_hint", ""),
         "source_lang": orig.get("source_lang", "auto"),
     }
-    label_base = orig.get("source_label", "") or Path(orig_source).name or job_id
+    label_base = (orig.get("title") or orig.get("source_label", "")
+                  or Path(orig_source).name or job_id)
 
     def _build_job_dict(jid: str, lang: str, extra: dict | None = None) -> dict:
         d = {
@@ -4215,6 +4710,11 @@ async def redub_job(
             "scheduled_at": 0,
             "_pending_args": None,
         }
+        # Carry curated metadata / real title over from the original job
+        if orig.get("meta"):
+            d["meta"] = orig["meta"]
+        if orig.get("title"):
+            d["title"] = orig["title"]
         if extra:
             d.update(extra)
         return d
@@ -4478,6 +4978,241 @@ async def export_for_platform(
             "error": f"Export failed for preset '{preset}'",
             "detail": err_msg[:300],
         }, 500)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Publish pipeline (Phase 3C) — stage → approve → upload, human-gated
+# ═══════════════════════════════════════════════════════════════════════
+# job["publish"] is the single source of truth for one platform upload:
+#   {platform, status, title, description, tags, file, duplicate_warnings,
+#    duplicate_verdict, url, platform_id, error, staged_at, uploaded_at}
+# Status flow: staged → approved → uploading → uploaded | failed, with
+# cancel legal any time before the bytes start moving. Transitions are
+# validated by pipeline.publisher.can_transition; the actual upload runs on
+# the separate _upload_queue / _upload_worker (network-bound, never behind
+# the GPU job queue). Nothing here ever uploads — /approve is the only way
+# to reach the worker, which is the human gate this design exists for.
+
+async def _json_body(request) -> dict:
+    """Lenient JSON body parse — publish routes accept an empty body."""
+    try:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    except Exception:
+        return {}
+
+
+@app.post("/api/dub/{job_id}/publish/stage")
+async def publish_stage(job_id: str, request: _ScoutRequest):
+    """Stage a finished job for publishing — builds metadata, runs the
+    duplicate check, optionally exports a platform preset first. NEVER
+    uploads. Body JSON (all optional): {platform: "vk", export_preset: str}.
+
+    Re-staging over an existing publish is allowed (it overwrites) unless an
+    upload is in flight. A missing VK token downgrades the duplicate check
+    to verdict "unchecked" with a "warning" in the response — staging is
+    about preparing metadata for human review, not about VK being ready.
+    """
+    from pipeline.publisher import (
+        PublishError, build_publish_meta, can_transition, classify_matches,
+        get_uploader, score_match,
+    )
+    job = jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, 404)
+    if job.get("status") != "complete":
+        return JSONResponse(
+            {"error": f"Job is '{job.get('status')}' — only completed jobs "
+                      f"can be staged for publishing"}, 400)
+
+    prev = job.get("publish")
+    prev_status = prev.get("status") if isinstance(prev, dict) else None
+    if not can_transition(prev_status, "stage"):
+        return JSONResponse(
+            {"error": "An upload is in flight for this job — wait for it "
+                      "to finish before re-staging"}, 409)
+
+    body = await _json_body(request)
+    platform = str(body.get("platform") or "vk").strip().lower()
+    try:
+        uploader = get_uploader(platform)
+    except PublishError as e:
+        return JSONResponse({"error": str(e)}, 400)
+
+    # Optional platform export first (reuses the export route wholesale).
+    export_preset = str(body.get("export_preset") or "").strip()
+    if export_preset:
+        exp = await export_for_platform(job_id, preset=export_preset,
+                                        style="default")
+        if exp.status_code != 200:
+            return exp  # unknown preset / missing video / ffmpeg failure
+        file_rel = f"outputs/{job_id}/export_{export_preset}.mp4"
+    else:
+        file_rel = f"outputs/{job_id}/dubbed_video.mp4"
+    if not (BASE / file_rel).is_file():
+        return JSONResponse({"error": f"Publish file missing: {file_rel}"}, 400)
+
+    meta = build_publish_meta(job)
+
+    # Duplicate check (4C, warn-only). Score each hit against the staged
+    # (usually translated) title AND the original one — recall on VK search
+    # is much better in the video's own language.
+    warning = None
+    dup_matches: list = []
+    verdict = "unchecked"
+    duration = (job.get("meta") or {}).get("duration") or job.get("duration")
+    try:
+        dup_matches = await uploader.search_similar(meta.title, duration)
+        alt = (job.get("title") or "").strip()
+        if alt and alt != meta.title:
+            for m in dup_matches:
+                m["score"] = round(max(
+                    m.get("score", 0.0),
+                    score_match(m.get("title", ""), m.get("duration"),
+                                meta.title, duration, alt_title=alt),
+                ), 3)
+            dup_matches.sort(key=lambda m: m.get("score", 0.0), reverse=True)
+        verdict = classify_matches(dup_matches)
+    except PublishError as e:
+        warning = f"Duplicate check skipped: {e}"
+        log.info(f"[publish] {job_id}: {warning}")
+    except Exception as e:
+        warning = f"Duplicate check failed: {type(e).__name__}: {e}"
+        log.warning(f"[publish] {job_id}: {warning}")
+
+    job["publish"] = {
+        "platform": platform,
+        "status": "staged",
+        "title": meta.title,
+        "description": meta.description,
+        "tags": meta.tags,
+        "file": file_rel,
+        "duplicate_warnings": dup_matches,
+        "duplicate_verdict": verdict,
+        "url": None,
+        "platform_id": None,
+        "error": None,
+        "staged_at": time.time(),
+        "uploaded_at": None,
+    }
+    save_job(job)
+    log.info(f"[publish] {job_id}: staged for {platform} "
+             f"(verdict={verdict}, file={file_rel})")
+    resp = {"publish": job["publish"]}
+    if warning:
+        resp["warning"] = warning
+    return resp
+
+
+@app.post("/api/dub/{job_id}/publish/approve")
+async def publish_approve(job_id: str, request: _ScoutRequest):
+    """The human gate: approve a staged (or failed) publish for upload.
+
+    Body JSON (optional): {title, description} — edits applied before the
+    upload is enqueued. This is the ONLY route that feeds the upload worker.
+    """
+    from pipeline.publisher import can_transition
+    job = jobs.get(job_id)
+    pub = (job or {}).get("publish")
+    if not job or not isinstance(pub, dict):
+        return JSONResponse({"error": "Nothing staged for this job"}, 404)
+    if not can_transition(pub.get("status"), "approve"):
+        return JSONResponse(
+            {"error": f"Cannot approve from status '{pub.get('status')}' — "
+                      f"only 'staged' or 'failed' publishes can be approved"},
+            409)
+
+    body = await _json_body(request)
+    if str(body.get("title") or "").strip():
+        pub["title"] = str(body["title"]).strip()
+    if str(body.get("description") or "").strip():
+        pub["description"] = str(body["description"]).strip()
+
+    pub["status"] = "approved"
+    pub["error"] = None
+    save_job(job)
+    await _enqueue_upload(job_id)
+    return {"publish": pub}
+
+
+@app.post("/api/dub/{job_id}/publish/cancel")
+async def publish_cancel(job_id: str):
+    """Withdraw a staged/approved/failed publish. 409 while uploading."""
+    from pipeline.publisher import can_transition
+    job = jobs.get(job_id)
+    pub = (job or {}).get("publish")
+    if not job or not isinstance(pub, dict):
+        return JSONResponse({"error": "Nothing staged for this job"}, 404)
+    status = pub.get("status")
+    if status == "uploading":
+        return JSONResponse(
+            {"error": "Upload already in flight — it cannot be cancelled "
+                      "mid-transfer"}, 409)
+    if not can_transition(status, "cancel"):
+        return JSONResponse(
+            {"error": f"Cannot cancel from status '{status}'"}, 409)
+    pub["status"] = "cancelled"
+    save_job(job)
+    return {"publish": pub}
+
+
+@app.get("/api/dub/{job_id}/publish")
+async def get_publish(job_id: str):
+    job = jobs.get(job_id)
+    pub = (job or {}).get("publish")
+    if not job or not isinstance(pub, dict):
+        return JSONResponse({"error": "Nothing staged for this job"}, 404)
+    return {"publish": pub}
+
+
+@app.get("/api/publish/pending")
+async def publish_pending():
+    """Review inbox: every publish that still needs (or is doing) work."""
+    from pipeline.publisher import PUBLISH_PENDING_STATUSES
+    pending = []
+    for jid, job in jobs.items():
+        pub = job.get("publish")
+        if isinstance(pub, dict) and pub.get("status") in PUBLISH_PENDING_STATUSES:
+            pending.append({
+                "job_id": jid,
+                "title": (job.get("title") or job.get("source_label")
+                          or jid),
+                "publish": pub,
+            })
+    pending.sort(key=lambda p: p["publish"].get("staged_at") or 0, reverse=True)
+    return {"pending": pending}
+
+
+@app.post("/api/scout/check_duplicate")
+async def scout_check_duplicate(request: _ScoutRequest):
+    """Standalone duplicate probe (4C): does a similar video already exist?
+
+    JSON body: {title, duration_sec?, alt_title?}. Warn-only by design —
+    returns {matches, verdict}; a missing/invalid token is a 502 with the
+    friendly PublishError message.
+    """
+    from pipeline.publisher import (
+        PublishError, VKUploader, classify_matches, score_match,
+    )
+    body = await _json_body(request)
+    title = str(body.get("title") or "").strip()
+    if not title:
+        return JSONResponse({"error": "title is required"}, 400)
+    duration = body.get("duration_sec")
+    alt_title = str(body.get("alt_title") or "").strip() or None
+    try:
+        matches = await VKUploader().search_similar(title, duration)
+    except PublishError as e:
+        return JSONResponse({"error": str(e)}, 502)
+    if alt_title:
+        for m in matches:
+            m["score"] = round(max(
+                m.get("score", 0.0),
+                score_match(m.get("title", ""), m.get("duration"),
+                            title, duration, alt_title=alt_title),
+            ), 3)
+        matches.sort(key=lambda m: m.get("score", 0.0), reverse=True)
+    return {"matches": matches, "verdict": classify_matches(matches)}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -5003,6 +5738,18 @@ def _stage_artifacts(job_id: str, work: Path, spec: dict, cp: Optional[dict]) ->
     return out
 
 
+# Which quality-rollup entry (pipeline/quality.py stage names) colors which
+# pipeline stage in the UI timeline. Timing lives on `assemble` (stretch and
+# drift happen there); loudness on `merge` (it measures the final track).
+_STAGE_QUALITY_KEY = {
+    "transcribe": "asr",
+    "translate": "translation",
+    "tts": "tts",
+    "assemble": "timing",
+    "merge": "loudness",
+}
+
+
 def build_stage_report(job_id: str) -> dict:
     """Per-stage status, artifacts and timings for one job.
 
@@ -5083,6 +5830,16 @@ def build_stage_report(job_id: str) -> dict:
             "degraded": bool(st_notices) and state in ("done", "stale"),
         })
 
+    # Per-stage quality chips for the UI timeline. Read ONLY the stored
+    # rollup (job["quality"], persisted by GET /api/dub/{id}/quality) —
+    # never recompute here: this report is polled while jobs run.
+    qual = job.get("quality") or {}
+    qstages = qual.get("stages") or {}
+    for s in stages:
+        q = qstages.get(_STAGE_QUALITY_KEY.get(s["id"], ""))
+        if q and q.get("available"):
+            s["quality_score"] = q.get("score")
+
     total = sum(s["duration_sec"] or 0 for s in stages)
     return {
         "job_id": job_id,
@@ -5092,6 +5849,7 @@ def build_stage_report(job_id: str) -> dict:
         "failed_stage": job.get("failed_stage"),
         "total_duration_sec": round(total, 3),
         "gpu_backend": gpu_backend(),
+        "quality_overall": qual.get("overall"),
         "stages": stages,
         "notices": merge_notices(*[s["notices"] for s in stages]),
     }
@@ -5129,6 +5887,105 @@ async def get_job_metrics(job_id: str):
         "stages": ordered,
         "history": data.get("history", []),
     }
+
+
+def _quality_inputs(job_id: str):
+    """Gather everything the quality scorers need from disk.
+
+    Segments come from the NEWEST checkpoint that has any — the same
+    walk-backwards idea as `_latest_checkpoint`, but skipping checkpoints
+    whose payload carries no segment list (download/extract). Placements and
+    the loudnorm measurement are optional; scorers report available=False
+    when they are missing.
+    """
+    segments: list = []
+    seg_stage = None
+    for stage in CHECKPOINT_ORDER_DESC:
+        cp = _load_checkpoint(job_id, stage)
+        if cp and cp.get("segments"):
+            segments, seg_stage = cp["segments"], stage
+            break
+    work = OUTPUT_DIR / job_id
+    placements = _load_placements(work)
+    loudnorm = (((load_metrics(work).get("stages") or {}).get("assemble") or {})
+                .get("detail") or {}).get("loudnorm")
+    return segments, seg_stage, placements, loudnorm
+
+
+@app.get("/api/dub/{job_id}/quality")
+async def get_job_quality(job_id: str):
+    """Full per-stage quality report + 0-100 rollup + actionable verdicts.
+
+    Computed on demand from persisted artifacts (checkpoints,
+    tts_placements.json, metrics.json) — nothing is re-transcribed or
+    re-rendered. Each verdict's `suggested_action` names an existing route
+    (retry_tts / edit_translations / regenerate_segment / retranslate) so
+    agents can act on the report mechanically. The small rollup is stored on
+    the job as `job["quality"]` once the job is complete, which is what
+    `/api/quality/trends` and the stage-report chips read.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    from pipeline.quality import full_report
+    segments, seg_stage, placements, loudnorm = await asyncio.to_thread(
+        _quality_inputs, job_id)
+    if not segments and not placements:
+        return JSONResponse(
+            {"error": "No checkpoints with segments — job has no artifacts "
+                      "to score yet"}, 404)
+    report = full_report(segments, placements, loudnorm)
+    job = jobs[job_id]
+    if job.get("status") == "complete":
+        # Recompute-and-overwrite: cheap, and it picks up granular re-runs
+        # (retry_tts / regenerate_segment) that changed the checkpoints.
+        job["quality"] = report["rollup"]
+        save_job(job)
+    return {
+        "job_id": job_id,
+        "segments_from": seg_stage,
+        "n_segments": len(segments),
+        **report,
+    }
+
+
+@app.get("/api/quality/trends")
+async def quality_trends(limit: int = 50):
+    """Stored quality rollups across recent completed jobs.
+
+    Reads ONLY `job["quality"]` (persisted by GET /api/dub/{id}/quality on
+    completed jobs) — computing full reports for 50 jobs would mean loading
+    50 checkpoint files, so jobs without a stored rollup are skipped rather
+    than scored here.
+    """
+    limit = max(1, min(int(limit), 200))
+    rows = [
+        {
+            "job_id": job.get("id"),
+            "title": job.get("title") or job.get("source_label")
+                     or job.get("source"),
+            "target_lang": job.get("target_lang"),
+            "created": job.get("created"),
+            "quality": job.get("quality"),
+        }
+        for job in jobs.values()
+        if job.get("status") == "complete" and job.get("quality")
+    ]
+    rows.sort(key=lambda r: r.get("created") or 0, reverse=True)
+    return {"jobs": rows[:limit]}
+
+
+@app.get("/api/dub/{job_id}/audit")
+async def get_job_audit(job_id: str):
+    """Artifact-loss audit (word coverage, idx integrity, QA verdicts).
+
+    Same engine as `python tools/audit_job.py <id>` — findings carry
+    severity loss/warn/info plus the offending segments, and `counts`
+    totals them per severity.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    from tools.audit_job import audit_job as _audit_job
+    return await asyncio.to_thread(_audit_job, OUTPUT_DIR / job_id)
 
 
 @app.post("/api/dub/{job_id}/retry_stage/{stage}")
@@ -6310,6 +7167,55 @@ async def patch_config(body: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Secrets — platform credentials (VK token etc.)
+# ═══════════════════════════════════════════════════════════════════════
+# Deliberately NOT part of UserConfig: GET /api/config is unauthenticated,
+# so tokens live in secrets.json (chmod 600) via app/secrets.py instead.
+# These routes never echo values — status is presence booleans only.
+# ═══════════════════════════════════════════════════════════════════════
+
+from fastapi import Request  # noqa: E402  (kept local to this route region)
+from app import secrets as app_secrets  # noqa: E402
+
+
+@app.post("/api/secrets")
+async def set_secrets(request: Request):
+    """Store platform credentials. Accepts a JSON object body
+    ({"vk_access_token": "..."}), a form field `body` holding the same
+    JSON, or plain form key/value pairs. Only keys known to app.secrets
+    are accepted (400 otherwise). Values are never echoed back."""
+    ctype = request.headers.get("content-type", "")
+    try:
+        if "application/json" in ctype:
+            updates = await request.json()
+        else:
+            form = await request.form()
+            if "body" in form:
+                updates = json.loads(form["body"])
+            else:
+                updates = {k: v for k, v in form.items()}
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid body: {e}"}, 400)
+    unknown = sorted(k for k in updates if k not in app_secrets.KNOWN_SECRETS)
+    if unknown:
+        return JSONResponse({
+            "error": f"Unknown secret key(s): {', '.join(unknown)}. "
+                     f"Known: {', '.join(sorted(app_secrets.KNOWN_SECRETS))}",
+        }, 400)
+    for k, v in updates.items():
+        app_secrets.set_secret(k, "" if v is None else str(v))
+    return {"ok": True, "status": app_secrets.secret_status()}
+
+
+@app.get("/api/secrets/status")
+async def get_secrets_status():
+    """Presence booleans per known secret key — never the values."""
+    return app_secrets.secret_status()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Glossary — user-editable term overrides
 # ═══════════════════════════════════════════════════════════════════════
 # The translator ships with a built-in BJJ glossary baked into
@@ -6704,18 +7610,46 @@ async def cleanup_storage(
 
 
 @app.get("/api/jobs")
-async def list_jobs():
+async def list_jobs(
+    status: str | None = None,
+    batch_id: str | None = None,
+    limit: int = 0,
+    since: float = 0,
+):
     # Annotate each job with checkpoint info so the History UI can
     # decide whether to show a Resume button. This is intentionally
     # done at read time (not stored on the job object) because users
     # can delete output dirs manually — reading live keeps UI honest.
-    sorted_jobs = sorted(jobs.values(), key=lambda j: j.get("created", 0), reverse=True)
+    selected = jobs.values()
+    if status:
+        wanted = {s.strip() for s in status.split(",") if s.strip()}
+        selected = [j for j in selected if j.get("status") in wanted]
+    if batch_id:
+        selected = [j for j in selected if j.get("batch_id") == batch_id]
+    if since > 0:
+        selected = [j for j in selected if j.get("created", 0) >= since]
+    sorted_jobs = sorted(selected, key=lambda j: j.get("created", 0), reverse=True)
+    if limit > 0:
+        sorted_jobs = sorted_jobs[:limit]
     enriched = []
     for j in sorted_jobs:
         info = _job_checkpoint_info(j["id"])
         # Shallow-copy so we don't mutate the in-memory job store
         enriched.append({**j, **info})
     return {"jobs": enriched}
+
+
+@app.get("/api/languages")
+async def list_supported_languages():
+    """Canonical supported target-language codes (28).
+
+    Derived from the edge-tts fallback voice map in pipeline/synthesizer.py
+    — the one place every dubbable language must be registered, since
+    edge-tts is the floor every target language falls back to when VoxCPM2
+    is unavailable. The CLI/MCP `languages` listing reads this instead of
+    hardcoding a stale subset.
+    """
+    return {"languages": list(EdgeTTSFallback.VOICE_MAP.keys())}
 
 
 @app.get("/api/download/{job_id}")

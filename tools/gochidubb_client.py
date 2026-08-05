@@ -14,7 +14,7 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 
@@ -100,8 +100,16 @@ class GoChiDUBBClient:
         auto_denoise: bool = False,
         context_hint: str = "",
         wizard_mode: str = "auto",
+        mode: str = "dub",
+        scheduled_at: Optional[float] = None,
     ) -> dict:
-        """Submit a single-language dub. Returns dict with `job_id`."""
+        """Submit a single-language dub. Returns dict with `job_id`.
+
+        mode: 'dub' (full pipeline) or 'reupload' (download + remux only —
+        used for music videos where dubbing makes no sense).
+        scheduled_at: unix epoch seconds; a future timestamp parks the job
+        as status='scheduled' and the server starts it at that time.
+        """
         files, form = self._source_fields(source)
         form.update({
             "source_lang": source_lang,
@@ -115,9 +123,12 @@ class GoChiDUBBClient:
             "auto_denoise": str(bool(auto_denoise)).lower(),
             "context_hint": context_hint,
             "wizard_mode": wizard_mode,
+            "mode": mode,
         })
         if model:
             form["model"] = model
+        if scheduled_at:
+            form["scheduled_at"] = str(float(scheduled_at))
         return await self._request("POST", "/api/dub", data=form, files=files)
 
     async def submit_compare(
@@ -130,8 +141,11 @@ class GoChiDUBBClient:
         model: Optional[str] = None,
         whisper_model: str = "large-v3",
         voice_preset: str = "auto",
+        voice_style: str = "",
         tts_speed: str = "balanced",
         keep_bg: bool = False,
+        auto_denoise: bool = False,
+        context_hint: str = "",
     ) -> dict:
         """Submit N separate dubs (Quick Test mode). 2-6 target_langs."""
         if isinstance(target_langs, (list, tuple)):
@@ -143,8 +157,11 @@ class GoChiDUBBClient:
             "source_lang": source_lang,
             "whisper_model": whisper_model,
             "voice_preset": voice_preset,
+            "voice_style": voice_style,
             "tts_speed": tts_speed,
             "keep_bg": str(bool(keep_bg)).lower(),
+            "auto_denoise": str(bool(auto_denoise)).lower(),
+            "context_hint": context_hint,
         })
         if model:
             form["model"] = model
@@ -160,8 +177,11 @@ class GoChiDUBBClient:
         model: Optional[str] = None,
         whisper_model: str = "large-v3",
         voice_preset: str = "auto",
+        voice_style: str = "",
         tts_speed: str = "balanced",
         keep_bg: bool = False,
+        auto_denoise: bool = False,
+        context_hint: str = "",
     ) -> dict:
         """Submit a multilingual showcase reel. 2-6 target_langs are
         dubbed independently then stitched into one continuous video."""
@@ -174,8 +194,11 @@ class GoChiDUBBClient:
             "source_lang": source_lang,
             "whisper_model": whisper_model,
             "voice_preset": voice_preset,
+            "voice_style": voice_style,
             "tts_speed": tts_speed,
             "keep_bg": str(bool(keep_bg)).lower(),
+            "auto_denoise": str(bool(auto_denoise)).lower(),
+            "context_hint": context_hint,
         })
         if model:
             form["model"] = model
@@ -208,17 +231,26 @@ class GoChiDUBBClient:
 
     async def list_jobs(self, *, limit: int = 50,
                         status: Optional[str] = None,
-                        batch_id: Optional[str] = None) -> list[dict]:
-        data = await self._request("GET", "/api/jobs")
-        # /api/jobs returns {"jobs": [...]}
-        jobs = data.get("jobs", []) if isinstance(data, dict) else []
+                        batch_id: Optional[str] = None,
+                        since: float = 0) -> list[dict]:
+        """List jobs newest-first. Filtering happens server-side.
+
+        status may be a single status or comma-separated set
+        (e.g. "queued,running"). since = unix epoch; only jobs created
+        at/after it are returned.
+        """
+        params: dict = {}
         if status:
-            jobs = [j for j in jobs if j.get("status") == status]
+            params["status"] = status
         if batch_id:
-            jobs = [j for j in jobs if j.get("batch_id") == batch_id]
-        # Newest first
-        jobs.sort(key=lambda j: j.get("created", 0), reverse=True)
-        return jobs[:limit]
+            params["batch_id"] = batch_id
+        if limit and limit > 0:
+            params["limit"] = int(limit)
+        if since and since > 0:
+            params["since"] = float(since)
+        data = await self._request("GET", "/api/jobs", params=params)
+        # /api/jobs returns {"jobs": [...]} sorted newest-first
+        return data.get("jobs", []) if isinstance(data, dict) else []
 
     async def get_showcase(self, batch_id: str) -> dict:
         return await self._request("GET", f"/api/showcase/{batch_id}")
@@ -236,11 +268,10 @@ class GoChiDUBBClient:
         return await self._request("GET", "/api/system")
 
     async def list_languages(self) -> list[str]:
-        """Static list of supported language codes (matches server's known set)."""
-        return [
-            "en", "ru", "es", "pt", "fr", "de", "it", "pl", "tr",
-            "ja", "ko", "zh", "ar", "hi", "nl",
-        ]
+        """Supported target-language codes, fetched from GET /api/languages
+        (canonical 28-language list — no longer hardcoded here)."""
+        data = await self._request("GET", "/api/languages")
+        return data.get("languages", []) if isinstance(data, dict) else []
 
     async def list_models(self) -> list[str]:
         """Installed Ollama models (from /api/system)."""
@@ -255,6 +286,101 @@ class GoChiDUBBClient:
             return d.get("presets", []) if isinstance(d, dict) else []
         except GoChiDUBBError:
             return []
+
+    # ── quality / audit ──────────────────────────────────────────────
+    async def get_quality(self, job_id: str) -> dict:
+        """Per-stage quality report (0-100 scores + actionable verdicts).
+
+        Verdicts carry `suggested_action` naming an existing server route
+        (retry_tts / edit_translations / regenerate_segment / retranslate)."""
+        return await self._request("GET", f"/api/dub/{job_id}/quality")
+
+    async def audit(self, job_id: str) -> dict:
+        """Artifact-loss audit: word coverage, idx integrity, QA verdicts.
+        Same engine as `python tools/audit_job.py <id>`."""
+        return await self._request("GET", f"/api/dub/{job_id}/audit")
+
+    # ── publish (VK etc.) ────────────────────────────────────────────
+    async def publish_stage(self, job_id: str, *, platform: str = "vk",
+                            export_preset: Optional[str] = None) -> dict:
+        """Stage a finished job for publishing (builds metadata, runs the
+        duplicate check, optional platform export). NEVER uploads."""
+        body: dict = {"platform": platform}
+        if export_preset:
+            body["export_preset"] = export_preset
+        return await self._request(
+            "POST", f"/api/dub/{job_id}/publish/stage", json=body)
+
+    async def publish_approve(self, job_id: str, *,
+                              title: Optional[str] = None,
+                              description: Optional[str] = None) -> dict:
+        """Approve a staged publish — the human gate that TRIGGERS the
+        actual upload. Optional title/description edits are applied first."""
+        body: dict = {}
+        if title:
+            body["title"] = title
+        if description:
+            body["description"] = description
+        return await self._request(
+            "POST", f"/api/dub/{job_id}/publish/approve", json=body)
+
+    async def publish_cancel(self, job_id: str) -> dict:
+        """Withdraw a staged/approved/failed publish (409 while uploading)."""
+        return await self._request("POST", f"/api/dub/{job_id}/publish/cancel")
+
+    async def get_publish(self, job_id: str) -> dict:
+        """Current publish state for one job ({} keys under 'publish')."""
+        return await self._request("GET", f"/api/dub/{job_id}/publish")
+
+    async def publish_pending(self) -> list[dict]:
+        """Review inbox: publishes still needing (or doing) work."""
+        data = await self._request("GET", "/api/publish/pending")
+        return data.get("pending", []) if isinstance(data, dict) else []
+
+    # ── scout (trending discovery) ───────────────────────────────────
+    async def scout_trending(self, *, category: Optional[str] = None,
+                             country: Optional[str] = None, limit: int = 20,
+                             include_shorts: bool = False) -> dict:
+        """Trending YouTube candidates. Returns {source, candidates:[...]};
+        each candidate carries is_music and already_processed flags."""
+        params: dict = {"limit": int(limit)}
+        if category:
+            params["category"] = category
+        if country:
+            params["country"] = country
+        if include_shorts:
+            params["include_shorts"] = "true"
+        return await self._request("GET", "/api/scout/trending", params=params)
+
+    async def scout_dub(self, url_or_video_id: str, target_lang: str, *,
+                        mode: str = "auto",
+                        scheduled_at: Optional[float] = None,
+                        **dub_params) -> dict:
+        """Submit a scout candidate straight into the dub pipeline.
+
+        mode 'auto' resolves to 'reupload' for music candidates, else 'dub'.
+        Extra dub params (source_lang, model, keep_bg, voice_preset, ...)
+        pass through to the normal dub submission."""
+        body: dict = {"target_lang": target_lang, "mode": mode, **dub_params}
+        if self._is_url(url_or_video_id):
+            body["url"] = url_or_video_id
+        else:
+            body["video_id"] = url_or_video_id
+        if scheduled_at:
+            body["scheduled_at"] = float(scheduled_at)
+        return await self._request("POST", "/api/scout/dub", json=body)
+
+    async def check_duplicate(self, title: str, *,
+                              duration_sec: Optional[float] = None,
+                              alt_title: Optional[str] = None) -> dict:
+        """Does a similar video already exist on the target platform?
+        Warn-only: returns {matches, verdict} (likely_duplicate|possible|clear)."""
+        body: dict = {"title": title}
+        if duration_sec is not None:
+            body["duration_sec"] = duration_sec
+        if alt_title:
+            body["alt_title"] = alt_title
+        return await self._request("POST", "/api/scout/check_duplicate", json=body)
 
     # ── result / output URLs ─────────────────────────────────────────
     def output_url(self, job_id: str, filename: str = "dubbed_video.mp4") -> str:

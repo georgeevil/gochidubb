@@ -29,7 +29,7 @@ _DB_PATH: Optional[Path] = None
 _lock = asyncio.Lock()
 
 # Fields that are large and excluded from the DB listing query
-_LARGE_FIELDS = {"transcript", "transcript_raw", "_pending_args"}
+_LARGE_FIELDS = {"transcript", "transcript_raw", "_pending_args", "_source_info"}
 
 
 def _migrate_legacy_db_name(db_path: Path) -> None:

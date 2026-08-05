@@ -13,7 +13,7 @@ Usage:
 import json
 import logging
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 log = logging.getLogger("gochidubb.config")
@@ -66,6 +66,7 @@ class UserConfig:
     tts_engine: str = "voxcpm"           # "voxcpm" | "f5tts" | "edge-tts"
     tts_speed: str = "balanced"          # "fast" | "balanced" | "quality"
     warmup_on_start: bool = False        # pre-load VoxCPM at server start
+    qa_same_language: bool = False       # whisper-roundtrip QA on same-language dubs too
 
     # ── FFmpeg (extract / render) ─────────────────────────────────────
     # Soft timeout: while ffmpeg keeps reporting encode progress the deadline
@@ -73,6 +74,16 @@ class UserConfig:
     # hard kill once no progress is seen for ffmpeg_stall_timeout seconds.
     ffmpeg_timeout: int = 600
     ffmpeg_stall_timeout: int = 120
+
+    # ── Downloader (yt-dlp) ───────────────────────────────────────────
+    ytdlp_cookies_from_browser: str = ""   # e.g. "firefox", "chrome", "safari"
+    ytdlp_cookiefile: str = ""             # path to Netscape cookies.txt
+    max_source_duration_sec: int = 0       # 0 = no pre-download duration gate
+
+    # ── Publishing ────────────────────────────────────────────────────
+    # Attribution appended to published-video descriptions. {source_url}
+    # is replaced with the original video URL (see pipeline/publisher.py).
+    publish_description_template: str = "Original: {source_url}"
 
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
@@ -120,8 +131,13 @@ def _load_config() -> UserConfig:
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
         "GOCHIDUBB_WARMUP": "warmup_on_start",
+        "GOCHIDUBB_QA_SAME_LANGUAGE": "qa_same_language",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
+        "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",
+        "YT_DLP_COOKIEFILE": "ytdlp_cookiefile",
+        "MAX_SOURCE_DURATION_SEC": "max_source_duration_sec",
+        "PUBLISH_DESCRIPTION_TEMPLATE": "publish_description_template",
     }
     for env_k, field_k in env_map.items():
         v = os.getenv(env_k)

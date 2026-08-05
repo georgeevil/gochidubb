@@ -5,7 +5,6 @@ import asyncio
 import aiohttp
 from collections import Counter
 from typing import List, Dict, Optional, Callable, Tuple
-import time
 import re
 
 log = logging.getLogger("gochidubb.translator")
@@ -690,6 +689,30 @@ async def translate_text(
         temperature=0.1,
     )
     return _clean_translation(translated) or text
+
+
+async def translate_texts(
+    texts: List[str],
+    target_lang: str,
+    model: str = "qwen/qwen3-8b",
+    context_hint: Optional[str] = None,
+) -> List[str]:
+    """Translate a few short free-standing strings (titles, descriptions).
+
+    Thin sequential loop over translate_text() — same backend, same prompt
+    building, same error semantics (failures propagate so the caller can
+    decide whether "best effort" means skip or retry). Meant for the handful
+    of metadata strings a job carries, NOT for subtitle segments — those go
+    through translate_segments(), which batches and re-aligns.
+    """
+    out: List[str] = []
+    for text in texts:
+        out.append(
+            await translate_text(
+                text, target_lang, model, context_hint=context_hint,
+            )
+        )
+    return out
 
 
 def _clean_translation(raw: str) -> str:
@@ -1414,7 +1437,7 @@ async def check_ollama() -> Tuple[bool, List[str]]:
 async def unload_ollama_model(model: str) -> None:
     """Legacy function - no-op for LM Studio."""
     if USE_LM_STUDIO:
-        log.debug(f"LM Studio doesn't need model unloading")
+        log.debug("LM Studio doesn't need model unloading")
         return
     
     # Original Ollama unload
