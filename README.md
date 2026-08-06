@@ -5,11 +5,11 @@
 **Local, agent-controllable AI video dubbing.**
 YouTube link in → voice-cloned dub in 28 languages out. No cloud, no per-minute fees, no upload of your face to anyone's server.
 
-*by [@smolekoma](https://x.com/smolekoma) and [@smolemaru](https://x.com/smolemaru) &mdash; built with [Claude Opus 4.7](https://claude.ai)*
+*by [@georgeevil](https://github.com/georgeevil) credit to [@smolekoma](https://x.com/smolekoma) and [@smolemaru](https://x.com/smolemaru) &mdash; built with [Claude code(https://claude.ai)]*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![CUDA 12.0+](https://img.shields.io/badge/CUDA-12.0+-76B900.svg)](https://developer.nvidia.com/cuda-downloads)
+optional [![CUDA 12.0+](https://img.shields.io/badge/CUDA-12.0+-76B900.svg)](https://developer.nvidia.com/cuda-downloads)
 [![MCP enabled](https://img.shields.io/badge/MCP-enabled-7B61FF.svg)](https://modelcontextprotocol.io)
 [![GitHub stars](https://img.shields.io/github/stars/georgeevil/gochidubb?style=social)](https://github.com/georgeevil/gochidubb/stargazers)
 
