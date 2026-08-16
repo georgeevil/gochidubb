@@ -941,6 +941,42 @@ def _latest_checkpoint(job_id: str) -> Optional[dict]:
     return None
 
 
+# ─────────────────────────────────────────────────────────────
+# TTS engine selection
+# ─────────────────────────────────────────────────────────────
+
+# Target languages the cloning engines were not trained on. VoxCPM2's official
+# coverage (HF model card) does not include Bulgarian, Ukrainian, Czech,
+# Romanian or Hungarian — cross-lingual synthesis there produces unreliable
+# output at best. These targets synthesize via edge-tts instead: a generic
+# Microsoft voice instead of a clone, but intelligible words. The set only
+# gates the cloning engines; edge-tts jobs pass through untouched.
+_EDGE_ONLY_TARGET_LANGS = {
+    # Original wave: not in VoxCPM2's official coverage (HF model card)
+    "bg", "uk", "cs", "ro", "hu",
+    # Wave 2 — everything new except he/sw/tl/ms/my/km/lo, which ARE
+    # covered by VoxCPM2 and keep voice cloning
+    "bn", "ur", "fa", "ta", "te", "mr", "gu", "kn", "ml",
+    "sk", "hr", "sr", "sl", "lt", "lv", "et", "ca", "is", "af",
+    "mk", "sq", "bs", "cy",
+    "kk", "az", "uz", "ka", "mn", "ne", "si",
+}
+
+
+def _tts_engine_for_lang(tts, target_lang: str):
+    """Return the engine that should actually synthesize `target_lang`.
+
+    Cloning engines are kept for languages they cover; anything in
+    _EDGE_ONLY_TARGET_LANGS drops to a fresh EdgeTTSFallback instance.
+    """
+    if not isinstance(tts, EdgeTTSFallback) and \
+            (target_lang or "")[:2].lower() in _EDGE_ONLY_TARGET_LANGS:
+        log.info(f"[tts] '{target_lang}' is outside {tts.name}'s training "
+                 f"coverage — using edge-tts for this job (no voice cloning)")
+        return EdgeTTSFallback()
+    return tts
+
+
 def get_tts_engine():
     """TTS engine factory. Priority: VoxCPM2 → F5-TTS → Edge-TTS.
 
@@ -2080,6 +2116,8 @@ async def _stage_tts(job, work, ctx, update, perf):
     segments = [dict(s) for s in ctx["segments"]]
     effective_src = ctx.get("effective_src", "en")
     target_lang = ctx.get("target_lang", "ru")
+    # Languages the cloning engines don't cover (e.g. bg) drop to edge-tts.
+    tts_used = _tts_engine_for_lang(tts, target_lang)
     eff_style = ctx.get("voice_style_effective", "")
     voice_seed = ctx.get("voice_seed")
     reference_audio = ctx.get("reference_audio", "")
@@ -2129,8 +2167,9 @@ async def _stage_tts(job, work, ctx, update, perf):
         voice_seed=voice_seed,
     )
 
-    # Apply Voice Design prefix ONLY in voice_design mode
-    if mode == "voice_design" and isinstance(tts, VoxCPMSynthesizer):
+    # Apply Voice Design prefix ONLY in voice_design mode (VoxCPM-only:
+    # edge-tts would literally read the style description out loud)
+    if mode == "voice_design" and isinstance(tts_used, VoxCPMSynthesizer):
         style = eff_style.strip().strip("()")
         for s in segments:
             base = s.get("translated_text") or s.get("text", "")
@@ -2173,8 +2212,8 @@ async def _stage_tts(job, work, ctx, update, perf):
 
     t0 = time.time()
     if todo:
-        if isinstance(tts, VoxCPMSynthesizer):
-            todo = tts.synthesize_segments(
+        if isinstance(tts_used, VoxCPMSynthesizer):
+            todo = tts_used.synthesize_segments(
                 todo, tts_dir,
                 speaker_refs=speaker_refs,
                 speaker_transcripts=speaker_transcripts,
@@ -2185,7 +2224,7 @@ async def _stage_tts(job, work, ctx, update, perf):
                 target_lang=target_lang,
             )
         else:
-            todo = await tts.synthesize_segments_async(
+            todo = await tts_used.synthesize_segments_async(
                 todo, tts_dir, target_lang,
                 progress_callback=synth_progress,
             )
@@ -2200,20 +2239,20 @@ async def _stage_tts(job, work, ctx, update, perf):
     took = time.time() - t0
     log.info(
         f"[perf] · tts {synth_ok}/{len(segments)} segments in {took:.1f}s "
-        f"({took / max(synth_ok, 1):.2f}s/segment, engine={type(tts).__name__}, "
+        f"({took / max(synth_ok, 1):.2f}s/segment, engine={type(tts_used).__name__}, "
         f"mode={mode})"
     )
     perf.update(
-        engine=type(tts).__name__, mode=mode, seed=voice_seed,
+        engine=type(tts_used).__name__, mode=mode, seed=voice_seed,
         synthesized=synth_ok, failed=len(segments) - synth_ok,
         sec_per_segment=round(took / max(synth_ok, 1), 2),
     )
     # QA/tier aggregates from the worker's "done" event (tier_stats,
     # qa_regens, qa_measured_count, qa_unmeasured_count) — previously
     # log-only, now persisted with the stage metrics.
-    if hasattr(tts, "last_run_stats"):
+    if hasattr(tts_used, "last_run_stats"):
         try:
-            perf.update({k: v for k, v in (tts.last_run_stats() or {}).items()
+            perf.update({k: v for k, v in (tts_used.last_run_stats() or {}).items()
                          if v is not None})
         except Exception:
             pass
@@ -2222,8 +2261,8 @@ async def _stage_tts(job, work, ctx, update, perf):
         # raising, so name the actual cause here — "check model/GPU" sent us
         # hunting the GPU for what was a bad generation parameter.
         detail = ""
-        if hasattr(tts, "last_failure_detail"):
-            detail = tts.last_failure_detail()
+        if hasattr(tts_used, "last_failure_detail"):
+            detail = tts_used.last_failure_detail()
         if detail:
             perf["failure"] = detail[:500]
         raise RuntimeError(
@@ -2232,7 +2271,7 @@ async def _stage_tts(job, work, ctx, update, perf):
         )
 
     ctx["segments"] = _serialize_segments(segments)
-    ctx["sample_rate"] = getattr(tts, "sample_rate", 48000)
+    ctx["sample_rate"] = getattr(tts_used, "sample_rate", 48000)
     ctx.pop("tts_keep_existing", None)
     update(progress=85, step_detail=f"Synthesized {synth_ok}/{len(segments)}")
 
@@ -3708,10 +3747,12 @@ def _trim_video(src: Path, dst: Path, seconds: int) -> Path:
 # Default language picks for the Quick-Test feature. Frontend allows
 # per-run override; this is just the pre-selection.
 _QUICK_TEST_DEFAULT_LANGS = ("es", "fr", "de", "ja", "pt")
-_QUICK_TEST_KNOWN_LANGS = {
-    "en", "ru", "es", "pt", "fr", "de", "it", "pl", "tr",
-    "ja", "ko", "zh", "ar", "hi", "nl",
-}
+# Validation set for Quick-Test / Showcase / Redub target codes. Derived from
+# the edge-tts VOICE_MAP — the canonical language registry that GET
+# /api/languages also serves — so a language registered for dubbing can never
+# be rejected at submission time. (That used to happen to "bg": it was in the
+# voice map and /api/languages, but missing from this once-hardcoded set.)
+_QUICK_TEST_KNOWN_LANGS = set(EdgeTTSFallback.VOICE_MAP)
 
 
 @app.post("/api/quick_test")
@@ -5352,10 +5393,12 @@ async def _run_tts_and_merge_stage(
 
     segments = [dict(s) for s in state["segments"]]
     tts = get_tts_engine()
+    # Languages the cloning engines don't cover (e.g. bg) drop to edge-tts.
+    tts_used = _tts_engine_for_lang(tts, state.get("target_lang", "ru"))
 
-    # Voice Design style prefix — ONLY when mode is voice_design.
-    # If refs are used, the style description would literally be spoken.
-    if mode == "voice_design" and isinstance(tts, VoxCPMSynthesizer):
+    # Voice Design style prefix — ONLY when mode is voice_design AND the
+    # engine actually used is VoxCPM (edge-tts would speak the prefix).
+    if mode == "voice_design" and isinstance(tts_used, VoxCPMSynthesizer):
         style = eff_style.strip().strip("()")
         for s in segments:
             base = s.get("translated_text") or s.get("text", "")
@@ -5385,13 +5428,13 @@ async def _run_tts_and_merge_stage(
                step_detail=f"Synthesizing: {done}/{total_inner}")
 
     if total > 0:
-        if isinstance(tts, VoxCPMSynthesizer):
+        if isinstance(tts_used, VoxCPMSynthesizer):
             # Determine cross-lingual from state (may be missing from older
             # checkpoints — in that case assume cross-lingual as a safer default
             # since that's the common dubbing use-case)
             src_lang = state.get("effective_src") or state.get("source_lang", "en")
             tgt_lang = state.get("target_lang", "ru")
-            synth_input = tts.synthesize_segments(
+            synth_input = tts_used.synthesize_segments(
                 synth_input, tts_dir,
                 speaker_refs=speaker_refs,
                 speaker_transcripts=speaker_transcripts,
@@ -5402,7 +5445,7 @@ async def _run_tts_and_merge_stage(
                 target_lang=tgt_lang,
             )
         else:
-            synth_input = await tts.synthesize_segments_async(
+            synth_input = await tts_used.synthesize_segments_async(
                 synth_input, tts_dir, state.get("target_lang", "ru"),
                 progress_callback=synth_progress,
             )
@@ -5423,7 +5466,7 @@ async def _run_tts_and_merge_stage(
     update(status="assembling", progress=88, step_detail="Assembling dubbed audio...")
     dubbed_wav = str(work / audio_output_name)
     assemble_dubbed_audio(segments, state["duration"], dubbed_wav,
-                          tts.sample_rate, apply_loudnorm=True)
+                          tts_used.sample_rate, apply_loudnorm=True)
     _save_placements(work, segments)
 
     update(status="merging", progress=93, step_detail="Rendering final video...")
@@ -5625,7 +5668,13 @@ STAGE_RETRY_OPTIONS = {
          "hint": "Smaller = faster, less accurate"},
         {"key": "source_lang", "type": "select", "label": "Source language",
          "choices": ["auto", "en", "ru", "es", "fr", "de", "it", "pt", "ja",
-                     "ko", "zh", "ar", "hi", "tr", "pl", "uk"]},
+                     "ko", "zh", "ar", "hi", "tr", "pl", "uk", "nl", "sv",
+                     "th", "vi", "cs", "ro", "hu", "bg", "el", "fi", "id",
+                     "no", "da", "bn", "ur", "fa", "he", "sw", "tl", "ms",
+                     "ta", "te", "mr", "gu", "kn", "ml", "sk", "hr", "sr",
+                     "sl", "lt", "lv", "et", "ca", "is", "af", "mk", "sq",
+                     "bs", "cy", "kk", "az", "uz", "ka", "mn", "ne",
+                     "si", "my", "km", "lo"]},
     ],
     "diarize": [
         {"key": "skip_diarization", "type": "bool", "label": "Skip diarization",
@@ -7641,7 +7690,7 @@ async def list_jobs(
 
 @app.get("/api/languages")
 async def list_supported_languages():
-    """Canonical supported target-language codes (28).
+    """Canonical supported target-language codes (65).
 
     Derived from the edge-tts fallback voice map in pipeline/synthesizer.py
     — the one place every dubbable language must be registered, since

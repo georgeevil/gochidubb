@@ -67,8 +67,31 @@ class TestEdgeTTSFallback:
         assert "pt" in engine.VOICE_MAP
         assert "ar" in engine.VOICE_MAP
         assert "it" in engine.VOICE_MAP
+        assert "bg" in engine.VOICE_MAP
 
     def test_voice_map_values_are_neural_voices(self):
         engine = EdgeTTSFallback()
         for voice in engine.VOICE_MAP.values():
             assert "Neural" in voice, f"Voice {voice} should be a Neural voice"
+
+    def test_voice_map_covers_all_advertised_languages(self):
+        """The README and GET /api/languages promise these 65 target codes,
+        and /api/languages is derived from VOICE_MAP — so the map must keep
+        every advertised language or the API silently shrinks."""
+        advertised = {
+            # Original 28
+            "en", "ru", "es", "fr", "de", "it", "pt", "pl",
+            "tr", "ja", "ko", "zh", "ar", "hi", "nl", "uk",
+            "sv", "th", "vi", "cs", "ro", "hu", "bg", "el",
+            "fi", "id", "no", "da",
+            # Wave 2: big-audience targets
+            "bn", "ur", "fa", "he", "sw", "tl", "ms", "ta",
+            "te", "mr", "gu", "kn", "ml",
+            # Wave 2: European gap-fillers
+            "sk", "hr", "sr", "sl", "lt", "lv", "et", "ca",
+            "is", "af", "mk", "sq", "bs", "cy",
+            # Wave 2: Central Asia / Caucasus / mainland SE Asia
+            "kk", "az", "uz", "ka", "mn", "ne", "si",
+            "my", "km", "lo",
+        }
+        assert advertised <= set(EdgeTTSFallback.VOICE_MAP)

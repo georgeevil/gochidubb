@@ -191,6 +191,48 @@ def _glossary_block(glossary: Optional[Dict], limit: int = 60) -> str:
     return f"\nAlways use these translations for these terms:\n{terms}\n"
 
 
+# ── Language display names ────────────────────────────────────────────
+# Target languages travel through the pipeline as ISO codes ("bg"), but
+# prompts read better — and smaller translation models behave better —
+# when the language is spelled out ("Bulgarian"). Codes not in the map
+# pass through unchanged, so a newly registered language can never break
+# translation.
+LANGUAGE_NAMES = {
+    "en": "English", "ru": "Russian", "es": "Spanish", "fr": "French",
+    "de": "German", "it": "Italian", "pt": "Portuguese", "pl": "Polish",
+    "tr": "Turkish", "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+    "ar": "Arabic", "hi": "Hindi", "nl": "Dutch", "uk": "Ukrainian",
+    "sv": "Swedish", "th": "Thai", "vi": "Vietnamese", "cs": "Czech",
+    "ro": "Romanian", "hu": "Hungarian", "bg": "Bulgarian", "el": "Greek",
+    "fi": "Finnish", "id": "Indonesian", "no": "Norwegian", "da": "Danish",
+    # Wave 2
+    "bn": "Bengali", "ur": "Urdu", "fa": "Persian", "he": "Hebrew",
+    "sw": "Swahili", "tl": "Tagalog", "ms": "Malay", "ta": "Tamil",
+    "te": "Telugu", "mr": "Marathi", "gu": "Gujarati", "kn": "Kannada",
+    "ml": "Malayalam", "sk": "Slovak", "hr": "Croatian", "sr": "Serbian",
+    "sl": "Slovenian", "lt": "Lithuanian", "lv": "Latvian",
+    "et": "Estonian", "ca": "Catalan", "is": "Icelandic",
+    "af": "Afrikaans", "mk": "Macedonian", "sq": "Albanian",
+    "bs": "Bosnian", "cy": "Welsh", "kk": "Kazakh", "az": "Azerbaijani",
+    "uz": "Uzbek", "ka": "Georgian", "mn": "Mongolian",
+    "ne": "Nepali", "si": "Sinhala", "my": "Burmese", "km": "Khmer",
+    "lo": "Lao",
+}
+
+
+def language_display_name(lang: str) -> str:
+    """Human-readable language name for prompts; falls back to the raw code.
+
+    Accepts anything the API accepts ("bg", "bg-BG", " ru ") and reduces it
+    the same way the TTS engines do (first two chars, lowercased). Unknown
+    codes come back unchanged so they stay visible in logs/prompts.
+    """
+    code = (lang or "").strip().lower()
+    if len(code) >= 2:
+        code = code[:2]
+    return LANGUAGE_NAMES.get(code, (lang or "").strip())
+
+
 def _build_translation_prompt(
     text: str,
     source_lang: str,
@@ -219,7 +261,7 @@ IMPORTANT: Use these specific translations for the following terms:
     context_text = f"\nContext: {context_hint}" if context_hint else ""
     
     # Modern prompt format for Qwen models
-    prompt = f"""You are a professional translator. Translate the following text from {source_lang} to {target_lang}.
+    prompt = f"""You are a professional translator. Translate the following text from {language_display_name(source_lang)} to {language_display_name(target_lang)}.
 {glossary_text}{context_text}
 
 Rules:
@@ -668,7 +710,7 @@ async def translate_text(
         return text
 
     # Build the translation prompt
-    prompt = f"Translate the following text to {target_lang}:"
+    prompt = f"Translate the following text to {language_display_name(target_lang)}:"
 
     if context_hint:
         prompt += f"\nContext: {context_hint}"
@@ -842,7 +884,7 @@ def _build_batch_prompt(
     numbered = "\n".join(f"{i + 1}. {t.strip()}" for i, t in enumerate(texts))
     n = len(texts)
     hint = f"\nThe material is about: {context_hint}\n" if context_hint else ""
-    return f"""Translate each numbered subtitle line below into {target_lang}.
+    return f"""Translate each numbered subtitle line below into {language_display_name(target_lang)}.
 {hint}{_glossary_block(glossary)}{_context_block(prev_pairs)}
 Rules:
 - Output EXACTLY {n} lines, numbered 1 to {n}, in the same order.
