@@ -1004,6 +1004,33 @@ class EdgeTTSFallback(BaseTTSEngine):
         "bg": "bg-BG-BorislavNeural", "el": "el-GR-NestorasNeural",
         "fi": "fi-FI-HarriNeural", "id": "id-ID-ArdiNeural",
         "no": "nb-NO-FinnNeural", "da": "da-DK-JeppeNeural",
+        # ── Wave 2: 38 more languages ──────────────────────────────────
+        # Big-audience targets (bn/ur/fa/ta/… are edge-only — VoxCPM2 was
+        # not trained on them; he/sw/tl/ms are in VoxCPM2's coverage)
+        "bn": "bn-BD-PradeepNeural", "ur": "ur-PK-AsadNeural",
+        "fa": "fa-IR-FaridNeural", "he": "he-IL-AvriNeural",
+        "sw": "sw-KE-RafikiNeural", "tl": "fil-PH-AngeloNeural",
+        "ms": "ms-MY-OsmanNeural", "ta": "ta-IN-ValluvarNeural",
+        "te": "te-IN-MohanNeural", "mr": "mr-IN-ManoharNeural",
+        "gu": "gu-IN-NiranjanNeural", "kn": "kn-IN-GaganNeural",
+        "ml": "ml-IN-MidhunNeural",
+        # European gap-fillers
+        "sk": "sk-SK-LukasNeural", "hr": "hr-HR-SreckoNeural",
+        "sr": "sr-RS-NicholasNeural", "sl": "sl-SI-RokNeural",
+        "lt": "lt-LT-LeonasNeural", "lv": "lv-LV-NilsNeural",
+        "et": "et-EE-KertNeural", "ca": "ca-ES-EnricNeural",
+        "is": "is-IS-GunnarNeural", "af": "af-ZA-WillemNeural",
+        "mk": "mk-MK-AleksandarNeural", "sq": "sq-AL-IlirNeural",
+        "bs": "bs-BA-GoranNeural", "cy": "cy-GB-AledNeural",
+        # Central Asia / Caucasus / mainland SE Asia
+        "kk": "kk-KZ-DauletNeural", "az": "az-AZ-BabekNeural",
+        "uz": "uz-UZ-SardorNeural", "ka": "ka-GE-GiorgiNeural",
+        "mn": "mn-MN-BataaNeural", "ne": "ne-NP-SagarNeural",
+        "si": "si-LK-SameeraNeural",
+        "my": "my-MM-ThihaNeural", "km": "km-KH-PisethNeural",
+        "lo": "lo-LA-ChanthavongNeural",
+        # NOTE: "tl" maps to a fil-PH voice on purpose — Microsoft retired
+        # the old tl-PH voices; Whisper's code is still "tl".
     }
 
     def __init__(self):

@@ -18,6 +18,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config (env: `GOCHIDUBB_FFMPEG_TIMEOUT`, `GOCHIDUBB_FFMPEG_STALL_TIMEOUT`).
 
 ### Added
+- **37 new target languages — 65 total.** Every candidate was verified live
+  against the edge-tts voice catalog and Whisper's language list before being
+  registered. New targets: Bengali, Urdu, Persian, Hebrew, Swahili, Filipino
+  (Tagalog), Malay, Tamil, Telugu, Marathi, Gujarati, Kannada, Malayalam,
+  Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian,
+  Catalan, Icelandic, Afrikaans, Macedonian, Albanian, Bosnian, Welsh, Kazakh,
+  Azerbaijani, Uzbek, Georgian, Mongolian, Nepali, Sinhala, Burmese,
+  Khmer and Lao. (Armenian and Punjabi were evaluated but have no edge-tts
+  voices in Microsoft's current catalog, so the fallback tier can't cover
+  them.)
+  - Voice cloning (VoxCPM2) works for `he`, `sw`, `tl`, `ms`, `my`, `km`,
+    `lo` (all in its official training coverage); the rest route to edge-tts
+    neural voices automatically via `_EDGE_ONLY_TARGET_LANGS`.
+  - Filipino uses the new Microsoft `fil-PH` voices (the old `tl-PH` ones
+    were retired) while keeping Whisper's `tl` code end-to-end.
+  - All new languages are also selectable as *source* languages.
+  - Note: the default translation fallback model (`aya-expanse:8b`) doesn't
+    cover the South-Asian wave — pick a wider multilingual model
+    (e.g. `qwen2.5:14b`) when dubbing into those.
+- **Bulgarian is now a first-class dubbing target.** `bg` was already in the
+  edge-tts voice map (so `GET /api/languages` advertised it), but the UI
+  dropdowns didn't list it and Quick Test / Showcase / Redub rejected it as
+  an unknown code.
+  - All 28 supported languages are now selectable in the UI — the language
+    dropdown was stuck at the original 15.
+  - Quick Test / Showcase / Redub validation now derives from the edge-tts
+    voice map (the canonical registry), so a registered language can never
+    be rejected at submission time again.
+  - Targets the cloning engines were not trained on (`bg`, `uk`, `cs`, `ro`,
+    `hu` are outside VoxCPM2's official coverage) synthesize via edge-tts
+    instead of attempting a cross-lingual clone that can't be reliable —
+    generic voice, but intelligible words.
+  - Translation prompts now spell the language out ("into Bulgarian" instead
+    of "into bg"), which smaller translation models handle more reliably.
+  - Bulgarian (and every other supported language) can also be picked as a
+    *source* language now — Whisper covers all of them.
 - **Setup problems are visible in the UI instead of the console.** A stage could
   finish successfully and still not have done what the user assumed, and nothing
   in the API said so. The case that prompted this: `pyannote/speaker-diarization-3.1`

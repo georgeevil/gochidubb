@@ -269,7 +269,7 @@ class GoChiDUBBClient:
 
     async def list_languages(self) -> list[str]:
         """Supported target-language codes, fetched from GET /api/languages
-        (canonical 28-language list — no longer hardcoded here)."""
+        (canonical 65-language list — no longer hardcoded here)."""
         data = await self._request("GET", "/api/languages")
         return data.get("languages", []) if isinstance(data, dict) else []
 

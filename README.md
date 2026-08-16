@@ -3,7 +3,7 @@
 # 🎙️ GoChiDUBB Studio
 
 **Local, agent-controllable AI video dubbing.**
-YouTube link in → voice-cloned dub in 28 languages out. No cloud, no per-minute fees, no upload of your face to anyone's server.
+YouTube link in → voice-cloned dub in 65 languages out. No cloud, no per-minute fees, no upload of your face to anyone's server.
 
 *by [@georgeevil](https://github.com/georgeevil) credit to [@smolekoma](https://x.com/smolekoma) and [@smolemaru](https://x.com/smolemaru) &mdash; built with [Claude code(https://claude.ai)]*
 
@@ -33,7 +33,7 @@ optional [![CUDA 12.0+](https://img.shields.io/badge/CUDA-12.0+-76B900.svg)](htt
 | **Cost** | Free (your GPU) | $0.30/min and up | $0.15+/min | $0.07+/min |
 | **Runs offline** | ✅ 100% local | ❌ cloud | ❌ cloud | ❌ cloud |
 | **Voice cloning** | ✅ VoxCPM2 | ✅ | ✅ | ✅ |
-| **Languages** | 28 | 29 | 40+ | 130+ |
+| **Languages** | 65 | 29 | 40+ | 130+ |
 | **Multi-speaker diarization** | ✅ (pyannote) | ✅ | ✅ | ✅ |
 | **Background music preservation** | ✅ (audio-separator) | ✅ | ✅ | ✅ |
 | **YouTube URL → MP4** | ✅ in one step | ❌ | ❌ | ❌ |
@@ -345,7 +345,7 @@ instead of nagging forever.
 
 ## 🌍 Supported languages
 
-28 target languages out of the box (via VoxCPM2 + edge-tts fallback):
+65 target languages out of the box (via VoxCPM2 + edge-tts fallback):
 
 | Code | Language |     | Code | Language |     | Code | Language |     | Code | Language |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -356,6 +356,22 @@ instead of nagging forever.
 | `sv` | Swedish | | `th` | Thai | | `vi` | Vietnamese | | `cs` | Czech |
 | `ro` | Romanian | | `hu` | Hungarian | | `bg` | Bulgarian | | `el` | Greek |
 | `fi` | Finnish | | `id` | Indonesian | | `no` | Norwegian | | `da` | Danish |
+| `bn` | Bengali | | `ur` | Urdu | | `fa` | Persian | | `he` | Hebrew |
+| `sw` | Swahili | | `tl` | Filipino | | `ms` | Malay | | `ta` | Tamil |
+| `te` | Telugu | | `mr` | Marathi | | `gu` | Gujarati | | `kn` | Kannada |
+| `ml` | Malayalam | | `sk` | Slovak | | `hr` | Croatian | | `sr` | Serbian |
+| `sl` | Slovenian | | `lt` | Lithuanian | | `lv` | Latvian | | `et` | Estonian |
+| `ca` | Catalan | | `is` | Icelandic | | `af` | Afrikaans | | `mk` | Macedonian |
+| `sq` | Albanian | | `bs` | Bosnian | | `cy` | Welsh | | `kk` | Kazakh |
+| `az` | Azerbaijani | | `uz` | Uzbek | | `ka` | Georgian | | `mn` | Mongolian |
+| `ne` | Nepali | | `si` | Sinhala | | `my` | Burmese | | `km` | Khmer |
+| `lo` | Lao | | | | | | | |
+
+**Voice cloning** (VoxCPM2) covers the languages in its training set — most of
+the list, including `he`, `sw`, `tl`, `ms`, `my`, `km`, `lo`. Languages outside
+that set (`uk`, `cs`, `ro`, `hu`, `bg`, `bn`, `ur`, `fa`, the Indian languages,
+the rest of Europe and Central Asia) are synthesized with Microsoft edge-tts
+neural voices: no cloning, but clean and intelligible.
 
 Source detection is automatic (Whisper). Translation goes through whatever Ollama model you have — `aya-expanse:8b` is the default for best multilingual quality.
 

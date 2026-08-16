@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-GoChiDUBB Studio: a local, offline AI video dubbing pipeline (YouTube URL or file → voice-cloned dub in 28 languages). Everything runs on the user's machine — no cloud, no API keys required by default. FastAPI server on port 8910 with a static UI (`static/index.html`), an MCP server, and a CLI — all three drive the same backend.
+GoChiDUBB Studio: a local, offline AI video dubbing pipeline (YouTube URL or file → voice-cloned dub in 65 languages). Everything runs on the user's machine — no cloud, no API keys required by default. FastAPI server on port 8910 with a static UI (`static/index.html`), an MCP server, and a CLI — all three drive the same backend.
 
 ## Common commands
 

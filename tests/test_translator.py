@@ -13,6 +13,7 @@ from pipeline.translator import (
     _chunk_lines,
     _load_user_glossary,
     _parse_numbered_lines,
+    language_display_name,
 )
 
 
@@ -292,6 +293,33 @@ class TestBuildBatchPrompt:
         # The context lines must not be numbered — only the work is
         assert "1. Then you sweep." in prompt
         assert "1. Take the guard." not in prompt
+
+
+class TestLanguageDisplayName:
+    """language_display_name() spells language codes out in LLM prompts."""
+
+    def test_known_codes_map_to_names(self):
+        assert language_display_name("bg") == "Bulgarian"
+        assert language_display_name("ru") == "Russian"
+        assert language_display_name("en") == "English"
+
+    def test_regional_codes_reduce_to_the_base_code(self):
+        assert language_display_name("bg-BG") == "Bulgarian"
+        assert language_display_name(" PT ") == "Portuguese"
+
+    def test_unknown_codes_pass_through_unchanged(self):
+        assert language_display_name("xx") == "xx"
+        assert language_display_name("") == ""
+
+    def test_batch_prompt_spells_the_language_out(self):
+        prompt = _build_batch_prompt(["Hello"], "bg")
+        assert "into Bulgarian" in prompt
+        assert "into bg" not in prompt
+
+    def test_legacy_prompt_spells_both_languages_out(self):
+        prompt = _build_translation_prompt(
+            text="Здравей", source_lang="bg", target_lang="en")
+        assert "from Bulgarian to English" in prompt
 
 
 class TestTranslateTexts:
