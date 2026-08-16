@@ -1,0 +1,30 @@
+{
+  "id": "en_clinic_thanks",
+  "source_lang": "en",
+  "origin": "constructed",
+  "note": "Written for this benchmark, not transcribed from a real video. Timings and segment lengths mirror the speech rate and gap structure of real diarized testimonial footage (15-18 source chars/sec, 0.2-0.8s gaps), which is the regime that exposes timing drift.",
+  "context_hint": "patient thank-you video for a community health clinic",
+  "duration": 62.0,
+  "challenges": [
+    "proper-nouns",
+    "numbers-and-units",
+    "idiom",
+    "honorifics",
+    "set-phrase-farewell",
+    "fast-speech",
+    "multi-speaker"
+  ],
+  "entities": ["Dr. Okafor", "Riverside", "Marion"],
+  "numbers": ["three", "18", "40"],
+  "segments": [
+    {"start": 1.20, "end": 6.40, "speaker": "SPEAKER_00", "text": "I came to Riverside three years ago and I could barely walk up a flight of stairs."},
+    {"start": 6.90, "end": 12.10, "speaker": "SPEAKER_00", "text": "Dr. Okafor sat with me for a full hour on that first visit. Nobody had ever done that."},
+    {"start": 12.60, "end": 18.20, "speaker": "SPEAKER_01", "text": "My daughter was 18 months old and running a fever that would not come down."},
+    {"start": 18.70, "end": 24.30, "speaker": "SPEAKER_01", "text": "They saw us at eleven at night. No appointment, no questions asked."},
+    {"start": 24.90, "end": 30.80, "speaker": "SPEAKER_02", "text": "I have been coming here for 40 years, since before Marion took over the front desk."},
+    {"start": 31.40, "end": 37.60, "speaker": "SPEAKER_02", "text": "This place turned my life around, and I do not say that lightly."},
+    {"start": 38.20, "end": 44.10, "speaker": "SPEAKER_03", "text": "What gets me is that they remember your name. Every single time you walk in."},
+    {"start": 44.70, "end": 50.90, "speaker": "SPEAKER_04", "text": "To everyone at Riverside, thank you for looking after my family. It means the world."},
+    {"start": 51.50, "end": 57.30, "speaker": "SPEAKER_04", "text": "Take care of yourselves, and we will see you at the summer fair. Goodbye."}
+  ]
+}

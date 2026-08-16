@@ -452,10 +452,41 @@ LM_STUDIO_MAX_OUTPUT_TOKENS=4096      # must exceed the model's reasoning budget
 LM_STUDIO_REASONING=off               # off|low|medium|high|on — off is much faster
 LM_STUDIO_MAX_CONCURRENT=1            # LM Studio serves one model at a time
 
+# Timing
+GOCHIDUBB_TTS_MAX_STRETCH=1.4      # hardest time-compression allowed to hold sync
+
 # UI behavior
 GOCHIDUBB_OPEN_BROWSER=1           # 0 to disable auto-open
 GOCHIDUBB_QA_THRESHOLD=0.4         # stricter (lower) = more re-rolls on bad TTS
 ```
+
+### Which translation model to use
+
+This matters more than any other setting. A bad translation model does not
+fail — it returns fluent, confident, wrong text, and you find out by watching
+the finished video in a language you may not speak. One model in our test set
+rendered Spanish *gracias* as Bulgarian "please" every time it appeared, and
+*Adiós* as a word that does not exist, while every stage reported success.
+
+**[→ Choosing a translation model](docs/choosing-a-translation-model.md)** — the
+evidence, the failure modes to watch for, and `tools/gochidubb_benchmark.py` to
+re-run the comparison against whatever you have installed.
+
+Short answer: `LM_STUDIO_MODEL=openai/gpt-oss-20b`.
+
+### Keeping the dub in sync
+
+Translations are rarely the same length as their source, and speech has to fit
+the slot it is dubbed into. The assembler time-compresses each segment (pitch
+preserved) up to `GOCHIDUBB_TTS_MAX_STRETCH`, budgeting against the next
+segment's start so the pause after someone stops talking gets used before
+anything is sped up.
+
+Raise it toward `1.6` for fast-talking sources or dense target languages; lower
+it toward `1.2` if the dub sounds rushed. Past the ceiling a segment is allowed
+to run long, and the segment after it absorbs the delay rather than passing it
+on. The job's metrics record `max_drift_sec` so you can see whether the ceiling
+is binding.
 
 ### Thinking models and translation speed
 
