@@ -1,0 +1,30 @@
+{
+  "id": "de_workshop_intro",
+  "source_lang": "de",
+  "origin": "constructed",
+  "note": "Written for this benchmark, not transcribed from a real video. German is the hardest common source for length matching: compound nouns and verb-final clauses make the source unusually dense, so a translation that reads naturally is often much longer than its slot.",
+  "context_hint": "opening of a hands-on woodworking workshop, filmed for the course page",
+  "duration": 64.0,
+  "challenges": [
+    "compound-nouns",
+    "formal-register",
+    "numbers-and-units",
+    "proper-nouns",
+    "verb-final-clauses",
+    "imperatives",
+    "dense-source"
+  ],
+  "entities": ["Hoffmann", "Grünwald"],
+  "numbers": ["zwölf", "1,5", "sieben"],
+  "segments": [
+    {"start": 0.80, "end": 6.30, "speaker": "SPEAKER_00", "text": "Herzlich willkommen in der Holzwerkstatt Grünwald. Mein Name ist Frau Hoffmann."},
+    {"start": 6.80, "end": 12.90, "speaker": "SPEAKER_00", "text": "In den nächsten zwölf Wochen bauen Sie Ihren eigenen Werkzeugschrank von Grund auf."},
+    {"start": 13.50, "end": 19.80, "speaker": "SPEAKER_00", "text": "Bitte tragen Sie immer eine Schutzbrille, auch wenn Sie nur zuschauen."},
+    {"start": 20.40, "end": 26.90, "speaker": "SPEAKER_01", "text": "Die Arbeitsplatte ist 1,5 Meter breit, damit zwei Personen gleichzeitig daran arbeiten können."},
+    {"start": 27.50, "end": 33.60, "speaker": "SPEAKER_01", "text": "Wer noch nie gehobelt hat, sollte mit dem weicheren Holz anfangen."},
+    {"start": 34.20, "end": 40.70, "speaker": "SPEAKER_00", "text": "Wir treffen uns jeden Dienstag um sieben, und der Kurs dauert etwa drei Stunden."},
+    {"start": 41.30, "end": 47.40, "speaker": "SPEAKER_02", "text": "Ich hatte davor überhaupt keine Erfahrung, und trotzdem hat es vom ersten Tag an Spaß gemacht."},
+    {"start": 48.00, "end": 54.20, "speaker": "SPEAKER_02", "text": "Man lernt hier nicht nur das Handwerk, sondern auch Geduld mit sich selbst."},
+    {"start": 54.80, "end": 60.60, "speaker": "SPEAKER_00", "text": "Wir freuen uns auf Sie. Bis nächsten Dienstag, und kommen Sie gut nach Hause."}
+  ]
+}

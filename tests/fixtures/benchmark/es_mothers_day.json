@@ -1,0 +1,60 @@
+{
+  "id": "es_mothers_day",
+  "source_lang": "es",
+  "origin": "real",
+  "note": "Verbatim from GoChiDUBB job c5b12e16 — six schoolchildren recording Mother's Day messages. Transcribed by faster-whisper large-v3, diarized by pyannote.",
+  "context_hint": "school video for Mother's Day",
+  "duration": 51.366167,
+  "challenges": [
+    "kinship-vocative",
+    "holiday-idiom",
+    "set-phrase-farewell",
+    "fast-speech",
+    "multi-speaker",
+    "affection-register"
+  ],
+  "segments": [
+    {
+      "start": 1.04,
+      "end": 4.58,
+      "speaker": "SPEAKER_04",
+      "text": "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias."
+    },
+    {
+      "start": 4.98,
+      "end": 8.22,
+      "speaker": "SPEAKER_04",
+      "text": "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho."
+    },
+    {
+      "start": 8.66,
+      "end": 15.98,
+      "speaker": "SPEAKER_05",
+      "text": "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo."
+    },
+    {
+      "start": 16.2,
+      "end": 23.24,
+      "speaker": "SPEAKER_01",
+      "text": "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo."
+    },
+    {
+      "start": 23.66,
+      "end": 29.36,
+      "speaker": "SPEAKER_03",
+      "text": "Hola, mamá. Gracias por qué me has hecho y te amo."
+    },
+    {
+      "start": 30.06,
+      "end": 34.48,
+      "speaker": "SPEAKER_02",
+      "text": "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós."
+    },
+    {
+      "start": 34.52,
+      "end": 39.16,
+      "speaker": "SPEAKER_00",
+      "text": "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+    }
+  ]
+}

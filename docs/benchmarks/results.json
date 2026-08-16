@@ -1,0 +1,3474 @@
+{
+  "fixtures": [
+    "de_workshop_intro",
+    "en_clinic_thanks",
+    "es_mothers_day"
+  ],
+  "targets": [
+    "es",
+    "pt",
+    "ru",
+    "hi",
+    "ar"
+  ],
+  "results": {
+    "openai/gpt-oss-20b": {
+      "de_workshop_intro": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 23.6,
+            "spread_sec": 9.9,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.988
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.98,
+              "drift_sec": 0.0,
+              "elapsed": 23.6,
+              "texts": [
+                "Bienvenidos a la carpintería Grünwald. Mi nombre es Frau Hoffmann.",
+                "Durante las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, siempre use gafas de protección, incluso si solo está observando.",
+                "La encimera mide 1,5 metros de ancho, para que dos personas puedan trabajar simultáneamente.",
+                "Quien nunca haya lijado debería comenzar con la madera más blanda.",
+                "Nos reunimos cada martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes no tenía ninguna experiencia, pero aun así me divertí desde el primer día.",
+                "Aquí se aprende no solo la artesanía, sino también paciencia consigo mismo.",
+                "Esperamos contar con usted. Hasta el próximo martes, y llegue bien a casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.995,
+              "drift_sec": 0.0,
+              "elapsed": 13.7,
+              "texts": [
+                "Bienvenidos a la carpintería Grünwald. Mi nombre es Frau Hoffmann.",
+                "Durante las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, siempre use una gafas de protección, incluso si solo está observando.",
+                "La encimera mide 1,5 metros de ancho, para que dos personas puedan trabajar simultáneamente.",
+                "Quien nunca haya lijado debería empezar con la madera más blanda.",
+                "Nos reunimos cada martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes de eso no tenía ninguna experiencia, y aun así me divertí desde el primer día.",
+                "Aquí se aprende no solo el oficio, sino también la paciencia con uno mismo.",
+                "Esperamos contar con usted. Hasta el próximo martes, y que llegue bien a casa."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.07,
+            "median_sec": 11.5,
+            "spread_sec": 2.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.994
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.975,
+              "drift_sec": 0.07,
+              "elapsed": 9.1,
+              "texts": [
+                "Bem-vindo à oficina de carpintaria Grünwald. Meu nome é Frau Hoffmann.",
+                "Nas próximas doze semanas, você construirá sua própria estante de ferramentas desde o início.",
+                "Por favor, use sempre óculos de proteção, mesmo que você esteja apenas assistindo.",
+                "A bancada tem 1,5 metros de largura, para que duas pessoas possam trabalhar nela ao mesmo tempo.",
+                "Quem nunca lixou deve começar com madeira mais macia.",
+                "Nos reunimos todos os terças às sete, e o curso dura cerca de três horas.",
+                "Eu não tinha nenhuma experiência antes disso, e mesmo assim se divertiu desde o primeiro dia.",
+                "Aqui você aprende não apenas a arte, mas também paciência consigo mesmo.",
+                "Estamos ansiosos por você. Até a próxima terça, e volte bem para casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.013,
+              "drift_sec": 0.0,
+              "elapsed": 11.5,
+              "texts": [
+                "Seja bem-vindo à oficina de carpintaria Grünwald. Meu nome é Frau Hoffmann.",
+                "Nas próximas doze semanas, você construirá sua própria estante de ferramentas do zero.",
+                "Por favor, use sempre óculos de proteção, mesmo quando estiver apenas assistindo.",
+                "A bancada tem 1,5 metro de largura, para que duas pessoas possam trabalhar nela simultaneamente.",
+                "Quem nunca lixou deve começar com a madeira mais macia.",
+                "Nos encontramos todos os terças às sete, e o curso dura cerca de três horas.",
+                "Eu não tinha nenhuma experiência antes disso, e mesmo assim já se divertiu desde o primeiro dia.",
+                "Aqui você aprende não apenas a arte da carpintaria, mas também paciência consigo mesmo.",
+                "Estamos ansiosos por você. Até a próxima terça-feira, e volte bem para casa."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 14.0,
+            "spread_sec": 1.1,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.984
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.977,
+              "drift_sec": 0.0,
+              "elapsed": 12.9,
+              "texts": [
+                "Добро пожаловать в деревообрабатывающий цех Груенвальд. Меня зовут госпожа Хофманн.",
+                "В течение следующих двенадцати недель вы построите собственный шкаф для инструментов с нуля.",
+                "Пожалуйста, всегда надевайте защитные очки, даже если вы только наблюдаете.",
+                "Рабочий стол шириной 1,5 метра позволяет двум людям работать одновременно.",
+                "Те, кто никогда не рубил доски, должны начинать с более мягкой древесины.",
+                "Мы встречаемся каждый вторник в семь, и курс длится примерно три часа.",
+                "У меня до этого не было никакого опыта, но всё равно с первого дня это доставляло удовольствие.",
+                "Здесь вы учитесь не только ремеслу, но и терпению к себе.",
+                "Мы с нетерпением ждём вас. До следующего вторника, и доброго возвращения домой."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.991,
+              "drift_sec": 0.0,
+              "elapsed": 14.0,
+              "texts": [
+                "Добро пожаловать в деревообрабатывающий цех Груенвальд. Меня зовут госпожа Хофманн.",
+                "В течение следующих двенадцати недель вы построите собственный шкаф для инструментов с нуля.",
+                "Пожалуйста, всегда надевайте защитные очки, даже если вы только наблюдаете.",
+                "Рабочий стол шириной 1,5 метра позволяет двум людям работать одновременно.",
+                "Те, кто никогда не рубил доски, должны начинать с более мягкой древесины.",
+                "Мы встречаемся каждую неделю во вторник в семь, и курс длится примерно три часа.",
+                "У меня до этого не было никакого опыта, но всё равно с первого дня это доставляло удовольствие.",
+                "Здесь вы учитесь не только ремеслу, но и терпению к себе.",
+                "Мы с нетерпением ждём вас. До следующего вторника, и доброго возвращения домой."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.58,
+            "median_sec": 12.1,
+            "spread_sec": 7.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.865
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.882,
+              "drift_sec": 0.58,
+              "elapsed": 12.1,
+              "texts": [
+                "ग्रुंवॉल्ड लकड़ी कार्यशाला में आपका हार्दिक स्वागत है। मेरा नाम श्रीमती होफमैन है।",
+                "आगामी बारह हफ्तों में आप अपनी खुद की टूल कैबिनेट शून्य से बनायेंगे।",
+                "कृपया हमेशा सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "कार्य पटल 1.5 मीटर चौड़ा है, ताकि दो लोग एक साथ उस पर काम कर सकें।",
+                "जो कभी भी सैंडिंग नहीं किया है, उसे नरम लकड़ी से शुरू करना चाहिए।",
+                "हम हर मंगलवार शाम सात बजे मिलते हैं, और कोर्स लगभग तीन घंटे का होता है।",
+                "मुझे इससे पहले बिल्कुल भी अनुभव नहीं था, फिर भी यह पहली दिन से ही मज़ेदार रहा।",
+                "यहाँ आप केवल शिल्प नहीं सीखते, बल्कि स्वयं के साथ धैर्य भी सीखते हैं।",
+                "हम आपकी प्रतीक्षा कर रहे हैं। अगले मंगलवार तक, और सुरक्षित घर पहुँचें।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.847,
+              "drift_sec": 0.26,
+              "elapsed": 4.9,
+              "texts": [
+                "हार्दिक स्वागत है ग्रुंवॉल्ड लकड़ी कार्यशाला में। मेरा नाम श्रीमती होफ़मैन है।",
+                "अगले बारह हफ्तों में आप अपनी खुद की टूल कैबिनेट शून्य से बनायेंगे।",
+                "कृपया हमेशा सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "कार्य सतह 1.5 मीटर चौड़ी है, ताकि दो लोग एक साथ काम कर सकें।",
+                "जो कभी भी सैंड नहीं किया है, उसे नरम लकड़ी से शुरू करना चाहिए।",
+                "हम हर मंगलवार सुबह सात बजे मिलते हैं, और कोर्स लगभग तीन घंटे का होता है।",
+                "मैंने पहले कभी अनुभव नहीं किया था, फिर भी पहली दिन से ही मज़ा आया।",
+                "यहाँ आप केवल शिल्प नहीं सीखते, बल्कि स्वयं के साथ धैर्य भी सीखते हैं।",
+                "हम आपकी प्रतीक्षा कर रहे हैं। अगले मंगलवार तक, और सुरक्षित घर लौटें।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.11,
+            "median_sec": 8.3,
+            "spread_sec": 0.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.77
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.765,
+              "drift_sec": 0.11,
+              "elapsed": 8.3,
+              "texts": [
+                "مرحبًا بكم في ورشة النجارة جرونفالد. اسمي السيدة هوفمان.",
+                "خلال الأسابيع الاثني عشر القادمة، ستبنون خزانة أدواتكم الخاصة من الصفر.",
+                "يرجى ارتداء نظارات واقية دائمًا، حتى لو كنتم مجرد مشاهدين.",
+                "السطح العملي عرضه 1.5 متر، حتى يتمكن شخصان من العمل عليه في آن واحد.",
+                "لمن لم يسبق له أن حفر، يجب أن يبدأ بالخشب الناعم.",
+                "نلتقي كل يوم ثلاثاء في السابعة، ويستغرق الدورة حوالي ثلاث ساعات.",
+                "لم أكن لدي أي خبرة من قبل، ومع ذلك كان ممتعًا منذ اليوم الأول.",
+                "هنا لا تتعلمون الحرف فحسب، بل أيضًا الصبر مع أنفسكم.",
+                "نحن متحمسون لرؤيتكم. حتى الثلاثاء القادم، وتعودوا إلى المنزل بأمان."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.774,
+              "drift_sec": 0.0,
+              "elapsed": 8.1,
+              "texts": [
+                "مرحبًا بكم في ورشة النجارة جرونفالد. اسمي السيدة هوفمان.",
+                "خلال الأسبوعين الإثني عشر القادمين، ستبنون خزانة أدواتكم الخاصة من الصفر.",
+                "يرجى ارتداء نظارات واقية دائمًا، حتى لو كنتم مجرد مشاهدين.",
+                "سطح العمل عرضه 1.5 متر، حتى يتمكن شخصان من العمل عليه في نفس الوقت.",
+                "من لم يسبق له أن حفر، يجب أن يبدأ بالخشب الناعم.",
+                "نلتقي كل يوم ثلاثاء في الساعة السابعة، ويستغرق الدورة حوالي ثلاث ساعات.",
+                "لم أكن لدي أي خبرة من قبل، ومع ذلك كان ممتعًا منذ اليوم الأول.",
+                "هنا لا تتعلمون الحرف فحسب، بل أيضًا الصبر مع أنفسكم.",
+                "نحن متحمسون لرؤيتكم. حتى الثلاثاء القادم، وتعودوا إلى المنزل بأمان."
+              ]
+            }
+          ]
+        }
+      },
+      "en_clinic_thanks": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 1.59,
+            "median_sec": 10.8,
+            "spread_sec": 6.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.873
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.894,
+              "drift_sec": 1.59,
+              "elapsed": 4.4,
+              "texts": [
+                "Llegué a Riverside hace tres años y apenas podía subir una rampa de escaleras.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita. Nadie lo había hecho antes.",
+                "Mi hija tenía 18 meses y estaba con fiebre que no bajaba.",
+                "Nos vieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara la recepción.",
+                "Este lugar cambió mi vida y no lo digo a la ligera.",
+                "Lo que me impresiona es que recuerdan tu nombre. Cada vez que entras.",
+                "A todos en Riverside, gracias por cuidar a mi familia. Significa el mundo.",
+                "Cuídense y nos vemos en la feria de verano. Adiós."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.851,
+              "drift_sec": 0.09,
+              "elapsed": 10.8,
+              "texts": [
+                "Llegué a Riverside hace tres años y apenas podía subir una escalera.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita.",
+                "Mi hija tenía 18 meses y estaba con fiebre que no bajaba.",
+                "Nos vieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara la recepción.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me impresiona es que recuerdan tu nombre. Cada vez que entras.",
+                "A todos en Riverside, gracias por cuidar a mi familia. Significa el mundo.",
+                "Cuídense, y los veremos en la feria de verano. Adiós."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 1.05,
+            "median_sec": 11.8,
+            "spread_sec": 3.6,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.927
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.927,
+              "drift_sec": 1.05,
+              "elapsed": 11.8,
+              "texts": [
+                "Eu vim para Riverside há três anos e mal conseguia subir um degrau de escada.",
+                "O Dr. Okafor ficou comigo por uma hora inteira na primeira visita. Ninguém jamais havia feito isso.",
+                "Minha filha tinha 18 meses e estava com febre que não diminuía.",
+                "Eles nos viram às onze da noite. Sem consulta, sem perguntas feitas.",
+                "Venho aqui há 40 anos, desde antes de Marion assumir a recepção.",
+                "Este lugar mudou minha vida, e não digo isso levianamente.",
+                "O que me impressiona é que eles lembram seu nome. A cada vez que você entra.",
+                "Para todos na Riverside, obrigado por cuidar da minha família. Significa o mundo.",
+                "Cuide de vocês, e nos veremos na feira de verão. Adeus."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.928,
+              "drift_sec": 1.05,
+              "elapsed": 8.2,
+              "texts": [
+                "Cheguei ao Riverside há três anos e mal conseguia subir um degrau de escada.",
+                "O Dr. Okafor ficou comigo por uma hora inteira na primeira visita. Ninguém jamais havia feito isso.",
+                "Minha filha tinha 18 meses e estava com febre que não diminuía.",
+                "Eles nos viram às onze da noite. Sem consulta, sem perguntas feitas.",
+                "Venho aqui há 40 anos, desde antes de Marion assumir a recepção.",
+                "Este lugar mudou minha vida, e não digo isso levianamente.",
+                "O que me impressiona é que eles lembram seu nome. A cada vez que você entra.",
+                "Para todos no Riverside, obrigado por cuidarem da minha família. Significa o mundo.",
+                "Cuide de vocês, e nos veremos na feira de verão. Adeus."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.24,
+            "median_sec": 4.9,
+            "spread_sec": 0.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.951
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.936,
+              "drift_sec": 0.24,
+              "elapsed": 4.7,
+              "texts": [
+                "Я пришёл в Riverside три года назад, и едва мог подняться по лестнице.",
+                "Доктор Окафор провёл со мной целый час в тот первый визит. Никто раньше не делал этого.",
+                "Моя дочь была в возрасте 18 месяцев и держала жар, который не спадал.",
+                "Они встретили нас в одиннадцать часов ночи. Без записи, без вопросов.",
+                "Я посещаю это место уже 40 лет, с тех пор как Мария взяла на себя стойку регистрации.",
+                "Это место изменило мою жизнь, и я не говорю это без причины.",
+                "Что меня поражает – они запоминают ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Riverside благодарю за заботу о моей семье. Это значит для меня всё.",
+                "Берегите себя, и увидимся на летнем ярмарке. До свидания."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.966,
+              "drift_sec": 0.24,
+              "elapsed": 4.9,
+              "texts": [
+                "Я пришёл в Riverside три года назад, и едва мог подняться по лестнице.",
+                "Доктор Окафор провёл со мной целый час в тот первый визит. Никто раньше не делал этого.",
+                "Моя дочь была в возрасте 18 месяцев и держала жару, которая не спадала.",
+                "Они встретили нас в одиннадцать часов ночи. Без записи, без вопросов.",
+                "Я посещаю здесь уже 40 лет, с тех пор как Мария взяла на себя стойку регистрации.",
+                "Это место изменило мою жизнь, и я не произношу это безобоснованно.",
+                "Что меня поражает, так это то, что они запоминают ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Riverside благодарю за заботу о моей семье. Это значит для меня всё.",
+                "Берегите себя, и увидимся на летнем ярмарке. До свидания."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 2.4,
+            "median_sec": 5.2,
+            "spread_sec": 0.0,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.0
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.0,
+              "drift_sec": 2.4,
+              "elapsed": 5.2,
+              "texts": [
+                "मैं तीन साल पहले रिवरसाइड आया था और मैं मुश्किल से एक सीढ़ी चढ़ सकता था।",
+                "डॉ. ओकाफ़र ने मेरी पहली मुलाकात में मेरे साथ पूरा एक घंटा बैठकर बात की। कोई भी ऐसा कभी नहीं किया था।",
+                "मेरी बेटी 18 महीने की थी और उसे तेज़ बुखार था जो उतर नहीं रहा था।",
+                "उन्होंने हमें रात के ग्यारह बजे देखा। कोई अपॉइंटमेंट नहीं, कोई सवाल भी नहीं पूछे गए।",
+                "मैं यहाँ 40 वर्षों से आ रहा हूँ, जब मारियन ने फ्रंट डेस्क संभाली थी उससे पहले।",
+                "इस जगह ने मेरा जीवन बदल दिया, और मैं इसे हल्के में नहीं कहता।",
+                "मुझे यह बात पसंद है कि वे आपका नाम याद रखते हैं। हर बार जब आप अंदर आते हैं।",
+                "रिवरसाइड के सभी लोगों को धन्यवाद, जो मेरे परिवार का ध्यान रखते हैं। यह दुनिया के बराबर है।",
+                "अपना ख्याल रखें, और हम आपको गर्मियों की मेले में मिलेंगे। अलविदा।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.0,
+              "drift_sec": 2.4,
+              "elapsed": 5.2,
+              "texts": [
+                "मैं तीन साल पहले रिवरसाइड आया था और मैं मुश्किल से एक सीढ़ी चढ़ सकता था।",
+                "डॉ. ओकाफ़र ने मेरी पहली मुलाकात में मेरे साथ पूरा एक घंटा बैठकर बात की। कोई भी ऐसा कभी नहीं किया था।",
+                "मेरी बेटी 18 महीने की थी और उसे तेज़ बुखार था जो नहीं घट रहा था।",
+                "उन्होंने हमें रात के ग्यारह बजे देखा। कोई अपॉइंटमेंट नहीं, कोई सवाल भी नहीं पूछे गए।",
+                "मैं यहाँ 40 वर्षों से आ रहा हूँ, मारियन के फ्रंट डेस्क संभालने से पहले से।",
+                "इस जगह ने मेरी ज़िंदगी बदल दी, और मैं इसे हल्के में नहीं कहता।",
+                "मुझे यह बात बहुत पसंद है कि वे आपका नाम याद रखते हैं। हर बार जब आप अंदर आते हैं।",
+                "रिवरसाइड के सभी लोगों को धन्यवाद, जो मेरे परिवार का ध्यान रखते हैं। यह दुनिया की तरह है।",
+                "अपना ख़याल रखें, और हम आपको गर्मियों के मेले में मिलेंगे। अलविदा।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.52,
+            "median_sec": 8.6,
+            "spread_sec": 4.0,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.768
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.761,
+              "drift_sec": 0.15,
+              "elapsed": 8.6,
+              "texts": [
+                "جئت إلى ريفرسايد منذ ثلاث سنوات ولم أستطع سوى المشي على درج واحد.",
+                "جلس الدكتور أوكافور معي ساعة كاملة في الزيارة الأولى. لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي في عمر 18 شهرًا وكانت تعاني من حمى لا تنخفض.",
+                "رأونا في الساعة الحادية عشرة ليلاً. بدون موعد، دون أسئلة.",
+                "أتيت إلى هنا منذ 40 عامًا، قبل أن تتولى مارين مكتب الاستقبال.",
+                "هذا المكان غير حياتي، ولا أقول ذلك بخفة.",
+                "ما يثير إعجابي هو أنهم يتذكرون اسمك. في كل مرة تدخل.",
+                "إلى الجميع في ريفرسايد، شكرًا لكم على العناية بعائلتي. هذا يعني العالم.",
+                "اعتنوا بأنفسكم، وسنلتقي بكم في معرض الصيف. وداعًا."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.775,
+              "drift_sec": 0.52,
+              "elapsed": 4.6,
+              "texts": [
+                "وصلت إلى ريفرسايد منذ ثلاث سنوات ولم أتمكن حتى من صعود درج واحد.",
+                "جلس الدكتور أوكافور معي لمدة ساعة كاملة في الزيارة الأولى، لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي تبلغ 18 شهرًا وكانت تعاني حمى لا تنزل.",
+                "رأيناهم في الساعة الحادية عشرة ليلاً، بدون موعد ولا أسئلة تُطرح.",
+                "أتيت إلى هنا منذ 40 عامًا، قبل أن تتولى مارين مكتب الاستقبال.",
+                "حول هذا المكان حياتي، ولا أقول ذلك بخفة.",
+                "ما يثير إعجابي هو أنهم يتذكرون اسمك، في كل مرة تدخل فيها.",
+                "لكل من في ريفرسايد، شكرًا لكم على العناية بعائلتي؛ هذا يعني العالم لي.",
+                "اعتنوا بأنفسكم، وسنلتقي بكم في معرض الصيف. وداعًا."
+              ]
+            }
+          ]
+        }
+      },
+      "es_mothers_day": {
+        "es": {
+          "verdict": {
+            "grade": "unusable",
+            "fallback": 7.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": null,
+            "drift_sec": 1.43,
+            "median_sec": 4.1,
+            "spread_sec": 0.0,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.0
+          },
+          "runs": [
+            {
+              "fallback": 7,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.0,
+              "drift_sec": 1.43,
+              "elapsed": 4.1,
+              "texts": [
+                "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias.",
+                "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho.",
+                "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo.",
+                "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo.",
+                "Hola, mamá. Gracias por qué me has hecho y te amo.",
+                "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós.",
+                "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+              ]
+            },
+            {
+              "fallback": 7,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.0,
+              "drift_sec": 1.43,
+              "elapsed": 4.1,
+              "texts": [
+                "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias.",
+                "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho.",
+                "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo.",
+                "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo.",
+                "Hola, mamá. Gracias por qué me has hecho y te amo.",
+                "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós.",
+                "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": null,
+            "drift_sec": 1.82,
+            "median_sec": 10.5,
+            "spread_sec": 0.3,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.014
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.002,
+              "drift_sec": 1.64,
+              "elapsed": 10.2,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo que você fez. Obrigado.",
+                "Oi, mamãe. Desejo a você um feliz Dia das Mães. Eu te amo muito.",
+                "Oi, mãe. Como você está? Quero lhe dizer que eu te amo muito e que você é a melhor mãe do mundo.",
+                "Oi, mãe. Eu te amo muito. Muito obrigado por tudo que você fez por mim e espero que tenha um feliz Dia das Mães. Eu te amo.",
+                "Oi, mãe. Obrigado por tudo que você fez e eu te amo.",
+                "Oi, mãe. Obrigado por tudo. Saiba que eu te amo muito e sinto sua falta. Adeus.",
+                "Oi, mãe. Obrigado por tudo que você fez por mim e que você aproveite este dia."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.025,
+              "drift_sec": 1.82,
+              "elapsed": 10.5,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo que você fez. Obrigado.",
+                "Oi, mamãe. Desejo a você um feliz Dia das Mães. Eu te amo muito.",
+                "Oi, mamãe. Como você está? Quero lhe dizer que eu te amo muito e que você é a melhor mãe do mundo.",
+                "Oi, mamãe. Eu te amo muito. Muito obrigado por tudo que você fez por mim e espero que tenha um feliz Dia das Mães. Eu te amo.",
+                "Oi, mamãe. Obrigado pelo que você fez e eu te amo.",
+                "Oi, mamãe. Obrigado por tudo. Saiba que eu te amo muito e sinto muita falta de você. Adeus.",
+                "Oi, mamãe. Obrigado por tudo que você fez por mim e que você aproveite este dia."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 5.88,
+            "median_sec": 12.7,
+            "spread_sec": 0.5,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.193
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.193,
+              "drift_sec": 5.88,
+              "elapsed": 12.2,
+              "texts": [
+                "Я тебя очень люблю. Спасибо за то, что поддерживаешь меня во всём, что ты сделала. Спасибо.",
+                "Привет, мамочка. Желаю тебе счастливого Дня матери. Я тебя очень люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что я тебя очень люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я тебя очень люблю. Большое спасибо за всё, что ты сделала для меня, и я надеюсь, что у тебя будет счастливый День матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты для меня сделала и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Пусть ты знаешь, что я тебя очень люблю и сильно скучаю по тебе. До свидания.",
+                "Привет, мама. Спасибо за всё, что ты сделала для меня, и пусть тебе понравится этот день."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.193,
+              "drift_sec": 5.88,
+              "elapsed": 12.7,
+              "texts": [
+                "Я тебя очень люблю. Спасибо за то, что поддерживаешь меня во всём, что ты сделала. Спасибо.",
+                "Привет, мамочка. Желаю тебе счастливого Дня матери. Я тебя очень люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что я тебя очень люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я тебя очень люблю. Большое спасибо за всё, что ты сделала для меня, и я надеюсь, что у тебя будет счастливый День матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты сделала для меня и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Пусть ты знаешь, что я тебя очень люблю и сильно скучаю по тебе. До свидания.",
+                "Привет, мама. Спасибо за всё, что ты сделала для меня, и пусть тебе понравится этот день."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 38.7,
+            "median_sec": 13.4,
+            "spread_sec": 0.9,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.381
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.368,
+              "drift_sec": 37.03,
+              "elapsed": 12.5,
+              "texts": [
+                "मैं तुमसे बहुत प्यार करता हूँ। आपने जो कुछ भी किया है, उसके लिए मुझे समर्थन देने के लिए धन्यवाद। धन्यवाद।",
+                "नमस्ते, मामी। मैं तुम्हें मातृ दिवस की शुभकामनाएँ देता हूँ। मैं तुमसे बहुत प्यार करता हूँ।",
+                "नमस्ते, माँ। आप कैसी हैं? मैं आपको बताना चाहता हूँ कि मैं आपका बहुत प्यार करता हूँ और आप दुनिया की सबसे अच्छी माँ हैं।",
+                "नमस्ते, माँ। मैं तुमसे बहुत प्यार करता हूँ। आपने मेरे लिए जो कुछ भी किया है, उसके लिए बहुत धन्यवाद और मैं आशा करता हूँ कि आपका मातृ दिवस सुखद हो। मैं तुमसे प्यार करता हूँ।",
+                "नमस्ते, माँ। आपने जो किया है उसके लिए धन्यवाद और मैं तुमसे प्यार करता हूँ।",
+                "नमस्ते, माँ। सबके लिए धन्यवाद। जान लें कि मैं आपका बहुत प्यार करता हूँ और आपकी बहुत याद आती है। अलविदा।",
+                "नमस्ते, माँ। आपने मेरे लिए जो कुछ भी किया है उसके लिए धन्यवाद और आशा करता हूँ कि आप इस दिन का आनंद लें।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.394,
+              "drift_sec": 38.7,
+              "elapsed": 13.4,
+              "texts": [
+                "मैं तुमसे बहुत प्यार करता हूँ। आपने जो कुछ भी किया है, उसके लिए मुझे समर्थन देने के लिए धन्यवाद। धन्यवाद।",
+                "नमस्ते, मामी। मैं तुम्हें मातृ दिवस की हार्दिक शुभकामनाएँ देता हूँ। मैं तुमसे बहुत प्यार करता हूँ।",
+                "नमस्ते, माँ। आप कैसी हैं? मैं आपको बताना चाहता हूँ कि मैं आपसे बहुत प्यार करता हूँ और आप दुनिया की सबसे अच्छी माँ हैं।",
+                "नमस्ते, माँ। मैं तुमसे बहुत प्यार करता हूँ। आपने मेरे लिए जो कुछ भी किया है, उसके लिए बहुत धन्यवाद और मैं आशा करता हूँ कि आपका मातृ दिवस खुशियों भरा हो। मैं तुमसे प्यार करता हूँ।",
+                "नमस्ते, माँ। आपने जो किया है उसके लिए धन्यवाद और मैं तुमसे प्यार करता हूँ।",
+                "नमस्ते, माँ। सबके लिए धन्यवाद। जान लें कि मैं आपसे बहुत प्यार करता हूँ और आपकी बहुत याद आती है। अलविदा।",
+                "नमस्ते, माँ। आपने मेरे लिए जो कुछ भी किया है उसके लिए धन्यवाद और आशा करता हूँ कि आप इस दिन का आनंद लें।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 1.53,
+            "median_sec": 12.3,
+            "spread_sec": 1.1,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.826
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.827,
+              "drift_sec": 1.53,
+              "elapsed": 11.2,
+              "texts": [
+                "أحبك كثيراً. شكراً لدعمك لي في كل ما فعلته. شكرًا.",
+                "مرحباً يا مامي. أتمنى لك يوم أم سعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أريد أن أخبرك بأنني أحبك كثيراً وأنت أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. شكراً جزيلاً على كل ما فعلته من أجلي وأتمنى لك يوم أم سعيد. أحبك.",
+                "مرحباً يا أمي. شكراً لما فعلته لي وأحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. اعلمي أنني أحبك كثيراً وأفتقدك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما فعلته من أجلي وأتمنى أن تستمتعي بهذا اليوم."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.825,
+              "drift_sec": 1.53,
+              "elapsed": 12.3,
+              "texts": [
+                "أحبك كثيراً. شكراً لدعمك لي في كل ما فعلته. شكرًا.",
+                "مرحباً يا مامي. أتمنى لك يوم أم سعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أود أن أخبرك بأنني أحبك كثيراً وأنت أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. شكراً جزيلاً على كل ما فعلته من أجلي وأتمنى لك يوم أم سعيد. أحبك.",
+                "مرحباً يا أمي. شكراً لما فعلته لي وأحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. اعلمي أنني أحبك كثيراً وأفتقدك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما فعلته من أجلي وأتمنى أن تستمتعي بهذا اليوم."
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "qwen/qwen3-8b": {
+      "de_workshop_intro": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 13.6,
+            "spread_sec": 9.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.999
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.999,
+              "drift_sec": 0.0,
+              "elapsed": 13.6,
+              "texts": [
+                "Bienvenidos a la talla de madera Grünwald. Mi nombre es señora Hoffmann.",
+                "En las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, lleven siempre gafas de protección, incluso si solo están viendo.",
+                "La mesa de trabajo mide 1,5 metros de ancho, para que dos personas puedan trabajar al mismo tiempo.",
+                "Quien nunca ha lijado debería empezar con madera más suave.",
+                "Nos reunimos cada martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes no tenía ninguna experiencia, y sin embargo desde el primer día fue divertido.",
+                "Aquí se aprende no solo la profesión, sino también paciencia consigo mismo.",
+                "Nos alegramos de verlos. Hasta el próximo martes, y que tengan un buen camino a casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.999,
+              "drift_sec": 0.0,
+              "elapsed": 4.4,
+              "texts": [
+                "Bienvenidos a la talla de madera Grünwald. Mi nombre es señora Hoffmann.",
+                "En las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, lleven siempre gafas de protección, incluso si solo están viendo.",
+                "La mesa de trabajo mide 1,5 metros de ancho, para que dos personas puedan trabajar al mismo tiempo.",
+                "Quien nunca ha lijado debería empezar con madera más suave.",
+                "Nos reunimos cada martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes no tenía ninguna experiencia, y sin embargo desde el primer día fue divertido.",
+                "Aquí se aprende no solo la profesión, sino también paciencia consigo mismo.",
+                "Nos alegramos de verlos. Hasta el próximo martes, y que tengan un buen camino a casa."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.07,
+            "median_sec": 6.7,
+            "spread_sec": 1.5,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.985
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.989,
+              "drift_sec": 0.07,
+              "elapsed": 6.7,
+              "texts": [
+                "Bem-vindo à oficina de carpintaria Grünwald. Meu nome é Senhora Hoffmann.",
+                "Nos próximos doze semanas, você construirá seu próprio armário de ferramentas do zero.",
+                "Por favor, use sempre óculos de proteção, mesmo que só esteja assistindo.",
+                "A mesa de trabalho tem 1,5 metro de largura, para que duas pessoas possam trabalhar ao mesmo tempo.",
+                "Quem nunca serrou antes, deve começar com madeira mais maciça.",
+                "Nos encontramos toda segunda-feira às sete, e a aula dura cerca de três horas.",
+                "Antes eu nunca tinha experiência nenhuma, e mesmo assim desde o primeiro dia foi divertido.",
+                "Aqui não se aprende apenas o ofício, mas também paciência com si mesmo.",
+                "Estamos ansiosos para vê-lo. Até segunda-feira que vem, e volte bem para casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.981,
+              "drift_sec": 0.07,
+              "elapsed": 5.2,
+              "texts": [
+                "Bem-vindo à oficina de carpintaria Grünwald. Meu nome é Senhora Hoffmann.",
+                "Nos próximos doze semanas, você construirá seu próprio armário de ferramentas do zero.",
+                "Por favor, use sempre óculos de proteção, mesmo que só esteja assistindo.",
+                "A mesa de trabalho tem 1,5 metro de largura, para que duas pessoas possam trabalhar ao mesmo tempo.",
+                "Quem nunca serrou antes, deve começar com madeira mais maciça.",
+                "Nos encontramos toda segunda-feira às sete, e o curso dura cerca de três horas.",
+                "Eu nunca tinha experiência antes, e mesmo assim foi divertido desde o primeiro dia.",
+                "Aqui não se aprende apenas o ofício, mas também paciência com si mesmo.",
+                "Estamos ansiosos para vê-lo. Até segunda-feira que vem, e volte bem para casa."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.14,
+            "median_sec": 7.4,
+            "spread_sec": 1.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.962
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.961,
+              "drift_sec": 0.14,
+              "elapsed": 7.4,
+              "texts": [
+                "Добро пожаловать в деревообрабатывающую мастерскую Грюнвальд. Меня зовут госпожа Хоффманн.",
+                "В течение следующих двенадцати недель вы построите свой инструментальный шкаф с нуля.",
+                "Пожалуйста, всегда используйте защитные очки, даже если вы только наблюдаете.",
+                "Рабочая поверхность шириной 1,5 метра позволяет двум людям работать одновременно.",
+                "Тех, кто никогда не пиловал, следует начать с более мягкого дерева.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трех часов.",
+                "До этого у меня вообще не было опыта, и тем не менее с первого дня стало весело.",
+                "Здесь учат не только мастерству, но и терпению к себе самому.",
+                "Мы рады вас видеть. До следующего вторника, и приезжайте домой хорошо."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.962,
+              "drift_sec": 0.14,
+              "elapsed": 6.1,
+              "texts": [
+                "Добро пожаловать в деревообрабатывающую мастерскую Грюнвальд. Меня зовут госпожа Хоффманн.",
+                "В течение следующих двенадцати недель вы построите свой инструментальный шкаф с нуля.",
+                "Пожалуйста, всегда используйте защитные очки, даже если вы только наблюдаете.",
+                "Рабочая поверхность шириной 1,5 метра позволяет двум людям работать одновременно.",
+                "Тех, кто никогда не пиловал, следует начинать с более мягкого дерева.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трех часов.",
+                "Раньше у меня вообще не было опыта, и тем не менее с первого дня стало весело.",
+                "Здесь учат не только мастерству, но и терпению к себе самому.",
+                "Мы рады вас видеть. До следующего вторника, и приезжайте домой хорошо."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.36,
+            "median_sec": 16.7,
+            "spread_sec": 1.8,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.879
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.88,
+              "drift_sec": 0.36,
+              "elapsed": 16.7,
+              "texts": [
+                "अपने स्वागत है ग्रीनवल्ड लकड़ी कारखाना में। मेरा नाम फ्रॉए होफमैन है।",
+                "अगले बारह सप्ताह में आप अपने खुद के स्टोर में बाहर से शुरू करेंगे।",
+                "कृपया हमेशा एक सुरक्षा चश्मा पहने, हालांकि आप केवल देख रहे हों।",
+                "काम करने की सतह 1.5 मीटर चौड़ा है, ताकि दो लोग साथ में काम कर सके।",
+                "जो अभी तक काटना नहीं सीखे है, उन्हें मुलाकात करने से पहले नरम लकड़ी का उपयोग करना चाहिए।",
+                "हम प्रत्येक मंगलवार सात बजे मिलते हैं, और कोर्स तीन घंटे लगभग चलता है।",
+                "मुझे पहले कभी अनुभव नहीं था, और फिर भी पहले दिन से खुशी होती रही।",
+                "यहां आपको केवल चाकू के काम सिखाया जाता है, बल्कि आपके साथ धैर्य के साथ भी।",
+                "हम आपका स्वागत करते हैं। अगले मंगलवार तक, और आप घर पहुंचें।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.878,
+              "drift_sec": 0.2,
+              "elapsed": 14.9,
+              "texts": [
+                "हर्जिलिच विलkommen इन दे होल्ज़वर्कस्टैट ग्रुन्वाल्ड। मेरा नाम फ्रू होफमैन।",
+                "अगले बारह सप्ताह में आप अपने खुद के उपकरण बॉक्स को मूल से बनाएंगे।",
+                "कृपया हमेशा एक सुरक्षा चश्मा पहने, हालांकि आप केवल देख रहे हों।",
+                "काम करने की सतह 1.5 मीटर चौड़ा है, ताकि दो व्यक्ति साथ-साथ काम कर सकें।",
+                "जो अभी तक हाँफेल नहीं कर चुके हैं, उन्हें मुलाकात के लिए नरम लकड़ी से शुरू करना चाहिए।",
+                "हम प्रत्येक मंगलवार सात बजे मिलते हैं, और कोर्स तीन घंटे लगभग चलता है।",
+                "मुझे पहले कोई अनुभव नहीं था, और फिर भी पहले दिन से खुशी होती रही।",
+                "यहां आपको केवल चाक नहीं सिखाया जाता, बल्कि आपके साथ धैर्य के साथ।",
+                "हम आपका स्वागत करते हैं। अगले मंगलवार तक, और आप घर पहुंचें।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 8.2,
+            "spread_sec": 2.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.786
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.785,
+              "drift_sec": 0.0,
+              "elapsed": 8.2,
+              "texts": [
+                "مرحبا بكم في ورشة العمل الخشبية غrünفلد. إسمي السيدة هوفمان.",
+                "في الأسابيع الـ12 القادمة ستبنون خزانة أدواتكم من الصفر.",
+                "الرجاء دائمًا ارتداء نظارة السلامة، حتى لو كنتم تشاهدون فقط.",
+                "هيكل العمل 1.5 متر عرضًا، بحيث يمكن للشخصين العمل في نفس الوقت.",
+                "من لم يجرب قط السكين، يجب أن يبدأ بخشب أخف.",
+                "نلتقي كل يوم الثلاثاء الساعة السابعة، ودورة الكورس تستغرق حوالي ثلاث ساعات.",
+                "لم يكن لدي أي خبرة سابقة، ومع ذلك بدأ الأمر من اليوم الأول ممتعًا.",
+                "هنا تعلمون ليس فقط المهنة، بل أيضًا الصبر على أنفسكم.",
+                "نتطلع لرؤيتك. إلى اللقاء يوم الثلاثاء القادم، واتمنى لكم رحلة آمنة للعودة إلى المنزل."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.787,
+              "drift_sec": 0.0,
+              "elapsed": 5.8,
+              "texts": [
+                "مرحبا بكم في ورشة العمل الخشبية غrünwald. إسمي السيدة هوفمان.",
+                "في الأسابيع الـ12 القادمة ستبنون خزانة أدواتكم من الصفر.",
+                "الرجاء ارتداء نظارات السلامة دائمًا، حتى لو كنتم تشاهدون فقط.",
+                "هيكل العمل 1.5 متر عرضًا، بحيث يمكن للشخصين العمل في نفس الوقت.",
+                "من لم يجرب قط السكين يجب أن يبدأ بخشب أخف.",
+                "نلتقي كل يوم الثلاثاء الساعة السابعة، ودورة الكورس تستغرق حوالي ثلاث ساعات.",
+                "لم يكن لدي أي خبرة سابقة، ورغم ذلك بدأ الأمر من اليوم الأول ممتعًا.",
+                "هنا تعلمون ليس فقط المهنة، بل أيضًا الصبر على أنفسكم.",
+                "نتطلع لرؤيتك. إلى اللقاء يوم الثلاثاء القادم، واتمنى لكم رحلة آمنة للعودة إلى المنزل."
+              ]
+            }
+          ]
+        }
+      },
+      "en_clinic_thanks": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.98,
+            "median_sec": 5.6,
+            "spread_sec": 0.8,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.889
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.883,
+              "drift_sec": 0.98,
+              "elapsed": 5.6,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía subir una escalera.",
+                "El Dr. Okafor me dedicó una hora completa en esa primera visita. Nadie había hecho algo así antes.",
+                "Mi hija tenía 18 meses y una fiebre que no bajaba.",
+                "Nos atendieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara la recepción.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me conmueve es que recuerdan tu nombre. Cada vez que entras.",
+                "A todos en Riverside, gracias por cuidar de mi familia. Significa mucho.",
+                "Cuiden ustedes mismos, y nos veremos en la feria de verano. Adiós."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.894,
+              "drift_sec": 0.98,
+              "elapsed": 4.8,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía subir una escalera.",
+                "El Dr. Okafor me dedicó una hora completa en esa primera visita. Nadie había hecho algo así antes.",
+                "Mi hija tenía 18 meses y una fiebre que no bajaba.",
+                "Nos atendieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara la recepción.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me conmueve es que recuerdan tu nombre. Cada vez que entras.",
+                "A todos en Riverside, gracias por cuidar de mi familia. Significa mucho para mí.",
+                "Cuiden ustedes mismos, y nos veremos en la feria de verano. Adiós."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.92,
+            "median_sec": 6.3,
+            "spread_sec": 1.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.958
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.958,
+              "drift_sec": 0.92,
+              "elapsed": 6.3,
+              "texts": [
+                "Eu cheguei ao Riverside há três anos e mal conseguia subir uma escada.",
+                "O Dr. Okafor sentou comigo por uma hora naquela primeira visita. Ninguém jamais tinha feito isso.",
+                "Minha filha tinha 18 meses e estava com febre que não ia embora.",
+                "Eles nos viram às onze da noite. Nenhum agendamento, nenhuma pergunta feita.",
+                "Venho aqui há 40 anos, desde antes que Marion assumiu a recepção.",
+                "Este lugar virou minha vida de cabeça para baixo, e não digo isso à toa.",
+                "O que me afeta é que eles lembram seu nome. Cada vez que você entra.",
+                "Para todos do Riverside, obrigado por cuidar da minha família. Isso significa o mundo.",
+                "Cuide de vocês mesmos, e nos vemos na feira do verão. Adeus."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.959,
+              "drift_sec": 0.85,
+              "elapsed": 5.0,
+              "texts": [
+                "Eu cheguei ao Riverside há três anos e mal conseguia subir uma escada.",
+                "O Dr. Okafor sentou comigo por uma hora naquela primeira visita. Ninguém nunca tinha feito isso.",
+                "Minha filha tinha 18 meses e estava com febre que não ia embora.",
+                "Eles nos viram às onze da noite. Nenhum agendamento, nenhuma pergunta feita.",
+                "Venho aqui há 40 anos, desde antes que Marion assumisse a recepção.",
+                "Este lugar virou minha vida de cabeça para baixo, e não digo isso à toa.",
+                "O que me afeta é que eles lembram seu nome. Cada vez que você entra.",
+                "Para todos do Riverside, obrigado por cuidar da minha família. Isso significa o mundo.",
+                "Cuide de vocês mesmos, e nos vemos na feira do verão. Adeus."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 1.08,
+            "median_sec": 7.6,
+            "spread_sec": 1.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.98
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.955,
+              "drift_sec": 0.51,
+              "elapsed": 7.6,
+              "texts": [
+                "Я пришёл в Риверсайд три года назад, и мне было трудно подняться на один этаж.",
+                "На первой встрече доктор Окафор сидел со мной целый час. Никогда раньше никто так не делал.",
+                "Моя дочь была в возрасте 18 месяцев и горячка не снижалась.",
+                "Они нас приняли в одиннадцать часов вечера. Без записи, без вопросов.",
+                "Я прихожу сюда уже 40 лет, с тех пор как Маршон взял на себя переднюю стойку.",
+                "Этот пункт перевернул мою жизнь, и я не говорю это легко.",
+                "Что меня удивляет, так это то, что они помнят ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Риверсайд, спасибо за заботу о моей семье. Это значит для меня весь мир.",
+                "Позаботьтесь о себе, и мы увидимся на летней ярмарке. До встречи."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.004,
+              "drift_sec": 1.08,
+              "elapsed": 6.4,
+              "texts": [
+                "Я пришёл в Риверсайд три года назад, и мне было трудно подняться на один этаж.",
+                "На первой встрече доктор Окафор сидел со мной целый час. Никогда раньше никто так не делал.",
+                "Моя дочь была в возрасте 18 месяцев и горячка не снижалась.",
+                "Они нас увидели в одиннадцать часов вечера. Не было необходимости бронировать время, не задавали вопросов.",
+                "Я прихожу сюда уже 40 лет, с тех пор как Маршон взял на себя работу рецептора.",
+                "Этот пункт перевернул мою жизнь, и я не говорю это легко.",
+                "То, что меня удивляет, то они помнят ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Риверсайд, спасибо за заботу о моей семье. Это значит для меня весь мир.",
+                "Позаботьтесь о себе, и мы увидимся на летней ярмарке. До встречи."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 1.52,
+            "median_sec": 17.8,
+            "spread_sec": 0.7,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.966
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.967,
+              "drift_sec": 1.52,
+              "elapsed": 17.8,
+              "texts": [
+                "मैं रिवरसाइड पहुँचा तीन साल पहले और मैं कुछ भी नहीं कर सकता था, एक मंज़िल तक चढ़ना।",
+                "पहले दौरे पर डॉक्टर ओकाफोर मुझे एक घंटा तक साथ बैठे। कोई कभी ऐसा नहीं करता था।",
+                "मेरी बेटी 18 महीने की थी और उसका ज्वर नीचे आता रहा।",
+                "उन्होंने हमें रात के ग्यारह बजे देखा। कोई नौकरी नहीं, कोई प्रश्न नहीं पूछे गए।",
+                "मुझे यहाँ 40 साल से आता रहा है, जब से मारियन ने प्रवेश डेस्क को संभाल लिया।",
+                "यह जगह मेरे जीवन को पलट दिया, और मैं इसे गम्भीरता से कहता हूँ।",
+                "मुझे लगता है कि वे आपके नाम को याद रखते हैं। प्रत्येक बार जब आप अंदर चले।",
+                "रिवरसाइड के सभी के लिए, मुझे आपके परिवार की देखभाल के लिए धन्यवाद। यह विश्व के लिए है।",
+                "आपको खुद के प्रति देखभाल करें, और हम ग्रीष्मकालीन मेले पर आपको देखेंगे। अलविदा।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.966,
+              "drift_sec": 1.13,
+              "elapsed": 17.1,
+              "texts": [
+                "मैं रिवरसाइड पहुँचा तीन साल पहले और मैं एक ही तला चढ़ने के लिए बहुत कम सक्षम था।",
+                "पहले दौरे पर डॉक्टर ओकाफोर मुझे एक घंटा तक बैठाया। कोई कभी ऐसा नहीं करता था।",
+                "मेरी बेटी 18 महीने की थी और एक बुखार में चल रही थी जो कम नहीं होता।",
+                "वे रात के ग्यारह बजे हमें देखे। कोई अपॉइंटमेंट, कोई प्रश्न नहीं पूछे गए।",
+                "मुझे 40 साल से यहां आना है, मारियन ने पहले स्टेशन को लेकर आए पहले से।",
+                "यह जगह मेरे जीवन को पलट दिया, और मैं इसे गम्भीरता से कहता हूँ।",
+                "मुझे लगता है कि वे आपके नाम को याद रखते हैं। प्रत्येक बार जब आप अंदर चले।",
+                "रिवरसाइड के सभी के लिए, मेरे परिवार का खयाल रखने के लिए धन्यवाद। इसका संपूर्ण महत्व है।",
+                "आपके स्वास्थ्य की देखभाल करे, और हम ग्रीष्मकालीन मेले पर आपको देखेंगे। अलविदा।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.29,
+            "median_sec": 7.8,
+            "spread_sec": 1.9,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.837
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.845,
+              "drift_sec": 0.29,
+              "elapsed": 7.8,
+              "texts": [
+                "جئت إلى رIVERSIDE قبل ثلاث سنوات و كنت أجد صعوبة في المشي لأ级以上 الدرجات.",
+                "جلس الدكتور أوكيفر معي لمدة ساعة كاملة في أول زيارة لي. لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي تبلغ من العمر 18 شهرًا وكانت تعاني من حمى لا تتراجع.",
+                "رأوتنا في الساعة الحادية عشر مساءً. لم يكن هناك موعد، ولا أسئلة تُطرح.",
+                "لقد كنت أأتي هنا منذ 40 عامًا، منذ قبل أن يأخذ ماريون المكتب الأمامي.",
+                "هذا المكان قلب حياتي، ولا أقول ذلك بسهولة.",
+                "ما يثير إعجابي هو أنهم يتذكرون أسمائك كل مرة تدخل فيها.",
+                "إلى جميع الموظفين في رIVERSIDE، شكرًا على إعتناؤكم بأسرتي. هذا يعني العالم بالنسبة لي.",
+                "اهتموا بذواتكم، وسنلتقي في معرض الصيف. إلى اللقاء."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.829,
+              "drift_sec": 0.29,
+              "elapsed": 5.9,
+              "texts": [
+                "جئت إلى رIVERSIDE قبل ثلاث سنوات و كنت أجد صعوبة في الذهاب لأعلى درجتين.",
+                "جلس الدكتور أوكيفر معي لمدة ساعة كاملة في أول زيارة لي. لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي تبلغ من العمر 18 شهرًا وكانت تعاني من حمى لا تتراجع.",
+                "رأوتنا في الساعة الحادية عشر مساءً. لم يكن هناك موعد، ولا أسئلة.",
+                "لقد كنت أ来这里 منذ 40 عامًا، منذ قبل أن يأخذ ماريون المكتب الأمامي.",
+                "هذا المكان قلب حياتي، ولا أقول ذلك بسهولة.",
+                "ما يثير إعجابي هو أنهم يتذكرون أسمائك كل مرة تدخل فيها.",
+                "إلى جميع الموظفين في رIVERSIDE، شكرًا على إعتناؤكم بأسرتي. هذا يعني العالم بالنسبة لي.",
+                "اهتموا بذواتكم، وسنلتقي في معرض الصيف. إلى اللقاء."
+              ]
+            }
+          ]
+        }
+      },
+      "es_mothers_day": {
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": null,
+            "drift_sec": 1.7,
+            "median_sec": 6.5,
+            "spread_sec": 1.6,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.974
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 0.99,
+              "drift_sec": 1.7,
+              "elapsed": 6.5,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo o que você fez. Obrigado.",
+                "Olá, mamãe. Desejo a você um feliz Dia da Mãe. Eu te amo muito.",
+                "Olá, mamãe. Como você está? Eu quero dizer que te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mamãe. Te amo muito. Muito obrigado por tudo o que você fez por mim e espero que tenha um feliz Dia da Mãe. Te amo.",
+                "Olá, mamãe. Obrigado por tudo o que você fez e te amo.",
+                "Olá, mamãe. Obrigado por tudo. Sabe que te amo muito e saudo muito. Adeus.",
+                "Olá, mamãe. Obrigado por tudo o que você fez por mim e que aproveite este dia."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 0.958,
+              "drift_sec": 1.5,
+              "elapsed": 4.9,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo que você fez. Obrigado.",
+                "Olá, mami. Desejo a você um feliz Dia da Mãe. Eu te amo muito.",
+                "Olá, mãe. Como você está? Eu quero dizer que te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mãe. Te amo muito. Muito obrigado por tudo que você fez por mim e espero que tenha um feliz Dia da Mãe. Te amo.",
+                "Olá, mãe. Obrigado por tudo que você fez e te amo.",
+                "Olá, mãe. Obrigado por tudo. Sabe que te quero muito e saudo muito. Adeus.",
+                "Olá, mãe. Obrigado por tudo que você fez por mim e que aproveite este dia."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 3.39,
+            "median_sec": 7.8,
+            "spread_sec": 1.9,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.14
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.153,
+              "drift_sec": 3.39,
+              "elapsed": 7.8,
+              "texts": [
+                "Я тебя очень люблю. Спасибо, что поддерживал меня во всем, что ты сделал. Спасибо.",
+                "Привет, мама. Желаю тебе счастливого Дня матери. Я тебя очень люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что тебя очень люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я тебя очень люблю. Большое спасибо за все, что ты сделала для меня, и надеюсь, у тебя счастливый День матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты сделала для меня и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Пусть ты знаешь, что тебя очень люблю и сильно скучаю. До встречи.",
+                "Привет, мама. Спасибо за всё, что ты сделала для меня, и пусть тебе доставит удовольствие этот день."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.127,
+              "drift_sec": 3.05,
+              "elapsed": 5.9,
+              "texts": [
+                "Я тебя очень люблю. Спасибо, что поддерживал меня во всем, что ты сделал. Спасибо.",
+                "Привет, мама. Желаю тебе счастливого Дня матери. Я тебя очень люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что тебя очень люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я тебя очень люблю. Большое спасибо за все, что ты сделала для меня, и желаю тебе счастливого Дня матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты сделала для меня и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Пусть ты знаешь, что тебя очень люблю и сильно скучаю. До встречи.",
+                "Привет, мама. Спасибо за всё, что ты сделала для меня, и пусть тебе понравится этот день."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 32.42,
+            "median_sec": 21.2,
+            "spread_sec": 3.6,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.302
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.344,
+              "drift_sec": 32.42,
+              "elapsed": 21.2,
+              "texts": [
+                "तुम्हारा बहुत बहुत श्रेय। मैं तुम्हारे सभी कामों में सहायता करने वाला धन्यवाद। धन्यवाद।",
+                "हैलो, मम्मी। तुम्हारा माँ के दिन ख़ुशी से पूरा हो। मैं तुम्हारा बहुत बहुत प्यार करता हूँ।",
+                "हैलो, मम्मी। तुम कैसे हो? मैं चाहता हूँ कि तुम्हारा बहुत बहुत प्यार है और तुम दुनिया की सबसे बेहतर माँ हो।",
+                "हैलो, मम्मी। तुम्हारा बहुत बहुत प्या�र है। मैं तुम्हारे सभी कामों में सहायता करने वाला धन्यवाद और मैं आशा करता हूँ कि तुम्हारा माँ के दिन ख़ुशी से पूरा हो। तुम्हारा बहुत बहुत प्यार है।",
+                "हैलो, मम्मी। तुमने मुझे किया हुआ सब कुछ धन्यवाद और मैं तुम्हारा बहुत बहुत प्यार करता हूँ।",
+                "हैलो, मम्मी। सभी के लिए धन्यवाद। जानो कि मैं तुम्हारा बहुत बहुत प्यार करता हूँ और मेरी बहुत ज्यादा चाहत है। अलविदा।",
+                "हैलो, मम्मी। तुमने मुझे किया हुआ सब कुछ धन्यवाद और आपके दिन को खुशी से पूरा हो।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.26,
+              "drift_sec": 21.4,
+              "elapsed": 17.6,
+              "texts": [
+                "तू मुझे बहुत प्यार करती है। मुझे तुम्हारा सभी कामों में सहारा देने के लिए धन्यवाद। धन्यवाद।",
+                "हैलो, मम्मी। तुम्हारा माँ के दिन की खुशी की बधाई। मैं तुम्हें बहुत प्यार करता हूँ।",
+                "हैलो, मम्मी। तुम कैसे हो? मैं चाहता हूँ कि तुम्हें बहुत प्यार है और तुम दुनिया की सबसे बेहतर माँ हो।",
+                "हैलो, मम्मी। तुम्हें बहुत प्यार है। मुझे तुम्हारे सभी कामों के लिए धन्यवाद और मैं आशा करता हूँ कि तुम्हारा माँ के दिन खुशी से गुजरे। तुम्हें प्यार है।",
+                "हैलो, मम्मी। तुमने मुझे किया हुआ सब कुछ ध्यान में धन्यवाद और तुम्हें प्यार है।",
+                "हैलो, मम्मी। सभी के लिए धन्यवाद। जानो कि मैं तुम्हें बहुत प्यार करता हूँ और तुम्हें बहुत मिस करता हूँ। अलविदा।",
+                "हैलो, मम्मी। सभी कामों के लिए धन्यवाद जो मुझे करती हैं और आपके दिन को खुशी से बिताएं।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 2.66,
+            "median_sec": 7.0,
+            "spread_sec": 0.7,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.827
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.813,
+              "drift_sec": 2.13,
+              "elapsed": 7.0,
+              "texts": [
+                "أحبك كثيرًا. شكرًا لمساعدتي في كل ما قمت به. شكرًا.",
+                "مرحبًا، أمي. أتمنى لك يوم матери سعيد. أحبك كثيرًا.",
+                "مرحبًا، أمي. كيف حالك؟ أنا أريد أن أقول لك أنني أحبك كثيرًا وأنك أفضل أم في العالم.",
+                "مرحبًا، أمي. أحبك كثيرًا. شكرًا لجميع ما قمت به لي وأتمنى لك يوم матери سعيد. أحبك.",
+                "مرحبًا، أمي. شكرًا لجميع ما قمت به لي وأحبك.",
+                "مرحبًا، أمي. شكرًا لجميع ما قمت به. أعلم أنك تحبها كثيرًا وأشتاق لك كثيرًا. إلى اللقاء.",
+                "مرحبًا، أمي. شكرًا لجميع ما قمت به لي واسعد هذا اليوم."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.84,
+              "drift_sec": 2.66,
+              "elapsed": 6.3,
+              "texts": [
+                "أحبك كثيرًا. شكرًا لمساعدتي في كل ما قمت به. شكرًا.",
+                "مرحبا، أمي. أود أن أهنئك بمناسبة يوم الأم. أحبك كثيرًا.",
+                "مرحبا، أمي. كيف حالك؟ أنا أريد أن أقول لك أنني أحبك كثيرًا وأنت أفضل أم في العالم.",
+                "مرحبا، أمي. أحبك كثيرًا. شكرًا لجميع ما قمت به لي وأتمنى لك يومًا سعيدًا كأم. أحبك.",
+                "مرحبا، أمي. شكرًا لجميع ما قمت به لي وأحبك.",
+                "مرحبا، أمي. شكرًا لجميع ما قمت به. أود أن تعلمي أنني أحبك كثيرًا وأشتاق لك كثيرًا. إلى اللقاء.",
+                "مرحبا، أمي. شكرًا لجميع ما قمت به لي وأتمنى لك يومًا ممتعًا."
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "aya-expanse-8b": {
+      "de_workshop_intro": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 14.5,
+            "spread_sec": 6.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.074
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.074,
+              "drift_sec": 0.0,
+              "elapsed": 14.5,
+              "texts": [
+                "Bienvenidos a la taller de carpintería Grünwald. Mi nombre es Frau Hoffmann.",
+                "Durante las próximas doce semanas, construirán su propio armario de herramientas desde cero.",
+                "Por favor, lleven siempre gafas de protección, incluso si solo están observando.",
+                "El mostrador mide 1,5 metros de ancho para que dos personas puedan trabajar en él simultáneamente.",
+                "Quienes nunca hayan utilizado una sierra de calar, deben empezar con madera más suave.",
+                "Nos reunimos todos los martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Yo no tenía experiencia previa, y sin embargo, desde el primer día resultó divertido.",
+                "Aquí no solo aprenden la profesión, sino también paciencia consigo mismos.",
+                "Estamos deseando recibirles. Hasta el próximo martes, y que tengan un buen viaje a casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.074,
+              "drift_sec": 0.0,
+              "elapsed": 8.1,
+              "texts": [
+                "Bienvenidos a la taller de carpintería Grünwald. Mi nombre es Frau Hoffmann.",
+                "Durante las próximas doce semanas, construirán su propio armario de herramientas desde cero.",
+                "Por favor, lleven siempre gafas de protección, incluso si solo están observando.",
+                "El mostrador mide 1,5 metros de ancho para que dos personas puedan trabajar en él simultáneamente.",
+                "Quienes nunca hayan utilizado una sierra de calar, deben empezar con madera más suave.",
+                "Nos reunimos todos los martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Yo no tenía experiencia previa, y sin embargo, desde el primer día resultó divertido.",
+                "Aquí no solo aprenden la profesión, sino también paciencia consigo mismos.",
+                "Estamos deseando recibirles. Hasta el próximo martes, y que tengan un buen viaje a casa."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 9.3,
+            "spread_sec": 2.1,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.029
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.029,
+              "drift_sec": 0.0,
+              "elapsed": 9.3,
+              "texts": [
+                "Bem-vindos à Oficina de Madeira Grünwald. Meu nome é Frau Hoffmann.",
+                "Nas próximas doze semanas, vocês construirão seu próprio armário de ferramentas do zero.",
+                "Por favor, usem sempre óculos de proteção, mesmo se apenas estiverem observando.",
+                "A bancada tem 1,5 metro de largura para que duas pessoas possam trabalhar nela simultaneamente.",
+                "Quem nunca usou a lixadeira deve começar com madeira mais macia.",
+                "Nos encontramos toda terça-feira às sete, e o curso dura cerca de três horas.",
+                "Eu não tinha experiência alguma antes disso, e mesmo assim achei divertido desde o primeiro dia.",
+                "Aqui não aprendemos apenas a arte, mas também paciência consigo mesmo.",
+                "Estamos ansiosos por recebê-los. Até a próxima terça, e que tenham um bom caminho de volta para casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.029,
+              "drift_sec": 0.0,
+              "elapsed": 7.2,
+              "texts": [
+                "Bem-vindos à Oficina de Madeira Grünwald. Meu nome é Frau Hoffmann.",
+                "Nos próximos doze semanas, vocês construirão seu próprio armário de ferramentas do zero.",
+                "Por favor, usem sempre óculos de proteção, mesmo se apenas estiverem observando.",
+                "A bancada tem 1,5 metro de largura para que duas pessoas possam trabalhar nela simultaneamente.",
+                "Quem nunca usou a lixadeira deve começar com madeira mais macia.",
+                "Nos encontramos toda terça-feira às sete, e o curso dura cerca de três horas.",
+                "Eu não tinha experiência alguma antes disso, e mesmo assim achei divertido desde o primeiro dia.",
+                "Aqui não aprendemos apenas a arte, mas também paciência consigo mesmo.",
+                "Estamos ansiosos por recebê-los. Até a próxima terça, e que tenham um bom caminho de volta para casa."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.06,
+            "median_sec": 8.4,
+            "spread_sec": 1.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.938
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.934,
+              "drift_sec": 0.06,
+              "elapsed": 8.4,
+              "texts": [
+                "Сердечно приветствуем в мастерской по дереву Гринвальд. Меня зовут г-жа Хоффманн.",
+                "В течение следующих двенадцати недель вы построите свой собственный ящик для инструментов с нуля.",
+                "Пожалуйста, всегда носите защитные очки, даже если вы только наблюдаете.",
+                "Рабочая поверхность 1,5 метра в ширину, чтобы две osoby могли работать над ней одновременно.",
+                "Кто никогда не пилил, должен начать с более мягкого дерева.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трех часов.",
+                "У меня раньше вообще не было опыта, но с первого дня это приносило удовольствие.",
+                "Здесь вы не только учитесь ремеслу, но и терпению к себе.",
+                "Мы ждем вас. До следующего вторника, и доброй дороги домой."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.941,
+              "drift_sec": 0.06,
+              "elapsed": 7.0,
+              "texts": [
+                "Сердечно приветствуем в мастерской по дереву Гринвальд. Меня зовут госпожа Хоффманн.",
+                "В течение следующих двенадцати недель вы построите свой собственный ящик для инструментов с нуля.",
+                "Пожалуйста, всегда носите защитные очки, даже если вы только наблюдаете.",
+                "Рабочая поверхность 1,5 метра в ширину, чтобы две osoby могли работать над ней одновременно.",
+                "Кто никогда не пилил, должен начать с более мягкого дерева.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трех часов.",
+                "У меня до этого вообще не было опыта, но с первого дня это приносило удовольствие.",
+                "Здесь вы учитесь не только ремеслу, но и терпению к себе.",
+                "Мы ждем вас. До следующего вторника, и доброй дороги домой."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.08,
+            "median_sec": 16.9,
+            "spread_sec": 0.9,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.88
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.876,
+              "drift_sec": 0.08,
+              "elapsed": 16.9,
+              "texts": [
+                "हृदय से स्वागत है ग्रुनवल्ड वुडवर्कशॉप में। मेरा नाम श्रीमती हॉफमैन है।",
+                "अगले बारह सप्ताहों में, आप अपनी खुद की टूल कैबिनेट को शून्य से बनाएंगे।",
+                "हमेशा एक सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "वर्कटॉप 1.5 मीटर चौड़ा है, ताकि दो लोग एक साथ उस पर काम कर सकें।",
+                "जिन्होंने पहले कभी शार्पिंग नहीं की है, उन्हें नरम लकड़ी से शुरू करना चाहिए।",
+                "हम हर मंगलवार सुबह सात बजे मिलते हैं, और कोर्स लगभग तीन घंटे तक चलता है।",
+                "मैंने इससे पहले कोई अनुभव नहीं था, और फिर भी यह पहले दिन से मज़ेदार था।",
+                "यहाँ आप केवल कौशल नहीं सीखते, बल्कि खुद पर धैर्य भी सीखते हैं।",
+                "हम आपका इंतज़ार कर रहे हैं। अगले मंगलवार तक, और घर पहुँचते समय सुरक्षित रहें।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.884,
+              "drift_sec": 0.08,
+              "elapsed": 16.0,
+              "texts": [
+                "हृदय से स्वागत है ग्रुनवल्ड वुडवर्कशॉप में। मेरा नाम श्रीमती हॉफमैन है।",
+                "अगले बारह सप्ताहों में, आप अपनी खुद की टूल कैबिनेट को शून्य से बनाएंगे।",
+                "कृपया हमेशा सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "वर्कटॉप 1.5 मीटर चौड़ा है, ताकि दो लोग एक साथ उस पर काम कर सकें।",
+                "जिन्होंने पहले कभी शार्पिंग नहीं की है, उन्हें नरम लकड़ी से शुरू करना चाहिए।",
+                "हम हर मंगलवार सुबह सात बजे मिलते हैं, और कोर्स लगभग तीन घंटे तक चलता है।",
+                "मैंने इससे पहले कोई अनुभव नहीं था, और फिर भी पहले दिन से ही यह मज़ेदार था।",
+                "यहाँ आप केवल कौशल नहीं सीखते, बल्कि खुद पर धैर्य भी सीखते हैं।",
+                "हम आपका इंतज़ार कर रहे हैं। अगले मंगलवार तक, और घर पहुँचते समय सुरक्षित रहें।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.09,
+            "median_sec": 11.4,
+            "spread_sec": 1.5,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.845
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.839,
+              "drift_sec": 0.09,
+              "elapsed": 11.4,
+              "texts": [
+                "أهلاً وسهلاً بكم في ورشة النجارة الخضراء. أنا السيدة هوفمان.",
+                "خلال الأسابيع الاثني عشر القادمة، ستبنون خزانة أدواتكم الخاصة من الصفر.",
+                "يرجى ارتداء نظارات الحماية دائماً، حتى إذا كنتم فقط تشاهدون.",
+                "يبلغ عرض سطح العمل 1.5 متراً، مما يسمح لشخصين بالعمل عليه في نفس الوقت.",
+                "من لم يسبق له أن جرب النجارة، ينبغي أن يبدأ بالخشب الأكثر نعومة.",
+                "نلتقي كل يوم ث الثلاثاء في السابعة مساءً، ويستمر الدورة حوالي ثلاث ساعات.",
+                "لم أكن لدي أي خبرة من قبل، ومع ذلك، كان الأمر ممتعاً منذ اليوم الأول.",
+                "لا تتعلم هنا فقط الحرفية، ولكن أيضاً الصبر مع نفسك.",
+                "نحن نتطلع إلى رؤيتكم. إلى اللقاء يوم الثلاثاء القادم، ووصلوا إلى منازلكم بسلام."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.851,
+              "drift_sec": 0.09,
+              "elapsed": 9.9,
+              "texts": [
+                "أهلاً وسهلاً بكم في ورشة النجارة الخضراء. أنا السيدة هوفمان.",
+                "خلال الأسابيع الاثني عشر القادمة، ستبنون خزانة أدواتكم الخاصة من الصفر.",
+                "يرجى ارتداء نظارة الحماية في جميع الأوقات، حتى إذا كنتم مجرد متابعين.",
+                "يبلغ عرض سطح العمل 1.5 متراً، مما يسمح لشخصين بالعمل عليه في نفس الوقت.",
+                "من لم يسبق له أن جرب النجارة، ينبغي أن يبدأ بالخشب الأكثر نعومة.",
+                "نلتقي كل يوم ث الثلاثاء في السابعة مساءً، ويستمر الدورة حوالي ثلاث ساعات.",
+                "لم أكن لدي أي خبرة سابقة، ومع ذلك، كان الأمر ممتعاً منذ اليوم الأول.",
+                "لا تتعلم هنا فقط الحرفية، ولكن أيضاً الصبر مع نفسك.",
+                "نتطلع إلى رؤيتكم. إلى اللقاء في يوم الثلاثاء القادم، ووصلوا إلى منازلكم بسلام."
+              ]
+            }
+          ]
+        }
+      },
+      "en_clinic_thanks": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 1.59,
+            "median_sec": 8.8,
+            "spread_sec": 1.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.912
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.913,
+              "drift_sec": 1.59,
+              "elapsed": 8.8,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía caminar por un vuelo de escaleras.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita. Nadie lo había hecho antes.",
+                "Mi hija tenía 18 meses y tenía fiebre que no bajaba.",
+                "Nos atendieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara el mostrador.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me sorprende es que recuerdan tu nombre. Cada vez que entras.",
+                "A todo el personal de Riverside, gracias por cuidar de mi familia. Significa el mundo.",
+                "Cuídense, y los veré en la feria de verano. Adiós."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.911,
+              "drift_sec": 1.59,
+              "elapsed": 7.5,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía subir una escalera de escaleras.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita. Nadie lo había hecho antes.",
+                "Mi hija tenía 18 meses y tenía fiebre que no bajaba.",
+                "Nos atendieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion tomara el mostrador.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me sorprende es que recuerdan tu nombre. Cada vez que entras.",
+                "A todo el personal de Riverside, gracias por cuidar de mi familia. Significa el mundo.",
+                "Cuídense, y los veré en la feria de verano. Adiós."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.65,
+            "median_sec": 9.0,
+            "spread_sec": 1.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.928
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.935,
+              "drift_sec": 0.65,
+              "elapsed": 9.0,
+              "texts": [
+                "Eu cheguei em Riverside há três anos e mal conseguia subir um lance de escadas.",
+                "O Dr. Okafor me sentou por uma hora inteira na primeira visita. Ninguém nunca fez isso antes.",
+                "Minha filha tinha 18 meses e estava com febre que não baixava.",
+                "Eles nos atenderam às 11 da noite. Sem agendamento, sem perguntas.",
+                "Venho aqui há 40 anos, desde antes que Marion assumisse a recepção.",
+                "Este lugar mudou minha vida, e eu não digo isso levianamente.",
+                "O que me impressiona é que eles se lembram do seu nome. Toda vez que você entra.",
+                "Para todos em Riverside, obrigado por cuidar da minha família. Significa o mundo para mim.",
+                "Cuide-se, e nos veremos na feira de verão. Adeus."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.921,
+              "drift_sec": 0.65,
+              "elapsed": 7.7,
+              "texts": [
+                "Eu vim para o Riverside há três anos e mal conseguia subir um lance de escadas.",
+                "O Dr. Okafor me sentou por uma hora inteira na primeira visita. Ninguém nunca fez isso antes.",
+                "Minha filha tinha 18 meses e estava com febre que não baixava.",
+                "Eles nos atenderam às 11 da noite. Sem marcação, sem perguntas.",
+                "Venho aqui há 40 anos, desde antes que Marion assumisse a recepção.",
+                "Este lugar mudou minha vida, e eu não digo isso de leve.",
+                "O que me impressiona é que eles se lembram do seu nome. Toda vez que você entra.",
+                "Para todos no Riverside, obrigado por cuidar da minha família. Significa o mundo para mim.",
+                "Cuide-se, e nos veremos na feira de verão. Adeus."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.51,
+            "median_sec": 10.2,
+            "spread_sec": 1.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.968
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.967,
+              "drift_sec": 0.44,
+              "elapsed": 10.2,
+              "texts": [
+                "Я приехал в Риверсайд три года назад, и я едва мог подняться по лестнице.",
+                "Доктор Окафор провел со мной целый час во время первого визита. Никто раньше так не делал.",
+                "Моя дочь была в возрасте 18 месяцев и имела высокую температуру, которая не падала.",
+                "Они видели нас в одиннадцать вечера. Без записи на прием, без вопросов.",
+                "Я прихожу сюда уже 40 лет, с тех пор как Марион взяла на себя работу за стойкой регистрации.",
+                "Это место изменило мою жизнь, и я не говорю это легко.",
+                "То, что меня поражает, — они помнят ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Риверсайд: спасибо за заботу о моей семье. Это значит для меня все.",
+                "Бережите себя, и увидимся на летнем ярмарке. До свидания."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.968,
+              "drift_sec": 0.51,
+              "elapsed": 8.8,
+              "texts": [
+                "Я приехал в Риверсайд три года назад, и я едва мог подняться по лестнице.",
+                "Доктор Окафор провел со мной целый час во время первого визита. Никто никогда так не делал.",
+                "Моя дочь была в возрасте 18 месяцев и имела высокую температуру, которая не падала.",
+                "Они видели нас в одиннадцать вечера. Без записи на прием, без вопросов.",
+                "Я прихожу сюда уже 40 лет, с тех пор как Марион взяла на себя работу за стойкой регистрации.",
+                "Это место изменило мою жизнь, и я не говорю это легко.",
+                "То, что меня поражает, — они помнят ваше имя. Каждый раз, когда вы входите.",
+                "Всем в Риверсайд: спасибо за заботу о моей семье. Это значит для меня все.",
+                "Бережите себя, и увидимся на летнем ярмарке. До свидания."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 21.01,
+            "median_sec": 21.6,
+            "spread_sec": 1.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.077
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.098,
+              "drift_sec": 21.01,
+              "elapsed": 21.6,
+              "texts": [
+                "मैंने तीन साल पहले रिवरसाइड का दौरा किया था और मैं सीढ़ियों के एक फ्लोर तक भी ठीक से नहीं चल पाता था।",
+                "डॉ. ओकाफोर ने उस पहली मुलाकात पर एक पूरे घंटे तक मेरे साथ बैठकर समय बिताया। इससे पहले कभी भी कोई ऐसा नहीं कर चुका था।",
+                "मेरी बेटी 18 महीने की थी और उसका ऐसा बुखार था जो गिरने का नाम नहीं ले रहा था।",
+                "उन्होंने हमें रात 11 बजे देखा, बिना नियुक्ति के, बिना कोई सवाल पूछे।",
+                "मैं 40 सालों से यहाँ आती आ रही हूँ, मैरियन ने फ्रंट डेस्क ले लिया था इससे पहले।",
+                "यह जगह मेरे जीवन को बदल देने में सफल रही, और मैं ऐसा हल्के में नहीं कहती।",
+                "जो मुझे हैरान करता है वो यह है कि वे आपका नाम याद रखते हैं। हर बार जब आप यहाँ आते हैं तो वे।",
+                "रिवरसाइड के हर एक सदस्य का धन्यवाद, जिन्होंने मेरे परिवार की देखभाल की। इसका मतलब दुनिया है।",
+                "खुद का ख्याल रखिए, और हम गर्मियों के मेले में देखेंगे। अलविदा।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.055,
+              "drift_sec": 5.17,
+              "elapsed": 20.3,
+              "texts": [
+                "मैंने तीन साल पहले रिवरसाइड का दौरा किया था और मैं सीढ़ियों पर चढ़ने के लिए भी कमज़ोर था।",
+                "डॉ. ओकाफोर ने उस पहली मुलाक़ात पर एक पूरे घंटे तक मेरे साथ बैठकर समय बिताया। इससे पहले कभी भी कोई ऐसा नहीं कर चुका था।",
+                "मेरी बेटी 18 महीने की थी और उसका तापमान गिरने से इनकार कर रहा था।",
+                "उन्होंने हमें रात 11 बजे देखा, बिना नियुक्ति के, बिना कोई सवाल पूछे।",
+                "मैं 40 सालों से यहाँ आती आ रही हूँ, मैरियन ने फ्रंट डेस्क ले लिया था इससे पहले।",
+                "यह जगह मेरे जीवन को बदल देती है, और मैं ऐसा हल्के में नहीं कहती।",
+                "जो मुझे हैरान करता है, वो यह है कि वे आपका नाम याद रखते हैं। हर बार जब आप अंदर आते हैं तो वे।",
+                "रिवरसाइड के हर एक सदस्य का शुक्रिया, मेरे परिवार की देखभाल करने के लिए। यह दुनिया का मतलब है।",
+                "ख़ुद का ख़्याल रखिए, और हम गर्मियों के मेले में देखेंगे। अलविदा।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 0.5,
+            "drift_sec": 0.97,
+            "median_sec": 11.4,
+            "spread_sec": 1.4,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.821
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 0.5,
+              "len_ratio": 0.821,
+              "drift_sec": 0.97,
+              "elapsed": 11.4,
+              "texts": [
+                "جئت إلى \"ريفرسايد\" منذ ثلاث سنوات وكان بإمكاني بالكاد الصعود بسلالم واحدة.",
+                "جلس الدكتور \"أوكافور\" معي لمدة ساعة كاملة في تلك الزيارة الأولى. لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي في الثامنة عشر من عمرها وكانت تعاني من حمى لم تنخفض.",
+                "لقد رآنا في الحادية عشرة ليلاً. بدون موعد، دون أسئلة.",
+                "أتيت هنا لمدة 40 عاماً، منذ أن تولت \"ماريون\" مكتب الاستقبال.",
+                "لقد غير هذا المكان حياتي، ولا أقول ذلك باستخفاف.",
+                "ما يثير إعجابي هو أنهم يتذكرون اسمك. في كل مرة تدخل فيها.",
+                "إلى جميع أشخاص \"ريفرسايد\"، شكراً لكم على رعاية عائلتي. هذا يعني العالم بالنسبة لي.",
+                "اعتنوا بأنفسكم، وسنراكم في معرض الصيف. وداعاً."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 0.5,
+              "len_ratio": 0.821,
+              "drift_sec": 0.97,
+              "elapsed": 10.0,
+              "texts": [
+                "جئت إلى \"ريفرسايد\" منذ ثلاث سنوات وكان بإمكاني بالكاد الصعود بسلالم واحدة.",
+                "جلس الدكتور \"أوكافور\" معي لمدة ساعة كاملة في تلك الزيارة الأولى. لم يفعل أحد ذلك من قبل.",
+                "كانت ابنتي في الثامنة عشر من عمرها وكانت تعاني من حمى لم تنخفض.",
+                "لقد رآنا في الحادية عشرة ليلاً. بدون موعد، دون أسئلة.",
+                "أتيت هنا لمدة 40 عاماً، منذ أن تولت \"ماريون\" مكتب الاستقبال.",
+                "لقد غير هذا المكان حياتي، ولا أقول ذلك باستخفاف.",
+                "ما يثير إعجابي هو أنهم يتذكرون اسمك. في كل مرة تدخل فيها.",
+                "إلى جميع أشخاص \"ريفرسايد\"، شكراً لكم على رعاية عائلتي. هذا يعني العالم بالنسبة لي.",
+                "اعتنوا بأنفسكم، وسنراكم في معرض الصيف. وداعاً."
+              ]
+            }
+          ]
+        }
+      },
+      "es_mothers_day": {
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": null,
+            "drift_sec": 1.64,
+            "median_sec": 10.1,
+            "spread_sec": 1.6,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.979
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 0.979,
+              "drift_sec": 1.64,
+              "elapsed": 10.1,
+              "texts": [
+                "Eu te amo muito. Obrigada por me apoiar em tudo o que você fez. Obrigada.",
+                "Olá, mamãe. Desejo-lhe um feliz Dia das Mães. Eu te amo muito.",
+                "Olá, mamãe. Como você está? Quero dizer que te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mamãe. Eu te amo muito. Muito obrigada por tudo o que você fez por mim e espero que tenha um feliz Dia das Mães. Te amo.",
+                "Olá, mamãe. Obrigada por me criar e eu te amo.",
+                "Olá, mamãe. Obrigada por tudo. Saiba que eu te amo muito e sinto muita saudade. Adeus.",
+                "Olá, mamãe. Obrigada por tudo o que você fez por mim e aproveite este dia."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 0.979,
+              "drift_sec": 1.64,
+              "elapsed": 8.5,
+              "texts": [
+                "Eu te amo muito. Obrigada por me apoiar em tudo o que você fez. Obrigada.",
+                "Olá, mamãe. Desejo-lhe um feliz Dia das Mães. Eu te amo muito.",
+                "Olá, mamãe. Como você está? Quero dizer que te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mamãe. Eu te amo muito. Muito obrigada por tudo o que você fez por mim e espero que tenha um feliz Dia das Mães. Te amo.",
+                "Olá, mamãe. Obrigada por me criar e eu te amo.",
+                "Olá, mamãe. Obrigada por tudo. Saiba que eu te amo muito e sinto muita saudade. Adeus.",
+                "Olá, mamãe. Obrigada por tudo o que você fez por mim e aproveite este dia."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 4.13,
+            "median_sec": 11.6,
+            "spread_sec": 1.7,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.136
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.144,
+              "drift_sec": 3.58,
+              "elapsed": 11.6,
+              "texts": [
+                "Я очень тебя люблю. Спасибо за поддержку во всем, что ты сделала. Спасибо.",
+                "Привет, мамочка. Желаю тебе счастливого Дня матери. Я очень тебя люблю.",
+                "Привет, мама. Как дела? Я хочу сказать тебе, что я очень тебя люблю и ты лучшая мама в мире.",
+                "Привет, мамочка. Я очень тебя люблю. Большое спасибо за всё, что ты сделала для меня, и надеюсь, у тебя будет счастливый День матери. Я люблю тебя.",
+                "Привет, мама. Спасибо за то, что ты меня создала, и я тебя люблю.",
+                "Привет, мамочка. Спасибо за всё. Знай, что я очень тебя люблю и скучаю по тебе. До свидания.",
+                "Привет, мамочка. Спасибо за всё, что ты сделала для меня, и пусть этот день будет для тебя приятным."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.129,
+              "drift_sec": 4.13,
+              "elapsed": 9.9,
+              "texts": [
+                "Я очень тебя люблю. Спасибо за поддержку во всем, что ты сделала. Спасибо.",
+                "Привет, мамочка. Желаю тебе счастливого Дня матери. Я очень тебя люблю.",
+                "Привет, мамочка. Как дела? Я хочу сказать тебе, что я очень тебя люблю и ты лучшая мама в мире.",
+                "Привет, мамочка. Я очень тебя люблю. Большое спасибо за всё, что ты сделала для меня, и надеюсь, что у тебя будет счастливый День матери. Я люблю тебя.",
+                "Привет, мамочка. Спасибо за то, что ты меня создала, и я люблю тебя.",
+                "Привет, мамочка. Спасибо за всё. Знай, что я очень тебя люблю и скучаю по тебе. До свидания.",
+                "Привет, мамочка. Спасибо за всё, что ты сделала для меня, и наслаждайся этим днём."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 38.97,
+            "median_sec": 24.8,
+            "spread_sec": 1.6,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.341
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.359,
+              "drift_sec": 38.97,
+              "elapsed": 24.8,
+              "texts": [
+                "मैं तुमसे बहुत प्यार करता हूँ। मुझे समर्थन करने के लिए धन्यवाद, जो भी तुमने किया है। धन्यवाद।",
+                "हेलो, माँ। तुम्हें एक खुशहाल माँ दिवस की शुभकामनाएँ। मैं तुमसे बहुत प्यार करता हूँ।",
+                "हेलो, माँ। तुम कैसी हो? मैं तुमसे कहना चाहता हूँ कि मैं तुमसे बहुत प्यार करता हूँ और तुम दुनिया की सबसे अच्छी माँ हो।",
+                "हेलो, माँ। मैं तुमसे बहुत प्यार करता हूँ। मुझे तुम्हारे द्वारा किए गए हर चीज़ के लिए बहुत-बहुत धन्यवाद, और उम्मीद करता हूँ कि तुम्हें एक खुशहाल माँ दिवस हो। मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। मुझे तुम्हारे द्वारा बनाए जाने के लिए धन्यवाद और मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। सब कुछ के लिए धन्यवाद। जान लो कि मैं तुमसे बहुत प्यार करता हूँ और मैं तुम्हें बहुत याद करता हूँ। अलविदा।",
+                "हेलो, माँ। तुम्हारे द्वारा मेरे लिए किए गए हर काम के लिए धन्यवाद और इस दिन का आनंद लो।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.323,
+              "drift_sec": 37.75,
+              "elapsed": 23.2,
+              "texts": [
+                "मैं तुमसे बहुत प्यार करता हूँ। मुझे समर्थन करने के लिए धन्यवाद, जो भी तुमने किया है। धन्यवाद।",
+                "हेलो, माँ। तुम्हें एक खुशहाल माँ दिवस की शुभकामनाएँ। मैं तुमसे बहुत प्यार करता हूँ।",
+                "हेलो, माँ। तुम कैसी हो? मैं तुमसे कहना चाहता हूँ कि मैं तुमसे बहुत प्यार करता हूँ और तुम दुनिया की सबसे अच्छी माँ हो।",
+                "हेलो, माँ। मैं तुमसे बहुत प्यार करता हूँ। मुझे तुम्हारे लिए जो भी किया है, उसके लिए बहुत-बहुत धन्यवाद, और उम्मीद है कि तुम्हें एक खुशहाल माँ दिवस हो। मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। मुझे तुम्हारा निर्माण करने के लिए धन्यवाद और मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। सब कुछ के लिए धन्यवाद। जान लो कि मैं तुमसे बहुत प्यार करता हूँ और मैं तुम्हें बहुत याद करता हूँ। अलविदा।",
+                "हेलो, माँ। तुम्हारे लिए जो भी किया है, उसके लिए धन्यवाद और इस दिन का आनंद लो।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 2.13,
+            "median_sec": 13.4,
+            "spread_sec": 2.0,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.885
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.892,
+              "drift_sec": 2.13,
+              "elapsed": 13.4,
+              "texts": [
+                "أحبك كثيراً. شكراً على دعمك لي في كل ما قمت به. شكراً.",
+                "مرحباً يا أمي. أتمنى لك عيد أم سعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أريد أن أقول لك إنني أحبك كثيراً وأنتِ أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. أشكرك كثيراً على كل ما قمت به من أجلي وأتمنى أن يكون لديك عيد أم سعيد. أحبك.",
+                "مرحباً يا أمي. شكراً على وجودك وتقديرك لي وأحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. أود أن تعلمي أنني أحبك كثيراً وافتقدتك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما قمت به من أجلي وأتمنى لك أن تستمتعي بهذا اليوم."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.878,
+              "drift_sec": 2.13,
+              "elapsed": 11.4,
+              "texts": [
+                "أحبك كثيراً. شكراً على دعمك لي في كل ما قمت به. شكراً.",
+                "مرحباً يا أمي. أتمنى لك عيد أم سعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أريد أن أقول لك إنني أحبك كثيراً وأنتِ أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. شكراً جزيلاً على كل ما قمت به من أجلي وأتمنى أن يكون عيد الأم سعيداً لك. أحبك.",
+                "مرحباً يا أمي. شكراً على وجودك وتقديرك لي وأحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. أود أن تعلمي أنني أحبك كثيراً وافتقدتك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما قمت به من أجلي وأن تستمتعي بهذا اليوم."
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "liquid/lfm2-24b-a2b": {
+      "de_workshop_intro": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.66,
+            "median_sec": 10.3,
+            "spread_sec": 6.9,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.047
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.047,
+              "drift_sec": 0.66,
+              "elapsed": 10.3,
+              "texts": [
+                "Bienvenidos calurosamente al taller de carpintería Grünwald. Mi nombre es la Sra. Hoffmann.",
+                "En las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, use siempre gafas de protección, incluso si solo observa.",
+                "La superficie de trabajo tiene 1,5 metros de ancho, para que dos personas puedan trabajar en ella simultáneamente.",
+                "Quien nunca haya cepillado madera debería empezar con la madera más blanda.",
+                "Nos reunimos todos los martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes no tenía experiencia alguna, pero aun así me divertí desde el primer día.",
+                "Aquí se aprende no solo el oficio, sino también la paciencia consigo mismo.",
+                "Esperamos verles pronto. Hasta el próximo martes, y que regresen bien a casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.048,
+              "drift_sec": 0.66,
+              "elapsed": 3.4,
+              "texts": [
+                "Bienvenidos calurosamente al taller de carpintería Grünwald. Mi nombre es la Sra. Hoffmann.",
+                "En las próximas doce semanas construirán su propio armario de herramientas desde cero.",
+                "Por favor, use siempre gafas de protección, incluso si solo observa.",
+                "La superficie de trabajo tiene 1,5 metros de ancho, para que dos personas puedan trabajar en ella simultáneamente.",
+                "Quien nunca haya cepillado madera debería empezar con la madera más blanda.",
+                "Nos reunimos todos los martes a las siete, y el curso dura aproximadamente tres horas.",
+                "Antes no tenía ninguna experiencia, y sin embargo me divertí desde el primer día.",
+                "Aquí se aprende no solo el oficio, sino también la paciencia consigo mismo.",
+                "Esperamos verles pronto. Hasta el próximo martes, y que lleguen a casa bien."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 4.7,
+            "spread_sec": 0.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.019
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.019,
+              "drift_sec": 0.0,
+              "elapsed": 4.5,
+              "texts": [
+                "Sejam muito bem-vindos à oficina de marcenaria Grünwald. Meu nome é a Sra. Hoffmann.",
+                "Nas próximas doze semanas, vocês construirão sua própria bancada de trabalho do zero.",
+                "Por favor, usem sempre óculos de proteção, mesmo que apenas estejam assistindo.",
+                "A bancada tem 1,5 metros de largura, para que duas pessoas possam trabalhar nela simultaneamente.",
+                "Quem nunca lixou antes deve começar com a madeira mais macia.",
+                "Nos encontramos todas as terças-feiras às sete, e o curso dura cerca de três horas.",
+                "Antes disso eu não tinha nenhuma experiência, e mesmo assim foi divertido desde o primeiro dia.",
+                "Aqui se aprende não só o ofício, mas também a paciência consigo mesmo.",
+                "Estamos ansiosos para recebê-los. Até a próxima terça, e voltem bem para casa."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 1.019,
+              "drift_sec": 0.0,
+              "elapsed": 4.7,
+              "texts": [
+                "Sejam muito bem-vindos à oficina de marcenaria Grünwald. Meu nome é a Sra. Hoffmann.",
+                "Nas próximas doze semanas, vocês construirão sua própria bancada de trabalho do zero.",
+                "Por favor, usem sempre óculos de proteção, mesmo que apenas estejam assistindo.",
+                "A bancada tem 1,5 metros de largura, para que duas pessoas possam trabalhar nela simultaneamente.",
+                "Quem nunca lixou antes deve começar com a madeira mais macia.",
+                "Nos encontramos todas as terças-feiras às sete, e o curso dura cerca de três horas.",
+                "Antes disso eu não tinha nenhuma experiência, e mesmo assim foi divertido desde o primeiro dia.",
+                "Aqui se aprende não só o ofício, mas também a paciência consigo mesmo.",
+                "Estamos ansiosos para recebê-los. Até a próxima terça, e voltem bem para casa."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.33,
+            "median_sec": 5.2,
+            "spread_sec": 0.0,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.988
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.975,
+              "drift_sec": 0.12,
+              "elapsed": 5.2,
+              "texts": [
+                "Искренне приветствую в деревообработочной мастерской «Гринвальд». Меня зовут Хоффман.",
+                "В течение следующих двенадцати недель вы сами соберете свой инструментальный шкаф с нуля.",
+                "Пожалуйста, всегда носите защитные очки, даже если вы просто наблюдаете.",
+                "Поверхность рабочей поверхности имеет ширину 1,5 метра, чтобы две люди могли работать на ней одновременно.",
+                "Если вы никогда не шлифовали, начните с более мягкой древесины.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трёх часов.",
+                "До этого у меня не было никакого опыта, и все равно с первого дня было весело.",
+                "Здесь вы учитесь не только ремеслу, но и терпению к себе.",
+                "Мы с радостью вас приветствуем. До следующего вторника и доброго пути домой."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.0,
+              "drift_sec": 0.33,
+              "elapsed": 5.2,
+              "texts": [
+                "Искренне приветствую в деревообработочной мастерской «Гринвальд». Меня зовут Хоффман.",
+                "В течение следующих двенадцати недель вы сами построите свой инструментальный шкафу с нуля.",
+                "Пожалуйста, всегда носите защитные очки, даже если вы просто наблюдаете.",
+                "Площадь рабочей поверхности составляет 1,5 метра в ширину, чтобы две люди могли работать на ней одновременно.",
+                "Если вы никогда не шлифовали, начните с более мягкой древесины.",
+                "Мы встречаемся каждый вторник в семь часов, и курс длится около трёх часов.",
+                "У меня до этого не было никакого опыта, и все равно я с первого дня получаю удовольствие.",
+                "Здесь вы учитесь не только ремеслу, но и терпению к себе.",
+                "Мы с радостью вас приветствуем. До следующего вторника и безопасного пути домой."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.66,
+            "median_sec": 14.1,
+            "spread_sec": 1.1,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.866
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.859,
+              "drift_sec": 0.66,
+              "elapsed": 13.0,
+              "texts": [
+                "आपका हार्दिक स्वागत हैं ग्रूनवाल्ड की होल्ज़वर्कस्टैट में। मेरा नाम फ्रौ हॉफमैन है।",
+                "अगले बारह हफ्तों में आप अपना खुद का टूल स्टैक बनाएंगे।",
+                "कृपया हमेशा सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "कार्य सतह का चौड़ाई 1.5 मीटर है, ताकि दो लोग एक साथ इस पर काम कर सकें।",
+                "जिन्होंने कभी साइलिंग नहीं की है, उन्हें पहले नरम लकड़ी से शुरुआत करनी चाहिए।",
+                "हम हर मंगेल सात बजे मिलते हैं, और कोर्स लगभग तीन घंटे चलता है।",
+                "मेरे पास इसका कोई अनुभव नहीं था, और फिर भी पहले दिन से ही मज़ा आया।",
+                "यहाँ केवल हस्तशिल्प नहीं, बल्कि अपने आप के साथ धैर्य भी सीखा जाता है।",
+                "हम आपका स्वागत करते हैं। अगले मंगेल तक, और घर अच्छी चाड़ी में आएं।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.873,
+              "drift_sec": 0.66,
+              "elapsed": 14.1,
+              "texts": [
+                "आपका हार्दिक स्वागत हैं ग्रूनवाल्ड की होल्ज़वर्कस्टैट में। मेरा नाम फ्रौ हॉफमैन है।",
+                "अगले बारह हफ्तों में आप अपना खुद का टूल स्टैक बनाएंगे।",
+                "कृपया हमेशा सुरक्षा चश्मा पहनें, भले ही आप केवल देख रहे हों।",
+                "कार्य सतह का चौड़ाई 1.5 मीटर है, ताकि दो लोग एक साथ इस पर काम कर सकें।",
+                "जिन्हें अभी तक साइलिंग नहीं कर चुका है, उन्हें पहले नरम लकड़ी से शुरुआत करनी चाहिए।",
+                "हम हर मंगेल सात बजते हैं, और कोर्स लगभग तीन घंटे चलता है।",
+                "मेरे पास इससे पहले कोई अनुभव नहीं था, और फिर भी पहले दिन से ही मज़ा आया।",
+                "यहाँ न केवल हस्तशिल्प सीखा जाता है, बल्कि अपने साथ धैर्य भी सीखा जाता है।",
+                "हम आपका स्वागत करते हैं। अगले मंगेल तक, और घर अच्छी चार्ज कर आइए।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 5.6,
+            "spread_sec": 0.7,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.82
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.83,
+              "drift_sec": 0.0,
+              "elapsed": 5.6,
+              "texts": [
+                "أهلاً وسهلاً بكم في ورشة العمل الخشبية غرونوالد. اسمي السيدة هوفمان.",
+                "خلال الأسابيع الاثني عشر القادمة ستبنون خزانة الأدوات الخاصة بكم من الصفر.",
+                "يرجى ارتداء نظارات واقية دائماً، حتى لو كنتم مجرد مشاهدين.",
+                "سطح العمل عرضه 1.5 متر، ليتمكن شخصان من العمل عليه في الوقت نفسه.",
+                "من لم يسبق له استخدام المبراط، ينبغي أن يبدأ بالخشب الأكثر ليونة.",
+                "نلتقي كل يوم ثلاثاء في الساعة السابعة، ويستمر الدورة حوالي ثلاث ساعات.",
+                "لم يكن لدي أي خبرة سابقة، ومع ذلك استمتعت منذ اليوم الأول.",
+                "هنا لا تتعلمون الحرفة فقط، بل أيضاً الصبر مع الذات.",
+                "نتطلع لاستقبالكم. إلى اللقاء يوم الثلاثاء القادم، وعندكم أمان العودة إلى المنزل."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.81,
+              "drift_sec": 0.0,
+              "elapsed": 4.9,
+              "texts": [
+                "أهلاً وسهلاً بكم في ورشة العمل الخشبية غرونوالد. اسمي السيدة هوفمان.",
+                "في الأسابيع الاثني عشر القادمة ستبنون خزانة الأدوات الخاصة بكم من الصفر.",
+                "يرجى ارتداء نظارات واقية دائماً، حتى لو كنتم مجرد مشاهدين.",
+                "سطح العمل عرضه 1.5 متر، ليتمكن شخصان من العمل عليه في الوقت نفسه.",
+                "من لم يسبق له استخدام المبراط، ينبغي أن يبدأ بالخشب الأكثر ليونة.",
+                "نلتقي كل يوم ثلاثاء في الساعة السابعة، ويستمر الدورة حوالي ثلاث ساعات.",
+                "لم يكن لدي أي خبرة سابقة، ومع ذلك استمتعت منذ اليوم الأول.",
+                "هنا لا تتعلمون الحرفة فقط، بل أيضاً الصبر مع الذات.",
+                "نتطلع لاستقبالكم. إلى اللقاء يوم الثلاثاء القادم، وعند عودتكم بأمان."
+              ]
+            }
+          ]
+        }
+      },
+      "en_clinic_thanks": {
+        "es": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 1.66,
+            "median_sec": 3.9,
+            "spread_sec": 0.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.903
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.909,
+              "drift_sec": 1.66,
+              "elapsed": 3.7,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía subir un tramo de escaleras.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita. Nadie había hecho eso antes.",
+                "Mi hija tenía 18 meses y tenía fiebre que no bajaba.",
+                "Me vieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion se hiciera cargo del mostrador.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me conmueve es que recuerdan su nombre. Cada vez que entra.",
+                "A todo el personal de Riverside, gracias por cuidar a mi familia. Significa el mundo.",
+                "Cuídense y nos vemos en la feria de verano. Adiós."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.896,
+              "drift_sec": 1.66,
+              "elapsed": 3.9,
+              "texts": [
+                "Vine a Riverside hace tres años y apenas podía subir un tramo de escaleras.",
+                "El Dr. Okafor se sentó conmigo durante una hora completa en esa primera visita. Nadie había hecho eso antes.",
+                "Mi hija tenía 18 meses y tenía fiebre que no bajaba.",
+                "Me vieron a las once de la noche. Sin cita, sin preguntas.",
+                "He venido aquí durante 40 años, desde antes de que Marion se hiciera cargo del mostrador.",
+                "Este lugar cambió mi vida, y no lo digo a la ligera.",
+                "Lo que me conmueve es que recuerdan su nombre. Cada vez que entra.",
+                "A todos en Riverside, gracias por cuidar de mi familia. Significa el mundo.",
+                "Cuídense y nos vemos en la feria de verano. Adiós."
+              ]
+            }
+          ]
+        },
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": 1.0,
+            "drift_sec": 1.39,
+            "median_sec": 3.9,
+            "spread_sec": 0.3,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.895
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.883,
+              "drift_sec": 0.0,
+              "elapsed": 3.6,
+              "texts": [
+                "Cheguei ao Riverside há três anos e mal conseguia subir uma escada.",
+                "O Dr. Okafor passou uma hora inteira comigo naquela primeira visita.",
+                "Minha filha tinha 18 meses e estava com febre que não baixava.",
+                "Eles nos viram às onze da noite. Sem marcação, sem perguntas feitas.",
+                "Venho aqui há 40 anos, antes mesmo de Marion assumir a recepção.",
+                "Este lugar mudou minha vida, e não digo isso de leve.",
+                "O que me impressiona é que eles se lembram do seu nome. Toda vez que você entra.",
+                "A todos no Riverside, obrigado por cuidarem da minha família. Isso significa o mundo.",
+                "Cuidem de vocês mesmos, e nos vemos na feira de verão. Adeus."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": 1.0,
+              "len_ratio": 0.906,
+              "drift_sec": 1.39,
+              "elapsed": 3.9,
+              "texts": [
+                "Cheguei ao Riverside há três anos e mal conseguia subir uma escada.",
+                "O Dr. Okafor ficou comigo por uma hora inteira naquela primeira visita. Ninguém jamais tinha feito isso.",
+                "Minha filha tinha 18 meses e estava com febre que não baixava.",
+                "Eles nos viram às onze da noite. Sem marcação, sem perguntas feitas.",
+                "Vou aqui há 40 anos, antes mesmo da Marion assumir a recepção.",
+                "Este lugar mudou minha vida, e não digo isso de leve.",
+                "O que me impressiona é que eles se lembram do seu nome. Toda vez que você entra.",
+                "A todos no Riverside, obrigado por cuidarem da minha família. Isso significa o mundo.",
+                "Cuide-se, e nos vemos na feira de verão. Adeus."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 0.5,
+            "drift_sec": 0.62,
+            "median_sec": 4.7,
+            "spread_sec": 0.1,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.984
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 0.5,
+              "len_ratio": 0.972,
+              "drift_sec": 0.04,
+              "elapsed": 4.7,
+              "texts": [
+                "Я приехал в Риверсайд три года назад и едва мог подняться по лестнице.",
+                "Доктор Окафор сидел со мной целый час на первый визит. Никто никогда этого не делал.",
+                "Моя дочь была в возрасте восемнадцати месяцев, и у неё была высокорасполнённая лихорадка.",
+                "Они увидели нас в одиннадцат час ночи. Без записи, без вопросов.",
+                "Я прихожу сюда уже 40 лет, ещё до того, как Марион взяла на себя работу за стойкой.",
+                "Это место перевернуло мою жизнь, и я не говорю этого легко.",
+                "Меня удивляет то, что они помнят ваше имя. Каждый раз, когда вы заходите.",
+                "Всем в Риверсайде, спасибо, что заботились о моей семье. Это значит для меня мир.",
+                "Заботьтесь о себе, и мы увидим вас на летнем фестивале. До свидания."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.995,
+              "drift_sec": 0.62,
+              "elapsed": 4.6,
+              "texts": [
+                "Я приехал в Риверсайд три года назад и едва мог подняться по лестнице.",
+                "Доктор Окафор сидел со мной целый час на первый визит. Никто никогда этого не делал.",
+                "Моя дочь была в возрасте 18 месяцев и страдала от высокой температуры, которую не удалось снизить.",
+                "Они увидели нас в одиннадцатый час ночи. Без записи, без вопросов.",
+                "Я прихожу сюда уже 40 лет, ещё до того, как Марион взяла на себя работу за стойкой.",
+                "Это место перевернуло мою жизнь, и я не говорю этого легко.",
+                "Меня удивляет то, что они помнят твое имя. Каждый раз, когда ты заходишь.",
+                "Всем в Риверсайде, спасибо, что заботитесь о моей семье. Это значит для меня всего мира.",
+                "Заботьтесь о себе, и мы увидимся на летнем фестивале. До свидания."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 5.4,
+            "median_sec": 13.7,
+            "spread_sec": 0.0,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 1.033
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.026,
+              "drift_sec": 5.4,
+              "elapsed": 13.7,
+              "texts": [
+                "मैं तीन साल पहले रिवरसाइड आया था और मुझे सीढ़ियों पर थोड़ी मुश्किल से चढ़ना पड़ता था।",
+                "डॉ. ओकाफोर ने उस पहले मुलाकात में पूरी एक घंटे मेरे साथ बैठे। किसी ने ऐसा कभी नहीं किया था।",
+                "मेरी बेटी ँच्छी महीं की थी और उसका बुखार बना हुआ था जो नीचे नहीं उतर रहा था।",
+                "वे रात के ग्यार्डन 11 बजे हमें देखने आए। कोई अपॉइंटमेंट नहीं था, कोई सवाल नहीं पूछा गया।",
+                "मैं इसी जगह से 40 वर्षों से आ रहा हूँ, इससे भी पहले जब मैंने मैरियन को फ्रंट डेस्क संभालना शुरू किया था।",
+                "इस जगह ने मेरे जीवन को बदल दिया, और मैं यह हल्के से नहीं कह रहा।",
+                "मुझे जो बात है वह यह है कि वे आपका नाम याद रखते हैं।",
+                "रिवरसाइड के हर एक को धन्यवाद, मेरे परिवार की देखभाल करने के लिए। यह दुनिया का मतलब है।",
+                "अपना ख्याल रखिए, और हम गर्मी के मेले में आपसे मिलेंगे। अलविदा।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 1.04,
+              "drift_sec": 4.13,
+              "elapsed": 13.7,
+              "texts": [
+                "मैं तीन साल पहले रिवरसाइड आया था और मुझे सीढ़ियों पर थोड़ी ही चाल में मदद की जरूरत थी।",
+                "डॉ. ओकाफोर ने उस पहले मुलाकात में पूरी एक घंटे मेरे साथ बैठके। किसी ने कभी ऐसा नहीं किया था।",
+                "मेरी बेटी ँच्छी महीं की थी और उसे तकनीया बुखार हो रहा था जो नीचे नहीं उतर रहा था।",
+                "वे रात के ग्यार्डन 11 बजे हमें देखते थे। कोई अपॉइंटमेंट नहीं था, कोई सवाल नहीं पूछा गया।",
+                "मैं 40 सालों से यहाँ आ रहा हूँ, इससे पहले जब मारियन फ्रंट डेस्क संभाल गई थी।",
+                "इस जगह ने मेरी जिंदगी बदल दी, और मैं यह हल्के से नहीं कह रहा।",
+                "मुझे जो बात है वह यह है कि वे आपका नाम याद रखते हैं। हर बार जब आप दरवाज़े खोलते हैं।",
+                "रिवरसाइड के हर एक को धन्यवाद, मेरे परिवार की देखभाल करने के लिए। यह दुनिया का मतलब है।",
+                "अपना ख्याल रखिए, और हम गर्मी के मेले में आपसे मिलेंगे। अलविदा।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "drift_sec": 0.0,
+            "median_sec": 4.7,
+            "spread_sec": 0.2,
+            "runs": 2,
+            "segments": 9,
+            "len_ratio": 0.749
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.75,
+              "drift_sec": 0.0,
+              "elapsed": 4.7,
+              "texts": [
+                "لقد أتيت إلى ريفرسايد قبل ثلاث سنوات وكنت بالكاد أستطيع صعود الدرج.",
+                "جلس الطبيب أوكافور معي لمدة ساعة كاملة في تلك الزيارة الأولى.",
+                "كانت ابنتي تبلغ من العمر 18 شهرًا وتعاني من حمى لا تنخفض.",
+                "رأونا في الحادية عشرة مساءً. لا موعد، ولا أسئلة.",
+                "لقد أتيت إلى هنا لمدة 40 عامًا، منذ قبل أن تتولى ماريون مكتب الاستقبال.",
+                "هذا المكان غيّر حياتي، ولا أقول ذلك باستخفاف.",
+                "ما يؤثر فيّ هو أنهم يتذكرون اسمك. في كل مرة تدخل فيها.",
+                "لكل من في ريفرسايد، شكرًا على رعاية عائلتي. هذا يعني لي العالم.",
+                "اعتنوا بأنفسكم، وسنراكم في المعرض الصيفي. مع السلامة."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 9,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "len_ratio": 0.748,
+              "drift_sec": 0.0,
+              "elapsed": 4.5,
+              "texts": [
+                "لقد أتيت إلى ريفرسايد قبل ثلاث سنوات وكنت بالكاد أستطيع صعود الدرج.",
+                "جلس الطبيب أوكافور معي لمدة ساعة كاملة في تلك الزيارة الأولى.",
+                "كانت ابنتي تبلغ من العمر 18 شهرًا وتعاني من حمى لم تنخفض.",
+                "رأونا في الحادية عشرة مساءً. لا موعد، ولا أسئلة.",
+                "لقد أتيت إلى هنا لمدة 40 عامًا، منذ قبل أن تتولى ماريون مكتب الاستقبال.",
+                "هذا المكان غيّر حياتي، ولا أقول ذلك باستخفاف.",
+                "ما يثير دهشتي أنهم يتذكرون اسمك. في كل مرة تدخل فيها.",
+                "لكل من في ريفرسايد، شكرًا على رعاية عائلتي. هذا يعني لي العالم.",
+                "اعتنوا بأنفسكم، وسنراكم في المعرض الصيفي. مع السلامة."
+              ]
+            }
+          ]
+        }
+      },
+      "es_mothers_day": {
+        "pt": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": null,
+            "digits_kept": null,
+            "drift_sec": 1.55,
+            "median_sec": 4.2,
+            "spread_sec": 0.1,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.034
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.034,
+              "drift_sec": 1.55,
+              "elapsed": 4.2,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo que você fez. Obrigado.",
+                "Olá, mami. Desejo um feliz Dia das Mães. Te amo muito.",
+                "Olá, mamãe. Como você está? Eu quero te dizer que eu te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mamãe. Eu te amo muito. Muito obrigado por tudo que você fez por mim e espero que você tenha um feliz Dia das Mães. Eu te amo.",
+                "Olá, mamãe. Obrigado pelo que você fez por mim e eu te amo.",
+                "Olá, mamãe. Obrigado por tudo. Saiba que eu te amo muito e sinto sua falta muito. Adeus.",
+                "Olá, mamãe. Obrigado por tudo o que você fez por mim e que você aproveite este dia."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": null,
+              "digits_kept": null,
+              "len_ratio": 1.034,
+              "drift_sec": 1.55,
+              "elapsed": 4.1,
+              "texts": [
+                "Eu te amo muito. Obrigado por me apoiar em tudo que você fez. Obrigado.",
+                "Olá, mami. Desejo um feliz Dia das Mães. Te amo muito.",
+                "Olá, mamãe. Como você está? Eu quero te dizer que eu te amo muito e você é a melhor mãe do mundo.",
+                "Olá, mamãe. Eu te amo muito. Muito obrigado por tudo que você fez por mim e espero que você tenha um feliz Dia das Mães. Eu te amo.",
+                "Olá, mamãe. Obrigado pelo que você fez por mim e eu te amo.",
+                "Olá, mamãe. Obrigado por tudo. Saiba que eu te amo muito e sinto sua falta muito. Adeus.",
+                "Olá, mamãe. Obrigado por tudo o que você fez por mim e que você aproveite este dia."
+              ]
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 2.9,
+            "median_sec": 4.5,
+            "spread_sec": 0.1,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.107
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.112,
+              "drift_sec": 2.9,
+              "elapsed": 4.5,
+              "texts": [
+                "Я очень тебя люблю. Спасибо, что поддерживаешь меня во всем, что ты сделала. Спасибо.",
+                "Привет, мама. Желаю тебе счастливого Дня матери. Я очень тебя люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что я очень тебя люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я очень тебя люблю. Очень спасибо за всё, что ты для меня сделала, и желаю тебе счастливого Дня матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты для меня сделала, и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Знай, что я тебя очень люблю и скучаю по тебе. Пока.",
+                "Привет, мама. Спасибо за всё, что ты для меня сделала, и пусть ты наслаждаешь этим днём."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.101,
+              "drift_sec": 2.9,
+              "elapsed": 4.4,
+              "texts": [
+                "Я очень тебя люблю. Спасибо, что поддерживаешь меня во всем, что ты сделала. Спасибо.",
+                "Привет, мама. Желаю тебе счастливого Дня матери. Я очень тебя люблю.",
+                "Привет, мама. Как ты? Я хочу сказать тебе, что я очень тебя люблю и ты лучшая мама в мире.",
+                "Привет, мама. Я очень тебя люблю. Очень спасибо за всё, что ты для меня сделала, и желаю тебе счастливого Дня матери. Я тебя люблю.",
+                "Привет, мама. Спасибо за то, что ты для меня сделала, и я тебя люблю.",
+                "Привет, мама. Спасибо за всё. Знай, что я тебя очень люблю и скучаю по тебе. Пока.",
+                "Привет, мама. Спасибо за всё, что ты для меня сделала, и желаю тебе приятного дня."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 20.31,
+            "median_sec": 12.6,
+            "spread_sec": 0.1,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.175
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.155,
+              "drift_sec": 19.62,
+              "elapsed": 12.5,
+              "texts": [
+                "मुझे बहुत प्यार है। सब कुछ करने में मेरी मदद के लिए धन्यवाद। धन्यवाद।",
+                "हेलो, मैमी। मैं तुम्हें माँ का दिन मुबारक हो। मैं तुमसे बहुत प्यार करता हूँ।",
+                "हेलो, माँ। तुम कैसे हो? मैं तुम्हें बताना चाहता हूँ कि मुझे तुम बहुत प्यार है और तुम दुनिया की सर्वश्रेष्ठ माँ हो।",
+                "हेलो, माँ। मुझे बहुत प्यार है। मेरे लिए जो कुछ भी तुमने किया है, उसके लिए बहुत धन्यवाद। मुझे उम्मीद है कि तुम माँ का दिन मुबारक हो। मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। धन्यवाद कि तुमने मुझसे किया और मैं तुमसे प्यार करता हूँ।",
+                "हेलो, माँ। सब कुछ के लिए धन्यवाद। जान लो कि मुझे तुमसे बहुत प्यार है और मैं तुम्हें बहुत याद करता हूँ। अलविदा।",
+                "हेलो, माँ। सब कुछ करने के लिए धन्यवाद, और इस दिन का आनंद लें।"
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 1.196,
+              "drift_sec": 20.31,
+              "elapsed": 12.6,
+              "texts": [
+                "मुझे बहुत प्यार है। सब कुछ करने में मेरी सहायता के लिए धन्यवाद। धन्यवाद।",
+                "हेलो, मैमी। मैं आपको माँ के दिन की खुशी कामना करती हूँ। मैं आपसे बहुत प्यार करती हूँ।",
+                "हेलो, माँ। आप कैसे हैं? मैं आपको बताना चाहती हूँ कि मैं आपसे बहुत प्यार करती हूँ और आप दुनिया की सर्वश्रेष्ठ माँ हैं।",
+                "हेलो, माँ। मुझे बहुत प्यार है। मेरे लिए जो कुछ भी आपने किया है, उसके लिए बहुत धन्यवाद। मुझे उम्मीद है कि आपका माँ का दिन खुशी से बीते। मैं आपसे प्यार करती हूँ।",
+                "हेलो, माँ। धन्यवाद कि आपने मुझसे किया और मैं आपसे प्यार करती हूँ।",
+                "हेलो, माँ। सब कुछ के लिए धन्यवाद। जान लें कि मैं आपसे बहुत प्यार करती हूँ और आपको बहुत याद आती है। अलविदा।",
+                "हेलो, माँ। सब कुछ के लिए धन्यवाद, और उम्मीद है कि आप इस दिन का आनंद लें।"
+              ]
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "good",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": null,
+            "drift_sec": 1.53,
+            "median_sec": 4.8,
+            "spread_sec": 0.5,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 0.866
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.866,
+              "drift_sec": 1.53,
+              "elapsed": 4.3,
+              "texts": [
+                "أحبك كثيراً. شكراً على دعمك في كل ما قمت به. شكراً.",
+                "مرحباً يا مامي. أتمنى لك يوم الأم السعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أريد أن أقول لك أنني أحبك كثيراً وأنت أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. شكراً جزيلاً على كل ما قمت به من أجلي وأتمنى لك يوم أم سعيد. أحبك.",
+                "مرحباً يا أمي. شكراً على ما فعلتي بي وأنا أحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. اعلمي أنني أحبك كثيراً وأفتقدك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما قمت به من أجلي وأتمنى لك الاستمتاع بهذا اليوم."
+              ]
+            },
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": null,
+              "len_ratio": 0.866,
+              "drift_sec": 1.53,
+              "elapsed": 4.8,
+              "texts": [
+                "أحبك كثيراً. شكراً على دعمك في كل ما قمت به. شكراً.",
+                "مرحباً يا مامي. أتمنى لك يوم الأم السعيد. أحبك كثيراً.",
+                "مرحباً يا أمي. كيف حالك؟ أريد أن أقول لك أنني أحبك كثيراً وأنت أفضل أم في العالم.",
+                "مرحباً يا أمي. أحبك كثيراً. شكراً جزيلاً على كل ما قمت به من أجلي وأتمنى لك يوم أم سعيد. أحبك.",
+                "مرحباً يا أمي. شكراً على ما فعلتي بي وأنا أحبك.",
+                "مرحباً يا أمي. شكراً على كل شيء. اعلمي أنني أحبك كثيراً وأفتقدك كثيراً. وداعاً.",
+                "مرحباً يا أمي. شكراً على كل ما قمت به من أجلي وأتمنى لك الاستمتاع بهذا اليوم."
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "google/gemma-4-e4b": {
+      "es_mothers_day": {
+        "pt": {
+          "verdict": {
+            "grade": "unusable",
+            "reason": "timeout after 300s"
+          },
+          "runs": [
+            {
+              "error": "timeout after 300s",
+              "elapsed": 300
+            },
+            {
+              "error": "timeout after 300s",
+              "elapsed": 300
+            }
+          ]
+        },
+        "ru": {
+          "verdict": {
+            "grade": "unusable",
+            "fallback": 7.0,
+            "meta_prose": 0.0,
+            "script_ok": 0.0,
+            "digits_kept": null,
+            "drift_sec": 1.43,
+            "median_sec": 269.5,
+            "spread_sec": 0.0,
+            "runs": 1,
+            "segments": 7,
+            "len_ratio": 1.0
+          },
+          "runs": [
+            {
+              "error": "timeout after 300s",
+              "elapsed": 300
+            },
+            {
+              "fallback": 7,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 0.0,
+              "digits_kept": null,
+              "len_ratio": 1.0,
+              "drift_sec": 1.43,
+              "elapsed": 269.5,
+              "texts": [
+                "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias.",
+                "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho.",
+                "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo.",
+                "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo.",
+                "Hola, mamá. Gracias por qué me has hecho y te amo.",
+                "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós.",
+                "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+              ]
+            }
+          ]
+        },
+        "hi": {
+          "verdict": {
+            "grade": "unusable",
+            "reason": "timeout after 300s"
+          },
+          "runs": [
+            {
+              "error": "timeout after 300s",
+              "elapsed": 300
+            },
+            {
+              "error": "timeout after 300s",
+              "elapsed": 300
+            }
+          ]
+        },
+        "ar": {
+          "verdict": {
+            "grade": "unusable",
+            "fallback": 7.0,
+            "meta_prose": 0.0,
+            "script_ok": 0.0,
+            "digits_kept": null,
+            "drift_sec": 3.98,
+            "median_sec": 235.5,
+            "spread_sec": 0.0,
+            "runs": 2,
+            "segments": 7,
+            "len_ratio": 1.0
+          },
+          "runs": [
+            {
+              "fallback": 7,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 0.0,
+              "digits_kept": null,
+              "len_ratio": 1.0,
+              "drift_sec": 3.98,
+              "elapsed": 235.5,
+              "texts": [
+                "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias.",
+                "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho.",
+                "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo.",
+                "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo.",
+                "Hola, mamá. Gracias por qué me has hecho y te amo.",
+                "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós.",
+                "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+              ]
+            },
+            {
+              "fallback": 7,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 0.0,
+              "digits_kept": null,
+              "len_ratio": 1.0,
+              "drift_sec": 3.98,
+              "elapsed": 235.5,
+              "texts": [
+                "Te amo mucho. Gracias por apoyarme en todo lo que has hecho. Gracias.",
+                "Hola, mami. Te deseo un feliz Día de la Madre. Te quiero mucho.",
+                "Hola, mamá. ¿Cómo estás? Yo le quiero decir que te amo mucho y eres la mejor mamá del mundo.",
+                "Hola, mamá. Te amo mucho. Muchas gracias por todo lo que has hecho por mí y espero que tengas un feliz Día de la Madre. Te amo.",
+                "Hola, mamá. Gracias por qué me has hecho y te amo.",
+                "Hola, mamá. Gracias por todo. Que sepas que te quiero mucho y te extraño mucho. Adiós.",
+                "Hola, mamá. Gracias por todo lo que has hecho por mí y que disfrutes este día."
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
