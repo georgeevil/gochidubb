@@ -65,6 +65,11 @@ class UserConfig:
     # ── TTS ───────────────────────────────────────────────────────────
     tts_engine: str = "voxcpm"           # "voxcpm" | "f5tts" | "edge-tts"
     tts_speed: str = "balanced"          # "fast" | "balanced" | "quality"
+    # Hardest time-compression the assembler may apply to keep a segment in
+    # sync (atempo, pitch preserved). Up to ~1.15 is inaudible; the headroom
+    # above that is what stops one overlong segment from pushing every later
+    # one late. Raise it for dense dialogue, lower it if the dub sounds rushed.
+    tts_max_stretch: float = 1.4
     warmup_on_start: bool = False        # pre-load VoxCPM at server start
     qa_same_language: bool = False       # whisper-roundtrip QA on same-language dubs too
 
@@ -132,6 +137,7 @@ def _load_config() -> UserConfig:
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
         "GOCHIDUBB_WARMUP": "warmup_on_start",
         "GOCHIDUBB_QA_SAME_LANGUAGE": "qa_same_language",
+        "GOCHIDUBB_TTS_MAX_STRETCH": "tts_max_stretch",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
         "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",

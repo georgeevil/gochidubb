@@ -2287,11 +2287,29 @@ async def _stage_assemble(job, work, ctx, update, perf):
     )
     _save_placements(work, segments)
     ctx["dubbed_wav"] = dubbed_wav
+    # The assembler wrote placed_start/placed_end onto the local copies above.
+    # Carry them back so everything downstream — the assemble_done checkpoint,
+    # burn-in subtitles, showcase cuts — reads the timeline the audio actually
+    # has rather than the source timings it was built from.
+    for src_seg, placed in zip(ctx["segments"], segments):
+        if "placed_start" in placed:
+            src_seg["placed_start"] = placed["placed_start"]
+            src_seg["placed_end"] = placed["placed_end"]
+    # Rewrite the subtitles against that timeline. The first write happens
+    # back in the translate stage, before a single segment has been placed,
+    # so its timings leave the SRT out of sync with the audio by however far
+    # the dub had to shift.
+    try:
+        write_srt(segments, str(work / "subtitles.srt"))
+    except Exception as e:
+        log.warning(f"Could not rewrite SRT against dubbed timings: {e}")
     # Persist what the assembler measured (previously log-only): how many
     # segments needed atempo stretching, and the ffmpeg loudnorm measurement
     # (input/output LUFS, true peak, LRA) parsed from print_format=json.
     if isinstance(asm_info, dict):
         perf["stretched_count"] = asm_info.get("stretched_count")
+        perf["hard_compressed"] = asm_info.get("hard_compressed")
+        perf["max_drift_sec"] = asm_info.get("max_drift_sec")
         if asm_info.get("loudnorm"):
             perf["loudnorm"] = asm_info["loudnorm"]
     try:
@@ -3685,15 +3703,20 @@ async def burn_subtitles(
 
 
 def _write_srt_file(segments: list, dst: Path):
-    """Write segments as an SRT file (SubRip format)."""
+    """Write segments as an SRT file (SubRip format).
+
+    Prefers the dubbed timeline (placed_start/placed_end, set by the
+    assembler) so burn-in subtitles track the audio; falls back to source
+    timings for a transcript that was never assembled.
+    """
     def _fmt(t: float) -> str:
         h = int(t // 3600); m = int((t % 3600) // 60)
         s = int(t % 60); ms = int((t - int(t)) * 1000)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     lines = []
     for i, seg in enumerate(segments, 1):
-        start = _fmt(seg.get("start", 0.0))
-        end = _fmt(seg.get("end", 0.0))
+        start = _fmt(seg.get("placed_start", seg.get("start", 0.0)))
+        end = _fmt(seg.get("placed_end", seg.get("end", 0.0)))
         text = (seg.get("translated_text") or seg.get("text") or "").strip()
         # Strip emotion tags like "(happy)" that are TTS-only and shouldn't
         # appear in subtitle text; keep only the spoken part

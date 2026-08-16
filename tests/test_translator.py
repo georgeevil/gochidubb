@@ -262,6 +262,80 @@ class TestAlignmentPlausibility:
                "friends; a formal alternative would be Здравствуйте."]
         assert not _alignment_is_plausible(src, tgt)
 
+    def test_checks_every_line_against_the_target_language(self):
+        src = ["Hola mamá", "Te amo mucho"]
+        tgt = ["Здравей, мамо", "Te amo mucho"]
+        assert not _alignment_is_plausible(src, tgt, "bg")
+
+
+class TestRejectionReason:
+    """_rejection_reason() is the single validator both translation paths use.
+
+    The batch path had a length check; the single-line fallback had none, so
+    a model that narrated the task instead of translating had its whole
+    chain-of-thought accepted as the translation and synthesized into speech.
+    """
+
+    def test_accepts_a_real_translation(self):
+        assert T._rejection_reason("Hola mamá", "Здравей, мамо", "bg") is None
+
+    def test_accepts_weak_but_genuine_translation(self):
+        # Poor quality is not this function's business — only "not a
+        # translation at all" is.
+        assert T._rejection_reason(
+            " Hola, mamá. Te amo mucho.",
+            "Здравей, мамо. Обичам те много.",
+            "bg",
+        ) is None
+
+    def test_rejects_empty(self):
+        assert T._rejection_reason("Hola", "   ", "bg") == "empty"
+
+    def test_rejects_chain_of_thought_by_length(self):
+        src = "Te amo mucho, gracias por apoyarme"
+        tgt = ("The user wants me to translate a Spanish text into Russian. "
+               "Source Text: ... Breakdown and Translation: " + "x" * 400)
+        reason = T._rejection_reason(src, tgt, "ru")
+        assert reason and "implausibly long" in reason
+
+    def test_rejects_meta_prose_even_when_short(self):
+        # A Latin-script target gets no script check, so the prose pattern is
+        # the only thing standing between this and the TTS engine.
+        reason = T._rejection_reason("Te amo", "Here is the translation: Je t'aime", "fr")
+        assert reason and "about the task" in reason
+
+    def test_rejects_untranslated_source_for_non_latin_target(self):
+        reason = T._rejection_reason(
+            "Hola mamá, te amo mucho", "Hola mamá, te amo mucho", "ru")
+        assert reason and "wrong script" in reason
+
+    def test_rejects_english_answer_for_non_latin_target(self):
+        reason = T._rejection_reason(
+            "Hola mamá, te amo mucho", "Hello mom, I love you very much", "ru")
+        assert reason and "wrong script" in reason
+
+    def test_allows_latin_target_to_look_latin(self):
+        assert T._rejection_reason("Te amo mucho", "Je t'aime beaucoup", "fr") is None
+
+    def test_no_script_rule_for_dual_script_languages(self):
+        # Serbian, Kazakh, Azerbaijani, Uzbek and Mongolian are all written in
+        # Latin as well as Cyrillic; a script check would reject valid work.
+        for lang in ("sr", "kk", "az", "uz", "mn"):
+            assert T._rejection_reason(
+                "Hello there friend", "Zdravo prijatelju moj", lang) is None
+
+    def test_short_answers_escape_the_script_check(self):
+        assert T._rejection_reason("Sí", "OK", "ru") is None
+
+    def test_accepts_cjk_targets(self):
+        assert T._rejection_reason(
+            "Hola mamá, te amo", "こんにちは、お母さん、大好きです", "ja") is None
+        assert T._rejection_reason("Hola mamá", "你好，妈妈，我爱你", "zh") is None
+        assert T._rejection_reason("Hola mamá", "안녕하세요 엄마 사랑해요", "ko") is None
+
+    def test_unknown_target_language_skips_the_script_check(self):
+        assert T._rejection_reason("Hello", "Anything at all here", "xx") is None
+
 
 class TestBuildBatchPrompt:
     def test_numbers_every_line(self):

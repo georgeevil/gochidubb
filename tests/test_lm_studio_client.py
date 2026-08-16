@@ -362,8 +362,15 @@ class TestNoThinkSwitch:
 
 # ── Batched translation over HTTP ────────────────────────────────────
 
-def _numbering_responder(prefix="RU:", drop_line=None, unnumbered=False):
-    """Stand in for a well-behaved (or misbehaving) translator model."""
+def _numbering_responder(prefix="ES:", drop_line=None, unnumbered=False):
+    """Stand in for a well-behaved (or misbehaving) translator model.
+
+    It echoes each source line back with a prefix, so the reply is always in
+    the Latin script. These tests therefore dub into Spanish: against a
+    Cyrillic target the echo would (rightly) be rejected as "the model
+    answered in the wrong language" and every alignment assertion here would
+    be testing that guard instead of the batching it means to test.
+    """
     def respond(body):
         text = body.get("input") or body["messages"][-1]["content"]
         lines = []
@@ -399,16 +406,56 @@ def _segs(*texts):
     return [{"start": i, "end": i + 1, "text": t} for i, t in enumerate(texts)]
 
 
+class TestUntranslatedRepliesAreRejected:
+    """A reply that isn't a translation must not reach the TTS engine.
+
+    Observed on a real dub: gemma-4-e4b answered a batch with its whole
+    chain-of-thought as plain prose (no <think> tags, so _strip_reasoning
+    couldn't see it). The batch parse failed, the ladder split down to single
+    lines, and the single-line path — which had no validation at all — handed
+    838 characters of English commentary back as the translation of a
+    132-character line. All six segments were synthesized that way.
+    """
+
+    def test_wrong_script_reply_is_discarded_and_the_source_survives(
+            self, stub, batching):
+        # Echoes the source (Spanish) back while the target is Russian.
+        stub.native_body = _numbering_responder()
+        segs = _segs("Hola mamá, te amo mucho", "Gracias por todo, mamá")
+
+        out = _run(stub, T.translate_segments(
+            segs, "ru", model="m", max_concurrent=1))
+
+        # Falls back to source text, which server.py reports as untranslated
+        # so the UI can offer "retry failed segments only".
+        assert [s["translated_text"] for s in out] == [
+            "Hola mamá, te amo mucho", "Gracias por todo, mamá"]
+
+    def test_narrated_reasoning_is_discarded(self, stub, batching):
+        def respond(body):
+            return 200, {"output": [{"type": "message", "content": (
+                "The user wants me to translate this text into Spanish. "
+                "Source Text: ... Breakdown and Translation: " + "x" * 300)}]}
+
+        stub.native_body = respond
+        segs = _segs("Gracias por todo lo que has hecho por mí")
+
+        out = _run(stub, T.translate_segments(
+            segs, "es", model="m", max_concurrent=1))
+
+        assert out[0]["translated_text"] == "Gracias por todo lo que has hecho por mí"
+
+
 class TestBatchedTranslation:
     def test_many_segments_take_few_requests(self, stub, batching):
         """The point of the whole exercise: 8 subtitles, not 8 round trips."""
         stub.native_body = _numbering_responder()
         segs = _segs(*[f"line {i}" for i in range(8)])
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         assert [s["translated_text"] for s in out] == [
-            f"RU: line {i}" for i in range(8)]
+            f"ES: line {i}" for i in range(8)]
         assert len(stub.requests) == 2, "8 lines / batch of 4 = 2 requests"
 
     def test_each_line_keeps_its_own_translation(self, stub, batching):
@@ -417,35 +464,35 @@ class TestBatchedTranslation:
         stub.native_body = _numbering_responder()
         segs = _segs("first", "second", "third")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
         assert [s["translated_text"] for s in out] == [
-            "RU: first", "RU: second", "RU: third"]
+            "ES: first", "ES: second", "ES: third"]
 
     def test_a_dropped_line_makes_the_batch_split_instead_of_shifting(
             self, stub, batching):
         stub.native_body = _numbering_responder(drop_line=2)
         segs = _segs("a", "b", "c", "d")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         # Every line still maps to its own source, via the split-and-retry
         # ladder — never "b" translated as "c".
         assert [s["translated_text"] for s in out] == [
-            "RU: a", "RU: b", "RU: c", "RU: d"]
+            "ES: a", "ES: b", "ES: c", "ES: d"]
         assert len(stub.requests) > 1, "should have split the bad batch"
 
     def test_an_unnumbered_reply_falls_back_to_single_lines(self, stub, batching):
         stub.native_body = _numbering_responder(unnumbered=True)
         segs = _segs("a", "b")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
-        assert [s["translated_text"] for s in out] == ["RU: a", "RU: b"]
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
+        assert [s["translated_text"] for s in out] == ["ES: a", "ES: b"]
 
     def test_empty_segments_cost_no_requests(self, stub, batching):
         stub.native_body = _numbering_responder()
         segs = _segs("", "   ", "")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
         assert [s["translated_text"] for s in out] == ["", "", ""]
         assert stub.requests == []
 
@@ -453,10 +500,10 @@ class TestBatchedTranslation:
         stub.native_body = _numbering_responder()
         segs = _segs("Okay.", "something else entirely", "Okay.", "okay.")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         assert [s["translated_text"] for s in out] == [
-            "RU: Okay.", "RU: something else entirely", "RU: Okay.", "RU: Okay."]
+            "ES: Okay.", "ES: something else entirely", "ES: Okay.", "ES: Okay."]
         # Only 2 unique lines were sent, so they fit in one batch
         sent = stub.requests[0][1]["input"]
         assert sent.count("Okay.") == 1
@@ -465,11 +512,11 @@ class TestBatchedTranslation:
         stub.native_body = _numbering_responder()
         segs = _segs(*[f"line {i}" for i in range(8)])
 
-        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         second = stub.requests[1][1]["input"]
         assert "do NOT translate" in second
-        assert "RU: line 3" in second, "should see the previous batch's output"
+        assert "ES: line 3" in second, "should see the previous batch's output"
 
     def test_progress_is_reported(self, stub, batching):
         stub.native_body = _numbering_responder()
@@ -477,7 +524,7 @@ class TestBatchedTranslation:
         segs = _segs(*[f"line {i}" for i in range(8)])
 
         _run(stub, T.translate_segments(
-            segs, "ru", model="m", max_concurrent=1,
+            segs, "es", model="m", max_concurrent=1,
             progress_callback=lambda done, total, eta: seen.append((done, total))))
 
         assert seen[-1] == (8, 8)
@@ -487,7 +534,7 @@ class TestBatchedTranslation:
         stub.native_body = _numbering_responder()
         segs = _segs(*["a rather long line of source text " * 40 for _ in range(4)])
 
-        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
         assert stub.requests[0][1]["max_output_tokens"] > T.LM_STUDIO_MAX_OUTPUT_TOKENS
 
     def test_dead_server_gives_up_instead_of_retrying_every_line(
@@ -499,7 +546,7 @@ class TestBatchedTranslation:
         stub.native_body = {"error": {"message": "engine crashed"}}
         segs = _segs(*[f"line {i}" for i in range(40)])
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         # Untranslated == source text, which the retry-failed-only UI keys on
         assert [s["translated_text"] for s in out] == [f"line {i}" for i in range(40)]
@@ -519,7 +566,7 @@ class TestBatchedTranslation:
 
 # ── Budget starvation vs timeout ─────────────────────────────────────
 
-def _budget_gated_responder(needs_budget, prefix="RU:"):
+def _budget_gated_responder(needs_budget, prefix="ES:"):
     """A thinking model: answers only once its output budget is big enough.
 
     Below the threshold it burns the whole budget reasoning and returns no
@@ -561,9 +608,9 @@ class TestBudgetStarvation:
         stub.native_body = _budget_gated_responder(needs_budget=9000)
         segs = _segs(*[f"line {i}" for i in range(4)])
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
-        assert [s["translated_text"] for s in out] == [f"RU: line {i}" for i in range(4)]
+        assert [s["translated_text"] for s in out] == [f"ES: line {i}" for i in range(4)]
         budgets = [b["max_output_tokens"] for _, b in stub.requests]
         assert budgets[0] < budgets[-1], "budget should have been escalated"
         # Same 4 lines every time — never split into smaller batches
@@ -574,7 +621,7 @@ class TestBudgetStarvation:
         stub.native_body = _budget_gated_responder(needs_budget=9000)
         segs = _segs(*[f"line {i}" for i in range(8)])   # 2 batches of 4
 
-        _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
 
         budgets = [b["max_output_tokens"] for _, b in stub.requests]
         # The last request must not have started back at 1×
@@ -588,15 +635,15 @@ class TestBudgetStarvation:
         stub.native_body = _budget_gated_responder(needs_budget=9000)
         segs = _segs(*[f"line {i}" for i in range(12)])
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
-        assert all(s["translated_text"].startswith("RU:") for s in out)
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
+        assert all(s["translated_text"].startswith("ES:") for s in out)
 
     def test_gives_up_escalating_eventually(self, stub, batching):
         """A model stuck in a reasoning loop must not escalate forever."""
         stub.native_body = _budget_gated_responder(needs_budget=10 ** 9)
         segs = _segs("only line")
 
-        out = _run(stub, T.translate_segments(segs, "ru", model="m", max_concurrent=1))
+        out = _run(stub, T.translate_segments(segs, "es", model="m", max_concurrent=1))
         assert out[0]["translated_text"] == "only line"      # left untranslated
         budgets = [b["max_output_tokens"] for _, b in stub.requests]
         assert max(budgets) <= T._batch_output_budget(["only line"]) * \
@@ -631,7 +678,7 @@ class TestTimeoutIsReportedWithItsType:
 
         monkeypatch.setattr(T, "lm_studio_chat", boom)
         with pytest.raises(T.LMStudioTimeoutError) as ei:
-            _run(stub, T._translate_batch(["a", "b"], "ru", "m", "", None, None))
+            _run(stub, T._translate_batch(["a", "b"], "es", "m", "", None, None))
         assert str(ei.value), "must not be an empty message"
         assert "TimeoutError" in str(ei.value)
 
@@ -674,12 +721,12 @@ class TestTimeoutRetriesBeforeSplitting:
         mod.lm_studio_chat = slow_once
         try:
             segs = _segs("a", "b", "c", "d")
-            out = _run(stub, T.translate_segments(segs, "ru", model="m",
+            out = _run(stub, T.translate_segments(segs, "es", model="m",
                                                   max_concurrent=1))
         finally:
             mod.lm_studio_chat = real_chat
 
         assert [s["translated_text"] for s in out] == \
-            ["RU: a", "RU: b", "RU: c", "RU: d"]
+            ["ES: a", "ES: b", "ES: c", "ES: d"]
         # The retry must be the SAME 4 lines, not two halves
         assert any("4. d" in b["input"] for _, b in stub.requests)

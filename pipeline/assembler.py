@@ -36,10 +36,22 @@ def format_srt_time(seconds: float) -> str:
 
 
 def write_srt(segments, output_path):
+    """Write subtitles against the DUBBED timeline where we know it.
+
+    A segment that had to be shifted or compressed to fit no longer sits at
+    its source timestamp, and subtitles written from `start`/`end` drift out
+    of sync with the audio by exactly that amount. `placed_start`/
+    `placed_end` are set by assemble_dubbed_audio(); they're absent when the
+    SRT is written for a source-language transcript that was never assembled,
+    in which case the original timing is the right answer.
+    """
     with open(output_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(segments):
             text = seg.get("translated_text", seg["text"])
-            f.write(f"{i+1}\n{format_srt_time(seg['start'])} --> {format_srt_time(seg['end'])}\n{text}\n\n")
+            start = seg.get("placed_start", seg["start"])
+            end = seg.get("placed_end", seg["end"])
+            f.write(f"{i+1}\n{format_srt_time(start)} --> "
+                    f"{format_srt_time(end)}\n{text}\n\n")
 
 
 def _parse_loudnorm_stderr(text: str) -> dict:
@@ -151,19 +163,83 @@ def _atempo_stretch(wav_path: str, speed: float) -> str:
     is pitch-shift = chipmunk effect). Returns path to stretched file."""
     if abs(speed - 1.0) < 0.02:
         return wav_path
-    # atempo only accepts 0.5-2.0; chain for extremes (we cap at 1.15 anyway)
+    # A single atempo only accepts 0.5–2.0. We stay under 2.0 in practice, but
+    # chain the filter rather than silently emitting an invalid one if a
+    # configured cap ever goes past it.
+    remaining, stages = speed, []
+    while remaining > 2.0:
+        stages.append(2.0)
+        remaining /= 2.0
+    stages.append(remaining)
+    chain = ",".join(f"atempo={s:.3f}" for s in stages)
     out = wav_path + f".{speed:.2f}x.wav"
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", wav_path,
-             "-filter:a", f"atempo={speed:.3f}",
-             out],
+            ["ffmpeg", "-y", "-i", wav_path, "-filter:a", chain, out],
             check=True, capture_output=True, timeout=60,
         )
         return out
     except Exception as e:
         log.warning(f"atempo failed: {e}, using original")
         return wav_path
+
+
+# Smallest silence left between two consecutive dubbed segments. Without it,
+# compressing a segment to exactly the next one's start makes speakers run
+# into each other with no breath at all.
+MIN_SEGMENT_GAP = 0.08
+
+# Stretch that listeners don't register as "sped up". Anything above this is
+# still applied when it's the only way to hold sync, but it gets logged.
+NATURAL_STRETCH = 1.15
+_DEFAULT_MAX_STRETCH = 1.4
+
+
+def plan_segment_fit(seg_start, next_start, tts_dur, current_end,
+                     max_stretch=_DEFAULT_MAX_STRETCH):
+    """Where a segment goes and how hard to compress it: (start, speed).
+
+    VoxCPM has no speaking-rate control, so a segment comes out however long
+    it comes out — against a fast-talking source that is routinely 1.5-2x its
+    slot. Time-stretching after the fact is the only lever, and how hard to
+    pull it is a timeline decision, which is why it lives here and not in the
+    synthesizer.
+
+    The old policy capped the stretch at 1.15x and let anything longer spill
+    forward, with each spill pushing the next segment later. The error
+    accumulated: measured on a 51s clip, the dub ran ~10s past the last source
+    utterance and every pause between speakers had closed into one continuous
+    wall of speech.
+
+    Two things fix that. A segment's budget runs to the NEXT segment's start,
+    not merely to its own `end` — the pause after someone stops talking is
+    fair game and is usually where an overrun fits for free. And when a
+    segment does have to start late its budget shrinks with it, so the
+    compression that pays the drift back is applied automatically instead of
+    being handed to the segment after it.
+
+    `speed` is 1.0 when no stretching is needed; it is never below 1.0,
+    because stretching short audio out to fill a slot only adds dead air.
+    """
+    start = seg_start
+    if current_end > 0 and start < current_end + MIN_SEGMENT_GAP:
+        start = current_end + MIN_SEGMENT_GAP
+
+    room = next_start - MIN_SEGMENT_GAP - start
+    if room <= 0.2 or tts_dur <= room * 1.02:
+        return start, 1.0
+    return start, min(tts_dur / room, max(max_stretch, 1.0))
+
+
+def _max_stretch_setting() -> float:
+    """Configured ceiling on time-compression (cfg.tts_max_stretch)."""
+    try:
+        from app.config import cfg as _user_cfg
+        value = float(getattr(_user_cfg, "tts_max_stretch", _DEFAULT_MAX_STRETCH))
+    except Exception:
+        return _DEFAULT_MAX_STRETCH
+    # Below 1.0 would mean "stretch it longer", which this code never does.
+    return min(max(value, 1.0), 2.5)
 
 
 def assemble_dubbed_audio(segments, total_duration, output_path,
@@ -206,16 +282,23 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
 
     valid_count = 0
     stretched_count = 0
+    hard_compressed = 0     # segments that needed more than NATURAL_STRETCH
     current_end = 0.0  # track cumulative end time to push next segments forward if needed
+    base_max_stretch = _max_stretch_setting()
 
-    for seg in segments:
+    # Where the next segment wants to start speaking. A segment's real budget
+    # runs up to that point, not merely to its own `end` — the pause after
+    # someone stops talking is fair game, and it is usually where an overrun
+    # fits at no audible cost.
+    next_starts = [segments[i + 1]["start"] for i in range(len(segments) - 1)]
+    next_starts.append(total_duration)
+
+    for seg_i, seg in enumerate(segments):
         audio_path = seg.get("audio_path")
         if not audio_path or not os.path.exists(audio_path):
             continue
 
         try:
-            # Decide if we need to time-stretch (proper atempo, not pitch-shift)
-            slot_dur = seg["end"] - seg["start"]
             # Quick duration read without full load
             info = sf.info(audio_path)
             tts_dur = info.frames / info.samplerate
@@ -227,16 +310,23 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
             # a slightly more aggressive stretch to compensate.
             text = (seg.get("translated_text") or "").lstrip()
             has_emotion = text.startswith("(") and ")" in text[:30]
-            max_stretch = 1.22 if has_emotion else 1.15
+            max_stretch = base_max_stretch + (0.07 if has_emotion else 0.0)
+
+            start, speed = plan_segment_fit(
+                seg["start"], next_starts[seg_i], tts_dur, current_end,
+                max_stretch,
+            )
 
             stretched_path = audio_path
-            if slot_dur > 0.2 and tts_dur > slot_dur * 1.05:
-                # Need stretch. Cap preserves quality — beyond the cap we
-                # let audio spill over into next slot (better than chipmunk).
-                speed = min(tts_dur / slot_dur, max_stretch)
-                if speed > 1.02:
-                    stretched_path = _atempo_stretch(audio_path, speed)
-                    stretched_count += 1
+            if speed > 1.02:
+                stretched_path = _atempo_stretch(audio_path, speed)
+                stretched_count += 1
+                if speed > NATURAL_STRETCH:
+                    hard_compressed += 1
+                    log.debug(
+                        f"Segment {seg_i} compressed {speed:.2f}x "
+                        f"({tts_dur:.2f}s of audio, placed at {start:.2f}s)"
+                    )
 
             data, sr = sf.read(stretched_path, dtype="float32")
             if data.ndim > 1:
@@ -268,9 +358,9 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
                 data[:fade_samples] *= fade_in
                 data[-fade_samples:] *= fade_out
 
-            # Position: use original start, but shift forward if it would overlap
-            # an earlier segment that's still playing.
-            start = max(seg["start"], current_end)
+            # `start` was decided above, before stretching — the budget and
+            # the placement have to agree, or the compression would be sized
+            # for a slot the segment doesn't actually land in.
             offset = int(start * sample_rate)
             end = min(offset + len(data), n_samples)
             length = end - offset
@@ -291,6 +381,27 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
 
     if stretched_count > 0:
         log.info(f"Time-stretched {stretched_count}/{valid_count} segments (pitch preserved)")
+    if hard_compressed > 0:
+        log.info(
+            f"{hard_compressed} segment(s) needed more than "
+            f"{NATURAL_STRETCH:.2f}x to hold sync — the translations for those "
+            f"are longer than their slots can carry"
+        )
+
+    # How far the dub ended up from the source timing. This was invisible
+    # before, which is how a 10-second drift shipped: every individual
+    # segment looked fine, only the accumulation was wrong.
+    max_drift = max(
+        (seg["placed_start"] - seg["start"]
+         for seg in segments if "placed_start" in seg),
+        default=0.0,
+    )
+    if max_drift > 0.5:
+        log.warning(
+            f"Dubbed speech drifts up to {max_drift:.1f}s behind the source "
+            f"(raise cfg.tts_max_stretch, currently {base_max_stretch:.2f}, "
+            f"or shorten the translations to reduce it)"
+        )
 
     # Trim trailing silence beyond last actual audio (keep small tail)
     if current_end > 0 and current_end + 0.5 < target_duration:
@@ -314,6 +425,8 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
         "output_path": output_path,
         "valid_count": valid_count,
         "stretched_count": stretched_count,
+        "hard_compressed": hard_compressed,
+        "max_drift_sec": round(float(max_drift), 2),
         "loudnorm": loudnorm_info or None,
     }
 

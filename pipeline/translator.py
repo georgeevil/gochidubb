@@ -945,15 +945,134 @@ def _parse_numbered_lines(raw: str, expected: int) -> Optional[List[str]]:
     return [_clean_translation(v) or v.strip() for v in out]
 
 
-def _alignment_is_plausible(sources: List[str], targets: List[str]) -> bool:
-    """Reject a parsed batch whose lines are wildly the wrong size.
+# Prose a model writes *about* the translation instead of the translation.
+# gemma-4-e4b emits its whole chain-of-thought this way — as plain text with
+# no <think> tags, so _strip_reasoning can't see it — and the single-line
+# path used to hand all 838 characters of it back as the "translation",
+# which then got synthesized into ten seconds of speech.
+_META_PROSE_RE = re.compile(
+    r"(the user (?:wants|asked|is asking|provided)"
+    r"|here(?:'s| is) (?:the|my) translation"
+    r"|source text\s*:"
+    r"|breakdown and translation"
+    r"|combining and refining"
+    r"|let me (?:translate|think|break)"
+    r"|i(?:'ll| will| can) translate"
+    r"|as an ai\b"
+    r"|okay,? (?:so )?the user)",
+    re.IGNORECASE,
+)
+
+# Languages whose script is unambiguous, so output in the wrong script means
+# the model answered in the wrong language (or answered *about* the task).
+# Deliberately excludes sr/kk/az/uz/mn — all of those are written in both
+# Latin and Cyrillic in the wild, so a script check would reject valid work.
+_SCRIPT_RANGES: Dict[str, Tuple[Tuple[int, int], ...]] = {
+    "cyrillic": ((0x0400, 0x04FF), (0x0500, 0x052F)),
+    "greek": ((0x0370, 0x03FF), (0x1F00, 0x1FFF)),
+    "hebrew": ((0x0590, 0x05FF),),
+    "arabic": ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF)),
+    "devanagari": ((0x0900, 0x097F),),
+    "bengali": ((0x0980, 0x09FF),),
+    "gujarati": ((0x0A80, 0x0AFF),),
+    "gurmukhi": ((0x0A00, 0x0A7F),),
+    "tamil": ((0x0B80, 0x0BFF),),
+    "telugu": ((0x0C00, 0x0C7F),),
+    "kannada": ((0x0C80, 0x0CFF),),
+    "malayalam": ((0x0D00, 0x0D7F),),
+    "sinhala": ((0x0D80, 0x0DFF),),
+    "thai": ((0x0E00, 0x0E7F),),
+    "lao": ((0x0E80, 0x0EFF),),
+    "khmer": ((0x1780, 0x17FF),),
+    "burmese": ((0x1000, 0x109F),),
+    "georgian": ((0x10A0, 0x10FF), (0x1C90, 0x1CBF)),
+    "armenian": ((0x0530, 0x058F),),
+    "hangul": ((0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)),
+    # Japanese needs kana OR han; Chinese needs han.
+    "japanese": ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0x3400, 0x4DBF)),
+    "han": ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF)),
+}
+
+_LANG_SCRIPT = {
+    "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "mk": "cyrillic",
+    "el": "greek", "he": "hebrew",
+    "ar": "arabic", "fa": "arabic", "ur": "arabic",
+    "hi": "devanagari", "mr": "devanagari", "ne": "devanagari",
+    "bn": "bengali", "gu": "gujarati", "ta": "tamil", "te": "telugu",
+    "kn": "kannada", "ml": "malayalam", "si": "sinhala",
+    "th": "thai", "lo": "lao", "km": "khmer", "my": "burmese",
+    "ka": "georgian", "hy": "armenian",
+    "ko": "hangul", "ja": "japanese", "zh": "han",
+}
+
+# Below this many letters a script ratio is noise — "OK." or a bare name is
+# a legitimate translation that happens to carry no target-script characters.
+# Set low on purpose: the two errors are not symmetric. A wrongly rejected
+# line falls back to its source text and the UI offers "retry failed segments
+# only"; a wrongly accepted one gets synthesized into speech in the wrong
+# language and is only found by listening to the finished video.
+_MIN_LETTERS_FOR_SCRIPT_CHECK = 8
+_MIN_SCRIPT_RATIO = 0.3
+
+
+def _script_ratio(text: str, script: str) -> Tuple[float, int]:
+    """(fraction of letters belonging to `script`, total letter count)."""
+    ranges = _SCRIPT_RANGES.get(script) or ()
+    letters = in_script = 0
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        letters += 1
+        cp = ord(ch)
+        if any(lo <= cp <= hi for lo, hi in ranges):
+            in_script += 1
+    return (in_script / letters if letters else 1.0), letters
+
+
+def _rejection_reason(src: str, tgt: str, target_lang: str = "") -> Optional[str]:
+    """Why this line is not a usable translation of `src`, or None if it is.
+
+    Three ways a model fails while still *looking* like it answered, all of
+    them observed on real dubs:
+
+    * **Length blow-up** — commentary, or the source echoed back with notes.
+      A subtitle translation is never 5× its source plus 80 characters.
+    * **Meta prose** — the model narrated the task instead of doing it.
+    * **Wrong script** — it answered in the source language (or in English)
+      when the target language is written in another script entirely.
+
+    Length alone used to be the only check, and only on batches; a
+    single-line retry could return anything at all.
+    """
+    tgt = (tgt or "").strip()
+    if not tgt:
+        return "empty"
+    if len(tgt) > max(80, len(src) * 5):
+        return f"implausibly long ({len(tgt)} chars for a {len(src)}-char source)"
+    m = _META_PROSE_RE.search(tgt)
+    if m:
+        return f"model wrote about the task ({m.group(0)!r})"
+    script = _LANG_SCRIPT.get((target_lang or "").strip().lower()[:2])
+    if script:
+        ratio, letters = _script_ratio(tgt, script)
+        if letters >= _MIN_LETTERS_FOR_SCRIPT_CHECK and ratio < _MIN_SCRIPT_RATIO:
+            return (f"wrong script — only {ratio:.0%} of {letters} letters are "
+                    f"{script} but the target is {target_lang}")
+    return None
+
+
+def _alignment_is_plausible(
+    sources: List[str], targets: List[str], target_lang: str = ""
+) -> bool:
+    """Reject a parsed batch that isn't actually a translation.
 
     A model that ignores the format and writes commentary usually still
-    numbers it, so the shape alone isn't proof. Length is: a subtitle
-    translation is never 5× its source plus 80 characters.
+    numbers it, so the numbering alone isn't proof the reply is good.
     """
     for src, tgt in zip(sources, targets):
-        if len(tgt) > max(80, len(src) * 5):
+        reason = _rejection_reason(src, tgt, target_lang)
+        if reason:
+            logger.warning(f"[translate] Rejecting line — {reason}")
             return False
     return True
 
@@ -1005,10 +1124,10 @@ async def _translate_batch(
             f"splitting. Reply started: {(raw or '')[:120]!r}"
         )
         return None
-    if not _alignment_is_plausible(texts, parsed):
+    if not _alignment_is_plausible(texts, parsed, target_lang):
         logger.warning(
-            f"[translate] Batch of {len(texts)} parsed but a line is "
-            f"implausibly long (model likely added commentary); splitting"
+            f"[translate] Batch of {len(texts)} parsed but a line isn't a "
+            f"usable translation (see above); splitting"
         )
         return None
     return parsed
@@ -1121,10 +1240,20 @@ async def _translate_single(
                     glossary=glossary,
                     prev_pairs=prev_pairs,
                 )
-            if (out or "").strip():
+            # The same validation the batch path applies. Without it this
+            # last-resort rung accepted literally anything the model said —
+            # a whole chain-of-thought came back as the "translation" of a
+            # 132-character line and was synthesized into speech.
+            reason = _rejection_reason(text, out, target_lang)
+            if not reason:
                 circuit.record_success()
                 return out
-            logger.warning(f"Empty translation for: {text[:50]}...")
+            # The server answered, so this is the model's format failing,
+            # not a backend outage: don't trip the circuit over it.
+            circuit.record_success()
+            logger.warning(
+                f"[translate] Discarding reply for {text[:40]!r} — {reason}"
+            )
         except LMStudioFatalError:
             raise
         except LMStudioBudgetError as e:
