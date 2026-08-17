@@ -474,6 +474,21 @@ re-run the comparison against whatever you have installed.
 
 Short answer: `LM_STUDIO_MODEL=openai/gpt-oss-20b`.
 
+### Reusing work across runs (beta)
+
+Re-dubbing into a second language recomputes the download, audio extraction,
+transcript and diarization — 60% of pipeline time — even though none of it
+depends on the target language. Stage reuse keys each stage on its inputs
+instead of on the job that ran it, so a second job can copy the first's work.
+
+```bash
+GOCHIDUBB_REUSE=1                  # off by default
+GOCHIDUBB_REUSE_STAGES=download,extract,transcribe,diarize
+```
+
+A separate page at `/beta` shows what is cached, what is being reused, and why
+anything is being refused. **[→ Stage reuse](docs/stage-reuse.md)**
+
 ### Keeping the dub in sync
 
 Translations are rarely the same length as their source, and speech has to fit
