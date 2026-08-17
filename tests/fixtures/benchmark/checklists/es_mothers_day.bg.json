@@ -1,0 +1,105 @@
+{
+  "fixture": "es_mothers_day",
+  "target_lang": "bg",
+  "author_note": "Checked by hand against the Spanish source. Bulgarian is the language this benchmark exists because of: models trained mostly on Russian answer in Russian-shaped text for any Slavic target, and every mechanical check passes while they do it.",
+  "checks": [
+    {
+      "segment": 0,
+      "label": "gracias -> благодаря",
+      "expect": "благодар",
+      "reject": "\\bМоля\\b",
+      "why": "Моля is 'please' or 'you're welcome', never 'gracias'"
+    },
+    {
+      "segment": 0,
+      "label": "te amo -> обичам те",
+      "expect": "обичам\\s+те|те\\s+обичам|обожавам\\s+те",
+      "why": "The whole line is a declaration of love; losing it loses the segment"
+    },
+    {
+      "segment": 1,
+      "label": "Mother's Day",
+      "expect": "[Мм]айчин(?:ия[т]?)?\\s+ден|[Дд]ен(?:я|ят)?\\s+на\\s+майк",
+      "reject": "[Дд]ень|матиц",
+      "why": "Майчин ден and Ден на майката are both correct. 'День' is Russian and 'матица' is not a word"
+    },
+    {
+      "segment": 1,
+      "label": "hola -> здравей",
+      "expect": "[Зз]дравей|[Зз]драсти|[Зз]дравейте",
+      "why": "A greeting the viewer hears at the top of the clip"
+    },
+    {
+      "segment": 2,
+      "label": "cómo estás -> как си",
+      "expect": "[Кк]ак\\s+си\\b|[Кк]ак\\s+се\\s+чувстваш",
+      "why": "A direct question to the mother"
+    },
+    {
+      "segment": 2,
+      "label": "best mom in the world",
+      "expect": "най-добрата\\s+ма(?:йка|ма).{0,14}свет[аъ]",
+      "reject": "на\\s+свет\\b",
+      "why": "'на свет' is Russian; Bulgarian is 'на света'"
+    },
+    {
+      "segment": 3,
+      "label": "gracias -> благодаря",
+      "expect": "благодар",
+      "reject": "\\bМоля\\b",
+      "why": "Моля is 'please', never 'gracias'"
+    },
+    {
+      "segment": 3,
+      "label": "Mother's Day",
+      "expect": "[Мм]айчин(?:ия[т]?)?\\s+ден|[Дд]ен(?:я|ят)?\\s+на\\s+майк",
+      "reject": "[Дд]ень|матиц",
+      "why": "Second occurrence; models that get it wrong get it wrong twice"
+    },
+    {
+      "segment": 4,
+      "label": "gracias -> благодаря",
+      "expect": "благодар",
+      "reject": "\\bМоля\\b",
+      "why": "Моля is 'please', never 'gracias'"
+    },
+    {
+      "segment": 5,
+      "label": "que sepas -> да знаеш",
+      "expect": "да\\s+знаеш|[Зз]най,?\\s+че",
+      "why": "Both renderings are correct Bulgarian"
+    },
+    {
+      "segment": 5,
+      "label": "te extraño -> липсва",
+      "expect": "липсва",
+      "reject": "скуча",
+      "why": "'скучам по' is a Russian calque; Bulgarian is 'липсваш ми'"
+    },
+    {
+      "segment": 5,
+      "label": "adiós -> a real farewell",
+      "expect": "[Дд]овиждане|[Чч]ао|[Дд]о\\s+скоро|[Сс]богом|[Дд]о\\s+нови\\s+срещи",
+      "reject": "слагание",
+      "why": "'До слагание' is a mangling of the Russian 'До свидания' and means nothing"
+    },
+    {
+      "segment": 6,
+      "label": "disfrutes este día",
+      "expect": "насла|прекара|радва|приятн",
+      "why": "A wish for the day. The stem must be 'насла', not 'наслад' — Bulgarian has both насладиш and наслаждавай, and matching only the first marks a correct translation wrong"
+    }
+  ],
+  "penalties": [
+    {
+      "label": "clitic opens a clause",
+      "pattern": "(?:^|[.!?]\\s+)(?:Те|Ме|Ти|Се)\\s+\\w",
+      "why": "Bulgarian clitics cannot open a clause: 'Обичам те много' or 'Много те обичам', never 'Те обичам много'. Models transfer the Russian order"
+    },
+    {
+      "label": "Russian vocabulary",
+      "pattern": "\\bДень\\b|матиц|скуча|мамочк|на\\s+свет\\b|слагание|надежам|делала",
+      "why": "Words that are Russian, not Bulgarian — the tell that a model is leaning on its Russian training data"
+    }
+  ]
+}
