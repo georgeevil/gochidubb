@@ -71,6 +71,27 @@ class UserConfig:
     # one late. Raise it for dense dialogue, lower it if the dub sounds rushed.
     tts_max_stretch: float = 1.4
     warmup_on_start: bool = False        # pre-load VoxCPM at server start
+
+    # ── Stage reuse (beta) ────────────────────────────────────────────
+    # Skip a pipeline stage when a previous job already computed the same
+    # thing from the same inputs. Download/extract/transcribe/diarize are
+    # ~60% of pipeline time and none of it depends on the target language,
+    # so a redub into a new language currently redoes all of it.
+    #
+    # Off by default: this is new, and a stale reuse is a silent failure.
+    # See docs/stage-reuse.md.
+    reuse_enabled: bool = False
+    # Stages allowed to be reused, comma-separated. The source-only stages
+    # are the safe, high-value set; translate and tts are opt-in on top.
+    reuse_stages: str = "download,extract,transcribe,diarize"
+    # Quality gates — an artifact that scored worse than this when it was
+    # produced is recomputed rather than reused. 0 disables a gate.
+    reuse_transcribe_min_word_conf: float = 0.45
+    reuse_transcribe_max_no_speech: float = 0.35
+    reuse_diarize_min_ref_sec: float = 1.0
+    reuse_translate_max_fallback: float = 0.0
+    reuse_translate_min_semantic: float = 0.67
+    reuse_tts_max_failed_qa: float = 0.25
     qa_same_language: bool = False       # whisper-roundtrip QA on same-language dubs too
 
     # ── FFmpeg (extract / render) ─────────────────────────────────────
@@ -138,6 +159,8 @@ def _load_config() -> UserConfig:
         "GOCHIDUBB_WARMUP": "warmup_on_start",
         "GOCHIDUBB_QA_SAME_LANGUAGE": "qa_same_language",
         "GOCHIDUBB_TTS_MAX_STRETCH": "tts_max_stretch",
+        "GOCHIDUBB_REUSE": "reuse_enabled",
+        "GOCHIDUBB_REUSE_STAGES": "reuse_stages",
         "GOCHIDUBB_FFMPEG_TIMEOUT": "ffmpeg_timeout",
         "GOCHIDUBB_FFMPEG_STALL_TIMEOUT": "ffmpeg_stall_timeout",
         "YT_DLP_COOKIES_FROM_BROWSER": "ytdlp_cookies_from_browser",

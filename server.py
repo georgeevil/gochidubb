@@ -195,7 +195,7 @@ from pipeline.notices import (
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
-from app import logbuf
+from app import logbuf, artifact_store, reuse_runtime, reuse as app_reuse
 
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
@@ -1182,6 +1182,8 @@ def resolve_voice_config(voice_preset: str, voice_style: str, job_id: str):
 async def lifespan(app: FastAPI):
     # Init SQLite store (creates table + migrates legacy JSON files)
     init_db(BASE / "gochidubb.db")
+    # Beta stage-reuse store, same file as the job store.
+    artifact_store.init_store(BASE / "gochidubb.db")
     load_jobs_from_disk()
 
     # Initialize job queue + start serial worker. Using a single worker
@@ -2461,6 +2463,9 @@ async def run_pipeline_stages(
     )
 
     try:
+        reuse_stages = reuse_runtime.enabled_stages(cfg)
+        reused_here: list = ctx.setdefault("_reused_stages", [])
+
         for i in range(start_i, stop_i + 1):
             spec = PIPELINE_STAGES[i]
             sid = spec["id"]
@@ -2469,8 +2474,48 @@ async def run_pipeline_stages(
                 status=spec["status"], progress=lo, stage_id=sid,
                 step_detail=spec["hint"],
             )
-            with stage_timer(work, job_id, sid) as perf:
-                await STAGE_HANDLERS[sid](job, work, ctx, update, perf)
+
+            # ── Stage reuse (beta, off unless cfg.reuse_enabled) ──────
+            # Download/extract/transcribe/diarize are ~60% of pipeline time
+            # and none of it depends on the target language, so a redub into
+            # a new language recomputes all of it for nothing. When a
+            # previous job already produced this exact output — same inputs,
+            # same stage version — copy it instead.
+            fingerprint = None
+            if sid in reuse_stages:
+                fingerprint = reuse_runtime.fingerprint_for(sid, ctx, cfg)
+            hit = None
+            if fingerprint:
+                hit = reuse_runtime.try_reuse(
+                    sid, fingerprint, ctx, work, OUTPUT_DIR, cfg)
+
+            if hit:
+                reused_here.append({"stage": sid, "from": hit["job_id"],
+                                    "fingerprint": fingerprint})
+                # A skipped stage never runs its own update(), so replay the
+                # job fields it would have published. Without this a reused
+                # download leaves job["duration"] unset and the publisher's
+                # duplicate check quietly loses its duration signal.
+                fields = dict(hit.get("job_fields") or {})
+                if sid == "translate" and (work / "subtitles.srt").exists():
+                    fields["srt_url"] = f"/outputs/{job_id}/subtitles.srt"
+                    ctx["srt_path"] = str(work / "subtitles.srt")
+                # Persisted on the job so the result is auditable after the
+                # fact: a run that silently skipped work is impossible to
+                # debug when its output looks wrong.
+                update(progress=hi, reused_stages=list(reused_here),
+                       step_detail=(
+                           f"Reused from job {hit['job_id'][:8]} — "
+                           f"{spec['label'].lower()} skipped"),
+                       **fields)
+                log.info(f"[pipeline] job={job_id} stage={sid} REUSED from "
+                         f"{hit['job_id']}")
+            else:
+                with stage_timer(work, job_id, sid) as perf:
+                    await STAGE_HANDLERS[sid](job, work, ctx, update, perf)
+                if fingerprint:
+                    reuse_runtime.record_stage(
+                        sid, fingerprint, job_id, ctx, work)
 
             _save_checkpoint(job_id, work, stage=spec["checkpoint"],
                              data=_ctx_for_checkpoint(ctx))
@@ -7737,6 +7782,96 @@ async def download(job_id: str):
 @app.get("/")
 async def index():
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+# ── Stage reuse (beta) ───────────────────────────────────────────────
+# Kept on their own /api/beta/ prefix and served by their own page, so the
+# feature can be evaluated — or removed — without touching the main UI.
+
+@app.get("/beta")
+async def beta_index():
+    return FileResponse(str(STATIC_DIR / "beta.html"))
+
+
+@app.get("/api/beta/reuse/status")
+async def beta_reuse_status():
+    """Config, per-stage cache contents, and what the gates are set to."""
+    st = artifact_store.stats(OUTPUT_DIR)
+    allowed = reuse_runtime.enabled_stages(cfg)
+    by_stage = {s["stage"]: s for s in st.get("stages", [])}
+    stages = [{
+        "stage": stage,
+        "allowed": stage in allowed,
+        "cacheable": True,
+        "entries": by_stage.get(stage, {}).get("entries", 0),
+        "hits": by_stage.get(stage, {}).get("hits", 0),
+        "version": app_reuse.STAGE_VERSIONS.get(stage),
+        "inputs": list(app_reuse.STAGE_INPUTS.get(stage, ())),
+    } for stage in app_reuse.CACHEABLE_STAGES]
+    return {
+        "enabled": bool(getattr(cfg, "reuse_enabled", False)),
+        "reuse_stages": getattr(cfg, "reuse_stages", ""),
+        "gates": app_reuse.gates_from_config(cfg),
+        "stages": stages,
+        "total_entries": st.get("total", 0),
+        "total_hits": st.get("hits", 0),
+    }
+
+
+@app.get("/api/beta/reuse/entries")
+async def beta_reuse_entries(stage: str = "", limit: int = 100):
+    return {"entries": artifact_store.entries(stage=stage, limit=limit)}
+
+
+@app.get("/api/beta/reuse/job/{job_id}")
+async def beta_reuse_job(job_id: str):
+    """What a given finished job reused, and what it contributed."""
+    job = jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": f"Job {job_id} not found"}, 404)
+    return {
+        "job_id": job_id,
+        "reused": job.get("reused_stages") or [],
+        "contributed": [e for e in artifact_store.entries(limit=500)
+                        if e["job_id"] == job_id],
+    }
+
+
+@app.get("/api/beta/reuse/plan/{job_id}")
+async def beta_reuse_plan(job_id: str, target_lang: str = ""):
+    """What re-running this job would reuse — without running anything.
+
+    Answers the question the feature exists for: "if I dub this into another
+    language, what do I actually pay for?" Reads the job's own checkpoints, so
+    it only works once the job has produced them.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": f"Job {job_id} not found"}, 404)
+    ctx: dict = {}
+    for spec in PIPELINE_STAGES:
+        cp = _load_checkpoint(job_id, stage=spec["checkpoint"])
+        if cp:
+            ctx.update(cp)
+    if not ctx:
+        return JSONResponse(
+            {"error": "No checkpoints for this job yet — run it first"}, 409)
+    if target_lang:
+        ctx["target_lang"] = target_lang
+    return {
+        "job_id": job_id,
+        "target_lang": ctx.get("target_lang"),
+        "enabled": bool(getattr(cfg, "reuse_enabled", False)),
+        "stages": reuse_runtime.plan(ctx, OUTPUT_DIR, cfg),
+    }
+
+
+@app.post("/api/beta/reuse/purge")
+async def beta_reuse_purge(stage: str = Form(""), job_id: str = Form("")):
+    """Forget cached artifacts. Only drops index rows — never job files."""
+    removed = artifact_store.purge(stage=stage, job_id=job_id)
+    log.info(f"[artifacts] purged {removed} row(s) "
+             f"(stage={stage or 'all'}, job={job_id or 'all'})")
+    return {"ok": True, "removed": removed}
 
 
 if __name__ == "__main__":
