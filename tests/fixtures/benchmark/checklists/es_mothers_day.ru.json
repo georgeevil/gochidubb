@@ -1,0 +1,94 @@
+{
+  "fixture": "es_mothers_day",
+  "target_lang": "ru",
+  "author_note": "Checked by hand against the Spanish source. Russian is the easy case for these models — most have seen far more of it than of Bulgarian — so a failure here is a strong signal.",
+  "checks": [
+    {
+      "segment": 0,
+      "label": "te amo -> я тебя люблю",
+      "expect": "люблю\\s+тебя|тебя\\s+(?:очень\\s+)?люблю",
+      "reject": "ты\\s+меня\\s+любишь",
+      "why": "First person to second. A model that writes 'ты меня любишь' has swapped who loves whom"
+    },
+    {
+      "segment": 0,
+      "label": "gracias -> спасибо",
+      "expect": "спасибо|благодар",
+      "reject": "\\bпожалуйста\\b",
+      "why": "пожалуйста is 'please'"
+    },
+    {
+      "segment": 1,
+      "label": "Mother's Day",
+      "expect": "[Дд](?:ень|нём|нем)\\s+матери|[Дд]ня\\s+матери",
+      "why": "The holiday by name"
+    },
+    {
+      "segment": 1,
+      "label": "hola -> привет",
+      "expect": "[Пп]ривет|[Зз]дравствуй",
+      "why": "A greeting, not a statement"
+    },
+    {
+      "segment": 2,
+      "label": "cómo estás -> как ты",
+      "expect": "как\\s+(?:ты|дела|поживаешь)",
+      "why": "A direct question to the mother"
+    },
+    {
+      "segment": 2,
+      "label": "best mom in the world",
+      "expect": "лучшая\\s+мама.{0,12}мире|самая\\s+лучшая\\s+мама",
+      "why": "Superlative plus 'in the world'"
+    },
+    {
+      "segment": 3,
+      "label": "gracias -> спасибо",
+      "expect": "спасибо|благодар",
+      "reject": "\\bпожалуйста\\b",
+      "why": "пожалуйста is 'please'"
+    },
+    {
+      "segment": 3,
+      "label": "espero que tengas -> надеюсь",
+      "expect": "надеюсь|желаю",
+      "why": "A wish, not an assertion that she is having one"
+    },
+    {
+      "segment": 5,
+      "label": "que sepas -> she should know",
+      "expect": "зна(?:й|ешь|ла|ете)",
+      "why": "'que sepas' asks her to know something. 'Знай, что' is the idiomatic form and 'Пусть ты знаешь' is awkward, but both carry the meaning — style is not what this scores"
+    },
+    {
+      "segment": 5,
+      "label": "te extraño -> скучаю",
+      "expect": "скучаю|не\\s+хватает",
+      "why": "Unlike Bulgarian, 'скучаю по тебе' is the correct Russian idiom"
+    },
+    {
+      "segment": 5,
+      "label": "adiós -> a real farewell",
+      "expect": "[Дд]о\\s+свидания|[Пп]ока|[Пп]рощай|[Дд]о\\s+встречи",
+      "why": "A closing farewell"
+    },
+    {
+      "segment": 6,
+      "label": "disfrutes este día",
+      "expect": "наслажд|удовольств|понрав|приятн|хорошего\\s+дня|проведи",
+      "why": "A wish that she enjoy the day. Russian has many natural renderings — 'пусть тебе понравится', 'пусть будет приятным', 'наслаждайся' — and all of them count"
+    }
+  ],
+  "penalties": [
+    {
+      "label": "Bulgarian or Ukrainian bleed",
+      "pattern": "\\bобичам\\b|\\bблагодаря\\s+ти\\b|\\bздравей\\b|\\bдякую\\b|\\bпривіт\\b",
+      "why": "The mirror of the Bulgarian failure — a model answering in the wrong Slavic language"
+    },
+    {
+      "label": "untranslated Spanish left in",
+      "pattern": "\\b(?:mamá|mami|gracias|hola|te amo|feliz)\\b",
+      "why": "Source words surviving into the translation"
+    }
+  ]
+}

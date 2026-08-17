@@ -1,0 +1,94 @@
+{
+  "fixture": "en_clinic_thanks",
+  "target_lang": "es",
+  "author_note": "Checked by hand against the English source. This fixture carries proper nouns and numbers that must survive, plus two idioms that must not be translated word for word.",
+  "checks": [
+    {
+      "segment": 0,
+      "label": "Riverside stays a name",
+      "expect": "Riverside",
+      "reject": "[Rr]ibera|[Oo]rilla\\s+del\\s+r",
+      "why": "A clinic's name is not translated. 'Ribera' would invent a different clinic"
+    },
+    {
+      "segment": 0,
+      "label": "three years ago",
+      "expect": "hace\\s+tres\\s+a\\w+os|hace\\s+3\\s+a\\w+os",
+      "why": "A specific span of time the viewer hears"
+    },
+    {
+      "segment": 1,
+      "label": "Dr. Okafor stays a name",
+      "expect": "Okafor",
+      "why": "Surnames are not translated or transliterated in Spanish"
+    },
+    {
+      "segment": 1,
+      "label": "a full hour",
+      "expect": "una\\s+hora",
+      "why": "The point of the line is the duration"
+    },
+    {
+      "segment": 2,
+      "label": "18 months, not 18 years",
+      "expect": "(?:18|dieciocho)\\s+meses",
+      "reject": "(?:18|dieciocho)\\s+a\\w+os",
+      "why": "aya-expanse-8b turned this baby into a teenager in Arabic. The unit matters more than the number"
+    },
+    {
+      "segment": 3,
+      "label": "eleven at night",
+      "expect": "(?:once|11)\\s*(?:de\\s+la\\s+noche|p\\.?m|horas\\s+de\\s+la\\s+noche)|las\\s+(?:once|11)",
+      "why": "The hour is the whole point of the sentence"
+    },
+    {
+      "segment": 4,
+      "label": "40 years",
+      "expect": "(?:40|cuarenta)\\s+a\\w+os",
+      "why": "A specific span"
+    },
+    {
+      "segment": 4,
+      "label": "Marion stays a name",
+      "expect": "Marion",
+      "why": "A person's name"
+    },
+    {
+      "segment": 5,
+      "label": "turned my life around",
+      "expect": "cambi\\w+.{0,20}vida|transform\\w+.{0,20}vida|dio\\s+un\\s+giro",
+      "why": "An idiom. A literal 'dio la vuelta a mi vida' is not Spanish"
+    },
+    {
+      "segment": 6,
+      "label": "they remember your name",
+      "expect": "recuerdan|acuerdan",
+      "why": "The specific thing being praised"
+    },
+    {
+      "segment": 7,
+      "label": "it means the world",
+      "expect": "significa\\s+mucho|significa\\s+el\\s+mundo|much\\w+\\s+para\\s+m|todo\\s+para\\s+m",
+      "why": "An idiom of gratitude"
+    },
+    {
+      "segment": 8,
+      "label": "summer fair",
+      "expect": "feria|fiesta",
+      "why": "A named event they will meet at"
+    },
+    {
+      "segment": 8,
+      "label": "goodbye",
+      "expect": "[Aa]di\\w+s|[Hh]asta\\s+(?:luego|pronto)|[Cc]hao",
+      "why": "A closing farewell"
+    }
+  ],
+  "penalties": [
+    {
+      "label": "English left untranslated",
+      "pattern": "\\b(?:thank\\s+you|goodbye|the\\s+world|my\\s+family|take\\s+care)\\b",
+      "why": "Source phrases surviving into the translation"
+    }
+  ]
+}

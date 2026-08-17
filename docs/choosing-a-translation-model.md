@@ -12,6 +12,7 @@ re-run against whatever you have installed.
 - [Case study: how a bad model looks](#case-study-how-a-bad-model-looks)
 - [What actually distinguishes a usable model](#what-actually-distinguishes-a-usable-model)
 - [Which languages are covered, and why](#which-languages-are-covered-and-why)
+- [Semantic checklists](#semantic-checklists) — how to add your language
 - [Run the benchmark yourself](#run-the-benchmark-yourself)
 - [Using a glossary](#using-a-glossary)
 
@@ -19,13 +20,13 @@ re-run against whatever you have installed.
 
 | Situation | Model | Why |
 |---|---|---|
-| Default, any target | `openai/gpt-oss-20b` | Never once failed to translate across every run of every language pair tested. Best hand-checked quality. 8–24s per clip |
-| You need it faster | `qwen/qwen3-8b` | Just as reliable mechanically and about twice as fast, but makes Bulgarian clitic errors ("Те обичам много" for "Обичам те много") |
-| **Do not use** | `aya-expanse-8b` | Produces Russian-shaped text for other Slavic targets. Scored 2/13 on hand-checked Bulgarian *while passing every mechanical check* |
+| Default, any target | `openai/gpt-oss-20b` | Never once failed to translate across every run of every language pair tested, and the best semantic scores in the field. 8–24s per clip |
+| You need it faster | `qwen/qwen3-8b` | Just as reliable mechanically and about twice as fast, but 9/13 on Bulgarian meaning and it makes clitic errors ("Те обичам много" for "Обичам те много") |
+| **Do not use** | `aya-expanse-8b` | 12/12 on Russian meaning, **3/13 on Bulgarian** with 12 Russian intrusions — while passing every mechanical check in both |
+| **Do not use** | `liquid/lfm2-24b-a2b` | Fastest in the field (4–14s), mechanically clean everywhere, and 5/13 on Bulgarian meaning |
 | **Do not use** | `google/gemma-4-e4b` | Narrates the task instead of translating on most runs |
 | **Do not use** | `qwen/qwen3.5-9b`, `zai-org/glm-4.6v-flash` | Reason past every output budget and never answer |
 | Avoid for batch work | `qwen/qwen3.6-27b` | Good output, but exceeded 300s per run on a nine-segment clip. Fine for one video, not for a queue |
-| Unproven | `liquid/lfm2-24b-a2b` | Fastest in the field (4–14s) and passes every mechanical check, but invents words in Russian. Check its output before trusting it |
 
 ```bash
 # .env
@@ -52,10 +53,13 @@ Cyrillic. It was also wrong in ways the pipeline could not see at the time:
 
 The model was not translating into Bulgarian. It was translating into Russian
 and spelling it Bulgarian-ish. On a 13-point checklist of what that script
-actually says, it scored 2. `openai/gpt-oss-20b` scored 13.
+actually says, it scored **3, with 12 Russian intrusions**.
+`openai/gpt-oss-20b` scored 13.
 
 This is the failure mode to design against: not a model that refuses, but one
-that confidently answers in the wrong language.
+that confidently answers in the wrong language. And note what it is *not* — the
+same model scores a clean 12/12 translating the same clip into Russian. It is
+not a bad model; it is a Russian model being asked for Bulgarian.
 
 ## What actually distinguishes a usable model
 
@@ -79,8 +83,8 @@ but a model that triggers it often is burning your time on retries.
 the slot it is dubbed into. A translation 40% longer than its source cannot be
 spoken in the same time, and the assembler has to compress it — up to
 `cfg.tts_max_stretch`, after which the dub starts running late. Length is a
-model property: on the same clip, models ranged from 1.02x to 1.17x the source
-length.
+model property: translating the same clip into Bulgarian, models ranged from
+1.02x to 1.18x the source length.
 
 **It must not be a reasoning model.** `qwen/qwen3.5-9b` spends a full
 chain-of-thought on *"Hola, mamá"* even with `LM_STUDIO_REASONING=off` and
@@ -88,8 +92,9 @@ Qwen's `/no_think` token, and never finishes a batch. See
 [Thinking models and translation speed](../README.md#thinking-models-and-translation-speed).
 
 **Beware of models that look good because they say less.** `aya-expanse-8b` had
-the second-best length ratio in the entire field. It achieved that by dropping
-meaning. Short output is only a virtue when the meaning survives.
+the *best* length ratio of any model on the Bulgarian clip, at 1.02x. It earned
+that by dropping meaning — the same run scored 3/13 on the semantic checklist.
+Short output is only a virtue when the meaning survives.
 
 ## Which languages are covered, and why
 
@@ -104,24 +109,25 @@ to these five.
 
 **Script coverage, which is the part that actually matters technically.** A
 model that handles Spanish tells you nothing about how it handles Hindi,
-because the failure modes are per-script:
+because the failure modes are per-script. The published matrix covers nine
+languages across seven scripts:
 
 | Target | Script | What it exposes |
 |---|---|---|
 | `es`, `pt` | Latin | The baseline. No script check is possible, so failures here are subtle |
-| `ru` | Cyrillic | Models trained mostly on Russian will answer in Russian for *any* Slavic target — this is how the Bulgarian dub failed |
-| `hi` | Devanagari | Output runs ~1.35x the source in characters. Length, not vocabulary, is the risk |
+| `ru`, `bg` | Cyrillic | Models trained mostly on Russian answer in Russian for *any* Slavic target. This pair is where every model in the field separates |
+| `hi` | Devanagari | Output runs ~1.3x the source in characters. Length, not vocabulary, is the risk |
 | `ar` | Arabic | Right-to-left, and output is *shorter* than its Latin source in characters while taking about as long to say |
+| `zh` | Han | A Chinese line is 0.33x the length of its Spanish source. Every length-based intuition inverts |
+| `ja` | Kana + Han | Mixed script; the script check has to accept both |
+| `ko` | Hangul | Numbers *can* be written as ordinary Hangul words (십팔), which no pattern counts — but every model tested kept the digits, so the check still runs and a spelled-out number lands in the same tolerance every language gets |
 
-Those five cover four scripts. Bulgarian is not in the default set but is
-covered in depth by the case study above, because it is the one language pair
-whose output could be checked by hand.
+Bulgarian is not in the default `--targets`, because it is a smaller audience
+than the other five — but it is the most informative language in the matrix,
+and it is where the semantic checklists earn their keep.
 
-Two gaps worth naming. **CJK** (`zh`, `ja`, `ko`) is not in the default set and
-behaves very differently — a Chinese translation is a fraction of its source's
-character count, so every length-based intuition inverts. **Right-to-left
-rendering** is checked for script but not for bidirectional text handling in
-the burned-in subtitles. Both are open.
+**Right-to-left rendering** remains open: Arabic is checked for script, but not
+for bidirectional text handling in the burned-in subtitles.
 
 ## Run the benchmark yourself
 
@@ -148,33 +154,105 @@ Results land in `docs/benchmarks/results.json`. Each combination gets a verdict:
 | `risky` | Usable but dropped lines, slipped script, or runs long enough to cost sync |
 | `unusable` | Failed outright, timed out, or narrated the task |
 
-### It rules models out; it cannot rule them in
+### Mechanical checks rule models out; checklists rule them in
 
-Every metric is mechanical: did the model answer, in the target language,
-keeping the numbers, every time. None of it measures whether the translation is
-*correct*.
+Most of the benchmark is mechanical: did the model answer, in the target
+language, keeping the numbers, every time. None of that measures whether the
+translation is *correct*, and the gap is not small.
 
-`aya-expanse-8b` is the proof. It passes almost this entire matrix — no dropped
-lines, right script, sensible length, quick — and it is the model that ruined a
-real dub. Fluent, correctly-scripted, correctly-sized, and wrong.
+`aya-expanse-8b` is the proof. Into Russian it scores a clean **12 of 12** on
+the semantic checklist. Into Bulgarian, the same model on the same source
+scores **3 of 13 with 12 Russian intrusions**. Every mechanical check passes
+in both cases. If you only had the mechanical columns you would conclude it was
+fine for both.
 
 One line makes the gap concrete. Translating *"My daughter was 18 months old"*
 into Arabic, it wrote **الثامنة عشر من عمرها** — "eighteen **years** old". The
 benchmark noticed something: the digit `18` was spelled out rather than kept.
 It could not notice the thing that matters, which is that a baby became a
-teenager. No mechanical check catches that; only reading the output does.
+teenager.
 
-So read a `❌` or `⚠️` as strong evidence against a model, and a `✅` as nothing
-more than "it cleared the bar where a machine can judge". Somebody who reads
-the target language still has to watch the output. The Bulgarian case study
-above is the one place in this repo where translations were scored
-semantically, because it is the one language pair that could be checked by
-hand.
+That is what [semantic checklists](#semantic-checklists) are for. Where one
+exists for your language pair, the verdict means something: a model that gets
+less than two thirds of the checked meaning right is marked unusable no matter
+how clean its mechanics. Where one does not exist, read a `❌` or `⚠️` as
+strong evidence against a model and a `✅` as nothing more than "it cleared the
+bar where a machine can judge".
 
-If you are dubbing into a language you do not speak, the cheap safety net is to
-dub one clip into a language you *do* speak first, with the same model and the
-same context hint. A model that mangles a language you can check is not going
-to do better on one you cannot.
+If you are dubbing into a language you do not speak and there is no checklist
+for it, the cheap safety net is to dub one clip into a language you *do* speak
+first, with the same model and the same context hint. A model that mangles a
+language you can check is not going to do better on one you cannot.
+
+### Semantic checklists
+
+A checklist is a list of things the source actually says, each with a pattern
+the translation must match — and, where a specific wrong answer is known, one
+it must not. Every check is scoped to one segment, so a score traces back to
+the line that produced it.
+
+Three ship with the repo, covering Spanish→Bulgarian, Spanish→Russian and
+English→Spanish. They are what turns a matrix where everything passes into a
+real ranking:
+
+| Model | `es`→`bg` meaning | `es`→`ru` meaning |
+|---|---|---|
+| `openai/gpt-oss-20b` | 12/13 | 12/12 |
+| `qwen/qwen3-8b` | 9/13, 1 penalty | 12/12 |
+| `liquid/lfm2-24b-a2b` | 5/13 | 12/12 |
+| `aya-expanse-8b` | 3/13, 12 penalties | 12/12 |
+
+These are worst-run figures, the same ones
+[the generated matrix](benchmarks/decision-matrix.md) reports — a model is only
+as good as its bad run. `openai/gpt-oss-20b` scores 13/13 on a good run and
+12/13 on a bad one, which is why it lands ⚠️ rather than ✅ for Bulgarian.
+
+Every one of those models is mechanically clean in both columns. Bulgarian is
+where they separate, because most of them have seen far more Russian than
+Bulgarian and answer in Russian-shaped text when pushed.
+
+**Writing one needs no Python — only that you read the target language**, and
+each one roughly doubles what the benchmark can decide for that language. The
+format and the pitfalls are in
+[`tests/fixtures/benchmark/checklists/README.md`](../tests/fixtures/benchmark/checklists/README.md).
+The main pitfall, learned the hard way twice: make the pattern accept every
+*correct* answer, not just the phrasing you happened to think of. An early
+Bulgarian checklist rejected "Майчин ден", which is the more idiomatic
+rendering of Mother's Day than the one it was looking for.
+
+### Speech rates, and why drift is now trustworthy
+
+The benchmark predicts timing drift from a translation's character count, which
+needs a characters-per-second figure per language. Those numbers used to be
+guesses hard-coded in the tool. `tools/gochidubb_speech_rate.py` replaces them
+with measurements — it synthesizes the real translated lines the benchmark
+already collected and divides characters by audio seconds:
+
+```bash
+python tools/gochidubb_speech_rate.py            # every language in results.json
+python tools/gochidubb_speech_rate.py --show     # what is recorded
+```
+
+The guesses were off by up to 25%, and in one case wrong in kind:
+
+| Language | Guessed | Measured | Off by |
+|---|---|---|---|
+| Korean | 5.83 | 4.39 | −25% |
+| Spanish | 10.60 | 12.75 | +20% |
+| Arabic | 9.54 | 7.79 | −18% |
+| Chinese | 3.18 | 3.73 | +17% |
+| Hindi | 9.01 | 9.32 | +3% |
+
+The Spanish row is the instructive one. The old model assumed every
+Latin-script target shared one rate; Spanish is actually 20% faster than
+Bulgarian. Grouping languages by script was the wrong abstraction.
+
+Rates live in `tests/fixtures/benchmark/speech_rates.json`. Measurement uses
+edge-tts, which needs no GPU and covers all 65 languages, then anchors the
+whole set to a rate measured from a real VoxCPM2 dub — so what the drift
+estimate depends on, the *ratio* between languages, is measured rather than
+assumed. Languages with no recorded rate fall back to a per-script guess and
+are marked `~` in the matrix.
 
 ### What is not in the matrix, and why
 

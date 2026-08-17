@@ -5,7 +5,7 @@
 Which local models can be trusted to translate a video into a given language, unattended. Regenerate with:
 
 ```bash
-python tools/gochidubb_benchmark.py --targets es,pt,ru,hi,ar
+python tools/gochidubb_benchmark.py --targets es,pt,ru,hi,ar,zh,ja,ko,bg
 python tools/gochidubb_benchmark.py --report > docs/benchmarks/decision-matrix.md
 ```
 
@@ -19,15 +19,15 @@ Results reflect one machine's installed models at one point in time. Re-run it o
 
 Worst verdict across every source language tested, so a model earns ✅ only if it held up on all of them.
 
-| Model | Spanish (`es`) | Portuguese (`pt`) | Russian (`ru`) | Hindi (`hi`) | Arabic (`ar`) |
-|---|---|---|---|---|---|
-| `openai/gpt-oss-20b` | ✅ 24s | ✅ 12s | ✅ 14s | ✅ 13s | ✅ 12s |
-| `qwen/qwen3-8b` | ✅ 14s | ✅ 7s | ✅ 8s | ✅ 21s | ✅ 8s |
-| `aya-expanse-8b` | ✅ 14s | ✅ 10s | ✅ 12s | ✅ 25s | ✅ 13s |
-| `liquid/lfm2-24b-a2b` | ✅ 10s | ✅ 5s | ✅ 5s | ✅ 14s | ✅ 6s |
-| `google/gemma-4-e4b` | — | ❌ n/a | ❌ 270s | ❌ n/a | ❌ 236s |
+| Model | Spanish (`es`) | Portuguese (`pt`) | Russian (`ru`) | Hindi (`hi`) | Arabic (`ar`) | Chinese (`zh`) | Japanese (`ja`) | Korean (`ko`) | Bulgarian (`bg`) |
+|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-20b` | ✅ 24s | ✅ 12s | ✅ 14s | ✅ 13s | ✅ 12s | ✅ 17s | ✅ 14s | ✅ 13s | ⚠️ 23s |
+| `qwen/qwen3-8b` | ✅ 14s | ✅ 7s | ✅ 8s | ✅ 21s | ✅ 8s | ✅ 10s | ✅ 5s | ✅ 6s | ⚠️ 14s |
+| `aya-expanse-8b` | ✅ 14s | ✅ 10s | ✅ 12s | ✅ 25s | ✅ 13s | ✅ 12s | ✅ 7s | ✅ 8s | ❌ 15s |
+| `liquid/lfm2-24b-a2b` | ✅ 10s | ✅ 5s | ✅ 5s | ✅ 14s | ✅ 6s | ✅ 9s | ✅ 4s | ✅ 4s | ❌ 11s |
+| `google/gemma-4-e4b` | — | ❌ n/a | ❌ 270s | ❌ n/a | ❌ 236s | — | — | — | — |
 
-✅ translated every line, on every run, in the target language, keeping every number  ·  ⚠️ dropped a line, slipped script, or lost a number  ·  ❌ failed outright, timed out, or narrated the task instead of doing it
+✅ clean on every run, and where a semantic checklist exists, correct  ·  ⚠️ dropped a line, slipped script, lost a number, or missed some checked meaning  ·  ❌ failed outright, timed out, narrated the task, or got less than two thirds of the checked meaning right
 
 Times are the slowest median across source languages, after the model is loaded. A cell shows the worst result that model had for that target across every source language tested.
 
@@ -37,31 +37,34 @@ Times are the slowest median across source languages, after the model is loaded.
 
 ### `de_workshop_intro` — German source
 
-| Model | → `es` | → `pt` | → `ru` | → `hi` | → `ar` | Length vs source | Est. drift |
-|---|---|---|---|---|---|---|---|
-| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.92x | 0.6s~ |
-| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.92x | 0.4s~ |
-| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.95x | 0.1s~ |
-| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.95x | 0.7s |
+| Model | → `es` | → `pt` | → `ru` | → `hi` | → `ar` | → `zh` | → `ja` | → `ko` | → `bg` | Length vs source | Est. drift |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 0.72x | 1.6s |
+| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 0.72x | 0.8s |
+| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 0.74x | 1.0s |
+| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 0.73x | 1.1s |
 
 ### `en_clinic_thanks` — English source
 
-| Model | → `es` | → `pt` | → `ru` | → `hi` | → `ar` | Length vs source | Est. drift |
-|---|---|---|---|---|---|---|---|
-| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.90x | 2.4s~ |
-| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.93x | 1.5s~ |
-| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.94x | 21.0s~ |
-| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | 0.91x | 5.4s~ |
+| Model | → `es` | → `pt` | → `ru` | → `hi` | → `ar` | → `zh` | → `ja` | → `ko` | → `bg` | `es` meaning | Length vs source | Est. drift |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 13/13 | 0.72x | 3.9s |
+| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 13/13 | 0.75x | 6.5s |
+| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 13/13 | 0.74x | 5.5s |
+| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 13/13 | 0.72x | 4.2s |
 
 ### `es_mothers_day` — Spanish source
 
-| Model | → `pt` | → `ru` | → `hi` | → `ar` | Length vs source | Est. drift |
-|---|---|---|---|---|---|---|
-| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | 1.10x | 38.7s~ |
-| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | 1.06x | 32.4s~ |
-| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | 1.09x | 39.0s~ |
-| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | 1.05x | 20.3s~ |
-| `google/gemma-4-e4b` | ❌ | ❌ | ❌ | ❌ | 1.00x | 4.0s~ |
+| Model | → `pt` | → `ru` | → `hi` | → `ar` | → `zh` | → `ja` | → `ko` | → `bg` | `ru` meaning | `bg` meaning | Length vs source | Est. drift |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-20b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | 12/12 | 12/13 | 0.88x | 36.3s |
+| `qwen/qwen3-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | 12/12 | 9/13 +1⚑ | 0.89x | 36.1s |
+| `aya-expanse-8b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 12/12 | 3/13 +12⚑ | 0.86x | 30.4s |
+| `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 12/12 | 5/13 | 0.84x | 18.5s |
+| `google/gemma-4-e4b` | ❌ | ❌ | ❌ | ❌ | — | — | — | — | 0/12 +26⚑ | — | 1.00x | 16.6s |
+
+**meaning** columns are hand-written semantic checklists — the count of things the source says that the translation actually got right, with `⚑` marking grammar penalties. These *do* decide verdicts, and they only exist for language pairs somebody has written a checklist for ([how to add one](../../tests/fixtures/benchmark/checklists/README.md)).
+
 
 Length is a character count, comparable only within a script — Arabic output is shorter than its Latin source in characters while taking about as long to say. Drift marked `~` rests on an estimated speech rate for that script rather than a measured one; neither column affects a verdict.
 

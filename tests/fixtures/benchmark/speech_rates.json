@@ -1,0 +1,81 @@
+{
+  "engine": "edge-tts",
+  "anchor_lang": "bg",
+  "anchor_rate": 10.6,
+  "anchor_note": "Anchor measured on a real VoxCPM2 dub (job c5b12e16). Other languages measured with edge-tts and scaled to it, so cross-language ratios are measured rather than guessed.",
+  "rates": {
+    "ar": {
+      "chars_per_sec": 8.56,
+      "samples": 8,
+      "voice": "ar-SA-HamedNeural",
+      "spread": 2.2,
+      "scale": 0.735,
+      "voxcpm_chars_per_sec": 7.79
+    },
+    "bg": {
+      "chars_per_sec": 11.65,
+      "samples": 8,
+      "voice": "bg-BG-BorislavNeural",
+      "spread": 0.93,
+      "scale": 1.0,
+      "voxcpm_chars_per_sec": 10.6
+    },
+    "es": {
+      "chars_per_sec": 14.02,
+      "samples": 8,
+      "voice": "es-ES-AlvaroNeural",
+      "spread": 3.64,
+      "scale": 1.203,
+      "voxcpm_chars_per_sec": 12.75
+    },
+    "hi": {
+      "chars_per_sec": 10.24,
+      "samples": 8,
+      "voice": "hi-IN-MadhurNeural",
+      "spread": 1.67,
+      "scale": 0.879,
+      "voxcpm_chars_per_sec": 9.32
+    },
+    "ja": {
+      "chars_per_sec": 5.28,
+      "samples": 8,
+      "voice": "ja-JP-KeitaNeural",
+      "spread": 1.59,
+      "scale": 0.453,
+      "voxcpm_chars_per_sec": 4.8
+    },
+    "ko": {
+      "chars_per_sec": 4.82,
+      "samples": 8,
+      "voice": "ko-KR-InJoonNeural",
+      "spread": 0.73,
+      "scale": 0.414,
+      "voxcpm_chars_per_sec": 4.39
+    },
+    "pt": {
+      "chars_per_sec": 11.56,
+      "samples": 8,
+      "voice": "pt-BR-AntonioNeural",
+      "spread": 2.66,
+      "scale": 0.992,
+      "voxcpm_chars_per_sec": 10.52
+    },
+    "ru": {
+      "chars_per_sec": 10.5,
+      "samples": 8,
+      "voice": "ru-RU-DmitryNeural",
+      "spread": 5.17,
+      "scale": 0.901,
+      "voxcpm_chars_per_sec": 9.55
+    },
+    "zh": {
+      "chars_per_sec": 4.1,
+      "samples": 8,
+      "voice": "zh-CN-YunxiNeural",
+      "spread": 0.55,
+      "scale": 0.352,
+      "voxcpm_chars_per_sec": 3.73
+    }
+  },
+  "unmeasured": {}
+}
