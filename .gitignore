@@ -18,6 +18,8 @@ secrets.json
 # Same reasoning as secrets.json — never in the repo.
 apikeys.json
 webhooks.json
+# Append-only audit trail (app/audit.py) — local runtime record.
+audit.jsonl
 
 # Server runtime artifacts
 .gochidubb.pid

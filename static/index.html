@@ -4518,6 +4518,372 @@ function WebhooksView() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// WORKSPACE — members · billing · audit  (hosted mode only)
+// ═══════════════════════════════════════════════════════════════════
+
+// Anything on these screens that is not backed by real data says so. The
+// minutes on Billing are measured; the money is an estimate at the design's
+// published rates, and this server bills nobody.
+function EstimateNote({ children }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, padding: '11px 14px',
+                  background: 'var(--bg-2)', border: '1px solid var(--line-2)',
+                  borderRadius: 'var(--r-md)' }}>
+      <span style={{ color: 'var(--warn)', flexShrink: 0 }}>{I.warn}</span>
+      <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, unit, note, tint }) {
+  return (
+    <DevCard>
+      <div className="caps" style={{ marginBottom: 8 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
+        <span className="mono" style={{ fontSize: 22, fontWeight: 600,
+                                        color: tint || 'var(--ink)' }}>{value}</span>
+        {unit && <span className="mono" style={{ fontSize: 10.5,
+                                                 color: 'var(--ink-3)' }}>{unit}</span>}
+      </div>
+      {note && <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                              marginTop: 5, lineHeight: 1.5 }}>{note}</div>}
+    </DevCard>
+  );
+}
+
+function BillingView() {
+  const [d, setD] = useState(null);
+  const [days, setDays] = useState(30);
+  useEffect(() => {
+    setD(null);
+    fetch(`/api/billing/usage?window_days=${days}`)
+      .then(r => r.json()).then(setD).catch(() => {});
+  }, [days]);
+
+  if (!d) {
+    return <DevPage title="Billing & usage"><div className="mono" style={{
+      fontSize: 11, color: 'var(--ink-3)' }}>Measuring…</div></DevPage>;
+  }
+
+  const langs = Object.entries(d.by_lang || {});
+  const maxLang = langs.length ? Math.max(...langs.map(([, v]) => v)) : 1;
+
+  return (
+    <DevPage title="Billing & usage"
+             subtitle="pure usage · no seats"
+             action={
+               <div style={{ display: 'flex', gap: 4 }}>
+                 {[7, 30, 3650].map(n => (
+                   <button key={n} onClick={() => setDays(n)} className="mono" style={{
+                     fontSize: 10.5, padding: '4px 10px', borderRadius: 'var(--r-sm)',
+                     color: days === n ? 'var(--bg)' : 'var(--ink-2)',
+                     background: days === n ? 'var(--accent)' : 'transparent',
+                     border: '1px solid ' + (days === n ? 'var(--accent)' : 'var(--line)'),
+                   }}>{n === 3650 ? 'all time' : n + 'd'}</button>
+                 ))}
+               </div>
+             }>
+      <EstimateNote>
+        <strong style={{ color: 'var(--ink)' }}>Estimate, not an invoice.</strong>{' '}
+        The minutes are real — measured source duration × target languages,
+        from {d.jobs_counted} job{d.jobs_counted === 1 ? '' : 's'} on this
+        machine. The money applies the rates the design publishes for a hosted
+        workspace, so you can see what this usage would cost. This server bills
+        nobody, and in <span className="mono">local</span> mode never will.
+      </EstimateNote>
+
+      <div style={{ display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                    gap: 12 }}>
+        <StatTile label="Minutes dubbed" value={d.minutes.toFixed(0)} unit="min"
+                  note={`${d.jobs_counted} billable · ${d.jobs_unbilled} failed or cancelled, never billed`}/>
+        <StatTile label="Estimated cost" value={'$' + d.cost.toFixed(2)}
+                  note={`over the last ${d.window_days >= 3650 ? 'all time' : d.window_days + ' days'}`}/>
+        <StatTile label="Current rate" value={'$' + d.rate.toFixed(3)} unit="/min"
+                  tint="var(--accent)"
+                  note={d.next_tier
+                    ? `${d.next_tier.minutes.toFixed(0)} min to $${d.next_tier.next_rate.toFixed(3)}`
+                    : 'lowest tier reached'}/>
+        <StatTile label="Storage" value={d.storage_gb.toFixed(1)} unit="GB"
+                  note={d.storage_cost > 0
+                    ? `$${d.storage_cost.toFixed(2)} beyond the 100 GB included`
+                    : '100 GB included — nothing to pay'}/>
+      </div>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>
+          Metered rates · per minute of source, per language
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 420 }}>
+            <thead>
+              <tr>{['Monthly volume', 'Rate', 'Your usage'].map(x => (
+                <th key={x} className="caps" style={{ textAlign: 'left',
+                      padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>{x}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {(d.bands || []).map((b, i) => {
+                const live = b.minutes > 0 && (i === (d.bands.filter(x => x.minutes > 0).length - 1));
+                return (
+                  <tr key={i}>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: 'var(--ink-2)', borderBottom: '1px solid var(--bg-2)' }}>
+                      {b.to === null ? `${b.from}+ min` : `${b.from} – ${b.to} min`}
+                    </td>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: 'var(--ink)', borderBottom: '1px solid var(--bg-2)' }}>
+                      ${b.rate.toFixed(3)}
+                    </td>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: b.minutes > 0 ? 'var(--accent)' : 'var(--ink-4)',
+                          borderBottom: '1px solid var(--bg-2)' }}>
+                      {b.minutes > 0 ? `${b.minutes.toFixed(0)}${live ? ' · current' : ' ✓'}` : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {d.showcase_minutes > 0 && (
+                <tr>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--ink-2)' }}>showcase stitch</td>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--ink)' }}>+$0.020</td>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--accent)' }}>
+                    {d.showcase_minutes.toFixed(0)} · ${d.showcase_surcharge.toFixed(2)}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 12, lineHeight: 1.6 }}>
+          Failed jobs are never billed · agent-initiated jobs hit the same meter
+          as manual ones
+        </div>
+      </DevCard>
+
+      {langs.length > 0 && (
+        <DevCard>
+          <div className="caps" style={{ marginBottom: 12 }}>By target language</div>
+          {langs.slice(0, 8).map(([lang, mins]) => (
+            <div key={lang} style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                     padding: '5px 0' }}>
+              <span className="mono" style={{ fontSize: 11, width: 42,
+                                              color: 'var(--ink-2)' }}>{lang}</span>
+              <div style={{ flex: 1, height: 6, background: 'var(--bg-2)',
+                            borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: (mins / maxLang * 100) + '%', height: '100%',
+                              background: 'var(--accent)', opacity: 0.8 }}/>
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)',
+                                              width: 64, textAlign: 'right' }}>
+                {mins.toFixed(0)} min
+              </span>
+            </div>
+          ))}
+        </DevCard>
+      )}
+    </DevPage>
+  );
+}
+
+// The permission matrix from the design. It is a reference table, not an
+// enforcement surface: local mode has exactly one user and enforces nothing.
+// Shipping it as documentation is honest; pretending it gates anything is not.
+const ROLES = ['Owner', 'Admin', 'Developer', 'Editor', 'Viewer', 'Agent'];
+const PERMISSIONS = [
+  ['Start / cancel dubs',        [1, 1, 1, 1, 0, 1]],
+  ['Review / edit translations', [1, 1, 0, 1, 0, 0]],
+  ['Retry pipeline stages',      [1, 1, 1, 1, 0, 1]],
+  ['Download outputs',           [1, 1, 1, 1, 1, 1]],
+  ['Create / revoke API keys',   [1, 1, 1, 0, 0, 0]],
+  ['Manage webhooks',            [1, 1, 1, 0, 0, 0]],
+  ['Invite members / set roles', [1, 1, 0, 0, 0, 0]],
+  ['View / manage billing',      [1, 2, 0, 0, 0, 0]],   // 2 = view only
+];
+
+function MembersView() {
+  const [keys, setKeys] = useState([]);
+  useEffect(() => {
+    fetch('/api/apikeys').then(r => r.json()).then(d => setKeys(d.keys || []))
+      .catch(() => {});
+  }, []);
+  // The only "members" that genuinely exist here: this machine's user, and any
+  // API key, which is what an agent actually authenticates as.
+  const agentKeys = keys.filter(k => !k.revoked);
+
+  return (
+    <DevPage title="Members & roles" subtitle="local workspace">
+      <EstimateNote>
+        <strong style={{ color: 'var(--ink)' }}>Reference, not enforcement.</strong>{' '}
+        This server runs one local user and checks no permissions. The matrix
+        below documents the roles a hosted workspace would have; the rows above
+        it are the real principals on this machine — you, and each live API key.
+      </EstimateNote>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+            <thead>
+              <tr>{['Principal', 'Role', 'Kind', 'Last active'].map(x => (
+                <th key={x} className="caps" style={{ textAlign: 'left',
+                      padding: '11px 14px', borderBottom: '1px solid var(--line)' }}>{x}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ padding: '11px 14px', fontSize: 12.5,
+                             borderBottom: '1px solid var(--bg-2)' }}>
+                  This machine
+                  <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                  color: 'var(--ink-3)' }}>local</span>
+                </td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--accent)', borderBottom: '1px solid var(--bg-2)' }}>owner</td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>human</td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>now</td>
+              </tr>
+              {agentKeys.map(k => (
+                <tr key={k.id}>
+                  <td style={{ padding: '11px 14px', fontSize: 12.5,
+                               borderBottom: '1px solid var(--bg-2)' }}>
+                    {k.name}
+                    <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                    color: 'var(--ink-3)' }}>{k.masked}</span>
+                  </td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-2)', borderBottom: '1px solid var(--bg-2)' }}>agent</td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>
+                    service account
+                  </td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>
+                    {k.last_used ? fmtAge(k.last_used) : 'never'}
+                  </td>
+                </tr>
+              ))}
+              {agentKeys.length === 0 && (
+                <tr><td colSpan={4} className="mono" style={{ padding: '14px',
+                      fontSize: 11, color: 'var(--ink-3)' }}>
+                  No API keys yet — create one under Develop → API keys.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px 0' }}>
+          <div className="caps">Permission matrix</div>
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         margin: '6px 0 12px' }}>
+            the agent role is what an MCP key can do — never more than its creator
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <thead>
+              <tr>
+                <th className="caps" style={{ textAlign: 'left', padding: '9px 14px',
+                      borderBottom: '1px solid var(--line)' }}>Permission</th>
+                {ROLES.map(r => (
+                  <th key={r} className="caps" style={{ textAlign: 'center',
+                        padding: '9px 8px', borderBottom: '1px solid var(--line)' }}>{r}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {PERMISSIONS.map(([label, row]) => (
+                <tr key={label}>
+                  <td style={{ padding: '9px 14px', fontSize: 12,
+                               color: 'var(--ink-2)',
+                               borderBottom: '1px solid var(--bg-2)' }}>{label}</td>
+                  {row.map((v, i) => (
+                    <td key={i} className="mono" style={{ textAlign: 'center',
+                          padding: '9px 8px', fontSize: 11,
+                          color: v === 1 ? 'var(--accent)'
+                               : v === 2 ? 'var(--ink-2)' : 'var(--ink-4)',
+                          borderBottom: '1px solid var(--bg-2)' }}>
+                      {v === 1 ? '✓' : v === 2 ? 'view' : '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+    </DevPage>
+  );
+}
+
+const AUDIT_LABELS = {
+  'apikey.create': 'API key created',
+  'apikey.revoke': 'API key revoked',
+  'webhook.add': 'Webhook added',
+  'webhook.remove': 'Webhook removed',
+};
+
+function AuditView() {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    const pull = () => fetch('/api/audit').then(r => r.json()).then(setD)
+                         .catch(() => {});
+    pull();
+    const t = setInterval(pull, 15000);
+    return () => clearInterval(t);
+  }, []);
+  const entries = d?.entries || [];
+
+  return (
+    <DevPage title="Audit log"
+             subtitle={d ? `${d.total} entr${d.total === 1 ? 'y' : 'ies'}` : ''}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        An append-only record of key and webhook changes, written to
+        <span className="mono"> audit.jsonl</span> and flushed to disk on every
+        entry. Unlike the agent feed, nothing here is ever dropped, updated or
+        deleted — a trail with holes in it would be worse than none.
+      </div>
+
+      <DevCard>
+        {entries.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            Nothing audited yet. Creating or revoking an API key, or changing a
+            webhook, writes an entry here.
+          </div>
+        ) : entries.map((e, i) => (
+          <div key={i} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '9px 0', borderTop: i ? '1px solid var(--bg-2)' : 'none',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(e.ts)}</span>
+            <span style={{ color: 'var(--ink)' }}>
+              {AUDIT_LABELS[e.action] || e.action}
+            </span>
+            <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>
+              {e.detail || e.target || ''}
+            </span>
+            <span style={{ marginLeft: 'auto', color: 'var(--ink-4)' }}>
+              {e.actor} · {fmtAge(e.ts)}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
 function ComingSoonView({ icon, title, blurb, points = [], phase }) {
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 'var(--pad)' }}>
@@ -4726,29 +5092,9 @@ function App() {
         {view === 'apikeys' && <ApiKeysView mode={system?.mode || 'local'}/>}
         {view === 'mcp' && <McpServerView mode={system?.mode || 'local'}/>}
         {view === 'webhooks' && <WebhooksView/>}
-        {view === 'members' && (
-          <ComingSoonView icon={I.people} title="Members & roles" phase={6}
-            blurb="Who can do what in a shared workspace — including what an agent's key can never exceed."
-            points={[
-              'Member table with roles, 2FA state and last activity.',
-              'The 7-role × 8-permission matrix; the agent role is capped at its creator’s rights.',
-            ]}/>
-        )}
-        {view === 'billing' && (
-          <ComingSoonView icon={I.card} title="Billing & usage" phase={6}
-            blurb="Metered minutes estimated from your real job durations — clearly marked as an estimate in local mode."
-            points={[
-              'Minutes, rate tier and budget-cap tiles; per-project breakdown.',
-              'Agent-initiated jobs hit the same meter as manual ones.',
-            ]}/>
-        )}
-        {view === 'audit' && (
-          <ComingSoonView icon={I.ledger} title="Audit log" phase={6}
-            blurb="A real record of key, webhook and job actions."
-            points={[
-              'Key create/revoke, webhook config changes, job actions.',
-            ]}/>
-        )}
+        {view === 'members' && <MembersView/>}
+        {view === 'billing' && <BillingView/>}
+        {view === 'audit' && <AuditView/>}
 
         {view === 'system' && (
           <SystemView system={system} onRefreshSystem={refreshSystem}/>

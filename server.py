@@ -196,7 +196,8 @@ from pipeline.notices import (
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
 from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
-                 activity, apikeys as app_apikeys, webhooks as app_webhooks)
+                 activity, apikeys as app_apikeys, webhooks as app_webhooks,
+                 billing as app_billing, audit as app_audit)
 
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
@@ -3074,6 +3075,9 @@ async def create_api_key(name: str = Form(...), scopes: str = Form(""),
         return JSONResponse({"error": str(e)}, 400)
     activity.record_system(f"API key created · {rec['name']} "
                            f"({', '.join(rec['scopes'])})")
+    app_audit.record("apikey.create", target=rec["id"],
+                     detail=f"{rec['name']} · {', '.join(rec['scopes'])}",
+                     environment=rec["environment"])
     # The only time the token is ever returned.
     return {"key": rec, "token": token}
 
@@ -3083,6 +3087,7 @@ async def revoke_api_key(key_id: str):
     if not app_apikeys.revoke(key_id):
         return JSONResponse({"error": "not found or already revoked"}, 404)
     activity.record_system(f"API key revoked · {key_id}", severity="warn")
+    app_audit.record("apikey.revoke", target=key_id)
     return {"ok": True}
 
 
@@ -3111,6 +3116,8 @@ async def add_webhook(url: str = Form(...), events: str = Form(""),
     except ValueError as e:
         return JSONResponse({"error": str(e)}, 400)
     activity.record_system(f"Webhook added · {rec['url']}")
+    app_audit.record("webhook.add", target=rec["id"], detail=rec["url"],
+                     events=rec["events"])
     return {"hook": rec}
 
 
@@ -3118,6 +3125,7 @@ async def add_webhook(url: str = Form(...), events: str = Form(""),
 async def delete_webhook(hook_id: str):
     if not app_webhooks.remove(hook_id):
         return JSONResponse({"error": "not found"}, 404)
+    app_audit.record("webhook.remove", target=hook_id)
     return {"ok": True}
 
 
@@ -3132,6 +3140,45 @@ async def test_webhook(hook_id: str):
         {"job_id": "test_0000", "status": "complete", "title": "Test delivery",
          "target_lang": "fr", "duration_sec": 61.0, "test": True})
     return {"delivery": d}
+
+
+# ── Workspace: usage, members, audit ─────────────────────────────────
+# The minutes here are real — measured source duration × target languages, the
+# way the design meters. The money is an ESTIMATE of what a hosted workspace
+# would charge at the design's published rates; this server bills nobody. The
+# UI must present it as such.
+
+@app.get("/api/billing/usage")
+async def billing_usage(window_days: int = 30):
+    since = time.time() - max(1, int(window_days or 30)) * 86400
+    try:
+        # Defined further down; resolved at call time. It walks each job's
+        # output dir, which is fine for an on-demand page but not for a poll.
+        storage = await storage_stats()
+    except Exception:
+        storage = {}
+    gb = float(storage.get("total_gb") or 0.0)
+    summary = app_billing.summarize(list(jobs.values()), since=since,
+                                    storage_gb=gb)
+    summary["window_days"] = int(window_days or 30)
+    summary["mode"] = cfg.mode
+    # Spelled out so no caller can mistake this for an invoice.
+    summary["disclaimer"] = (
+        "Estimate only. Minutes are measured from real jobs; the cost applies "
+        "the design's published hosted rates. This server bills nobody."
+    )
+    summary["tiers"] = [
+        {"from": 0, "to": 500, "rate": 0.080},
+        {"from": 500, "to": 2000, "rate": 0.065},
+        {"from": 2000, "to": None, "rate": 0.050},
+    ]
+    return summary
+
+
+@app.get("/api/audit")
+async def get_audit(limit: int = 200):
+    return {"entries": app_audit.recent(limit=max(1, min(int(limit or 200), 1000))),
+            "total": app_audit.count()}
 
 
 @app.post("/api/models/pull")
