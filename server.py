@@ -1295,6 +1295,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="GoChiDUBB Studio", version="2.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ─────────────────────────────────────────────────────────────
