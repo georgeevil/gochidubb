@@ -1,163 +1,233 @@
 # SaaS Redesign — Design & Implementation Plan
 
-Status: **plan for review** — no UI code has been changed yet.
+Status: **plan for review.** No UI or backend code has been changed yet.
 
-Source of truth for the visual direction: the Claude Design project
-[`SaaS Redesign Options.dc.html`](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)
-(plus the `support.js` it imports). **That project could not be read from this
-session** (the design MCP requires an interactive `/design-login` that isn't
-available in remote sessions, and the share URL is auth-walled). Every section
-below marked **[needs design file]** is a slot that gets filled in mechanically
-once the file is available; everything else is grounded in the current codebase
-and does not depend on it.
+Design source: Claude Design project `SaaS Redesign Options.dc.html`
+([canvas](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)),
+read via the design MCP. It offers three concepts: **1a agent-first** (hi-fi,
+5 full screens), **1b task-first** and **1c developer-first** (wireframes).
+`support.js` is the generated dc-runtime that renders the canvas — it carries no
+design spec and needs nothing from us.
 
-To unblock the design-specific half, any one of these works:
+## Decisions locked
 
-1. In Claude Design, use **"Send to Claude Code Web"** on the project so the
-   files are seeded into the session workspace.
-2. Commit `SaaS Redesign Options.dc.html` + `support.js` into the repo (e.g.
-   `docs/design/`) on any branch.
-3. Paste the file contents into the conversation.
+| Question | Decision |
+|---|---|
+| Concept | **1a agent-first** — the feed is home; rail groups Work / Develop / Workspace |
+| Scope of this effort | **UI-first.** Build the shell + screens against the existing local backend. Billing and Members render from a stub layer with clearly-labelled placeholder data; API keys and Webhooks are built for real |
+| Local offline mode | **Stays first-class.** `GOCHIDUBB_MODE=local` (default) is byte-for-byte today's experience: no auth, no billing surfaces. `hosted` reveals the Workspace group |
 
----
+Consequence: no accounts, no payments, no multi-tenancy, and **no new
+dependencies** in this effort. `httpx` (already required) covers webhook
+delivery. The README promise — local, offline, no per-minute fees — stays true
+for the default mode.
 
-## 1. Current state (what the redesign starts from)
+## 1. What the design actually specifies
 
-`static/index.html` is a single 3,710-line file — but it is **not** a legacy
-jQuery-style page. It is already a React 18 app:
+Five screens, each 1360×900, dark, sidebar + top bar + optional right rail:
 
-- React + ReactDOM UMD and Babel standalone from unpkg, JSX compiled in the
-  browser (`<script type="text/babel">`, lines 207–3709). three.js powers a
-  decorative "sphere" hero. No build step, by design.
-- CSS lives in one `<style>` block (lines 10–197): design tokens on `:root`
-  (`--bg`/`--bg-1..3`, `--line`, `--ink-1..4`, oklch lime `--accent`,
-  `--warn`, `--err`; fonts Instrument Serif / Geist / JetBrains Mono; layout
-  vars `--pad`, `--gutter`, `--rail-w`), a handful of utility classes
-  (`.btn`, `.btn-primary`, `.btn-ghost`, `.chip`, `.serif`, `.mono`, `.caps`),
-  animations, and a film-grain overlay. Most other styling is inline
-  `style={{...}}` referencing those CSS variables.
-- App shell: `LeftRail` (nav, collapses to a drawer under a narrow
-  breakpoint) + `TopBar` + `SetupBanner`, then one of ten views switched in
-  `App()` (index.html:3492): **home, processing, review, result, discover,
-  history, batch, voices, glossary, system** (with setup/logs tabs).
-- ~45 function components in the same file; state is plain `useState` in
-  `App`, passed down as props. Data comes from polling: `/api/system` every
-  5 s, `/api/jobs` + `/api/publish/pending` every 2 s while a job is active,
-  10 s otherwise.
-- Endpoints referenced by the UI: `/api/config`, `/api/diagnostics/run`,
-  `/api/dub`, `/api/dub/batch`, `/api/dub/{id}/publish[...]`,
-  `/api/dub/{id}/quality`, `/api/dub/{id}/retry_stage/{stage}`,
-  `/api/dub/{id}/stages`, `/api/jobs`, `/api/lip_sync/status`,
-  `/api/lm_studio/models`, `/api/logs`, `/api/publish/pending`,
-  `/api/quick_test`, `/api/scout/dub`, `/api/scout/trending`, `/api/secrets`,
-  `/api/secrets/status`, `/api/showcase`, `/api/system`, `/api/voices`.
-- `static/beta.html` is a separate, standalone status page for the
-  stage-reuse beta with its own (different, teal) palette — currently
-  off-brand relative to index.html and to any redesign.
+1. **Agent Feed** (home) — a chronological activity stream. Agent runs appear as
+   cards: the natural-language prompt that started them, the MCP tool calls
+   underneath (`gochidubb.dub(...) ⇒ job_9f2a4c`), per-stage chips
+   (`download ✓ … tts ● … merge ○`), a progress bar, per-language status, and
+   cost so far. Below the cards, one-line webhook / audit / billing events.
+   Filters: All · Runs · Tool calls · System. Right rail: Live (queue depth, per-GPU
+   load, minutes today), Spend MTD, MCP clients connected.
+2. **MCP Server** — numbered onboarding (endpoint, `claude mcp add …`, "say what
+   you want"), the exposed-tool table, a metering warning, recent tool calls.
+3. **Members & Roles** — member table with roles/2FA/last-active, a 7-role ×
+   8-permission matrix, pending invites. The `agent` role is explicitly "what an
+   MCP key can do — never more than its creator."
+4. **API Keys** — create-key form (name, live/test, expiry, scope checkboxes),
+   key table with masked tokens and revoke, curl quick-start, rate limits.
+5. **Billing & Usage** — minutes/invoice/rate/budget-cap tiles, the metered rate
+   table, per-project breakdown, invoices, a warning that agent-initiated jobs
+   hit the same meter.
 
-Constraints that shape the plan:
+Everything is driven by a ⌘K command bar ("Dub the last upload into fr, es, ja
+and stitch a showcase…") present in both the rail and the top bar.
 
-- **No build step, no new runtime dependencies** (CONTRIBUTING.md). The
-  redesign must stay a static file served by FastAPI.
-- Server API and job lifecycle are untouched — this is a frontend-only change.
-- Nothing in CI validates the UI, so the plan includes manual/browser
-  verification. Note the Python gates do not currently run either:
-  `.github/workflows/lint.yml` triggers on `main` while the default branch is
-  `master`, so only `claude-review` executes on a PR — and `ruff check .`
-  reports 105 pre-existing findings on master, which would have to be cleared
-  (or the ruleset pinned) before that workflow could be turned on. Out of
-  scope here, but it means "CI is green" says nothing about this change.
+## 2. Visual system — token delta
 
-## 2. Design approach
+The design keeps the current family (dark, lime accent, Geist + JetBrains Mono)
+but retunes every value and **drops Instrument Serif entirely**:
 
-**Reskin, don't rewrite.** The component tree, state management, polling, and
-API wiring in index.html are recent and sound. The redesign replaces the
-*presentation layer*:
+| Role | Current (`index.html`) | Design 1a |
+|---|---|---|
+| ground | `#0a0a0d` | `#060607` (darker) |
+| panel | `#101014` | `#0e0e11` |
+| panel raised | `#16161c` | `#14141a` |
+| hairline | `#24242e` | `#1e1e25` |
+| border | `#2f2f3c` | `#2a2a33` |
+| ink | `#ece9e0` | `#e9e7de` |
+| ink-2 | `#a3a096` | `#9d9c92` |
+| ink-3 | `#5a5a63` | `#5e5e67` |
+| ink-4 | `#35353d` | `#3a3a42` |
+| accent | `oklch(0.88 0.18 125)` ≈ `#bdeb58` | `#c8f542` (yellower, more saturated) |
+| warn | `oklch(0.78 0.15 60)` | `#e0a34e` |
+| display font | Instrument Serif | **dropped** — Geist 600 / JetBrains Mono 600 |
 
-1. **Token swap.** All colors, fonts, radii, and spacing already route through
-   `:root` custom properties. The chosen design option lands primarily as a
-   new token block plus updated utility classes.
-2. **Shell restyle.** `LeftRail`, `TopBar`, `NavItem`, `SetupBanner` are the
-   components that carry most of the "product identity" — these get the
-   heaviest markup/style changes.
-3. **Surface components.** `.btn`/`.chip`/`Field`/`Select`/`Toggle`/
-   `StatusBadge`/`SectionHeader`/`LongProgress` are the shared vocabulary;
-   restyling them propagates through every view.
-4. **Views keep their logic.** Each view's JSX is adjusted for layout/spacing
-   only where the design demands it; handlers, effects, and data flow are not
-   touched.
-5. **beta.html** is restyled to the same token set (it is small — 221 lines).
+Also: radii 4–12px (currently mostly 6), accent glow shadows on the logo and
+live dots (`0 0 16px rgba(200,245,66,.35)`), a 1.4–1.5s `pulse` animation on
+anything live, and heavy `font-variant-numeric: tabular-nums` mono for all
+numbers. The existing film-grain overlay is absent from the design — drop it.
 
-Items the design file must supply — the fill-in checklist **[needs design
-file]**:
+## 3. Gap analysis
 
-- Which of the redesign *options* is the chosen direction (the canvas
-  presents several).
-- Color palette (light or dark base? accent hue?), typography stack, radius/
-  elevation/spacing scale.
-- App-shell layout: does the rail survive, or does the design move to a top
-  nav / different chrome?
-- Treatment of the three.js sphere hero (keep, restyle, or drop).
-- Any new screens or rearranged information architecture beyond the current
-  ten views.
-- Whatever behavior `support.js` encodes (theme switching, shared helpers for
-  the artboards, interaction specs).
+### Already real — the design just re-presents it
 
-## 3. Implementation plan
+| Design element | Backing code |
+|---|---|
+| Stage chips, retry-on-stage | `GET /api/dub/{id}/stages`, `POST /api/dub/{id}/retry_stage/{stage}` |
+| Job cards, per-language status | `GET /api/jobs`, `/api/job/{id}`, `/api/dub/batch/{id}` |
+| Showcase / quick-test / redub | `POST /api/showcase`, `/api/quick_test`, `/api/job/{id}/redub` |
+| MCP tool table | 23 tools in `tools/gochidubb_mcp.py` |
+| Live GPU / queue tiles | `GET /api/system` |
+| Minutes source-of-truth | `job["duration"]` (seconds) is already recorded per job |
+| Storage line on Billing | `GET /api/storage/stats` |
+| System event lines | `GET /api/logs`, `app/logbuf.py` |
+| Per-job audit | `GET /api/dub/{id}/audit` |
 
-Phased so each step leaves the app working and reviewable:
+### Built for real in this effort
 
-**Phase 0 — capture the design source (blocked on access, see top).**
-Check the two design files into `docs/design/` so the mapping from artboard to
-code is reviewable in the PR.
+| Feature | Approach |
+|---|---|
+| **API keys** | New `app/apikeys.py` following the proven `app/secrets.py` pattern — keys stored **hashed, outside `config-user.json`** (that file is served by an unauthenticated `GET /api/config` with CORS `*`; the VK-token incident already established this rule). Scope enum matches the design: `dub:write`, `jobs:read`, `outputs:read`, `mcp:invoke`, `webhooks:manage`, `voices:write`. Shown once on create. |
+| **Webhooks** | `app/webhooks.py`; fire-and-forget `httpx` POST on `job.completed`, `job.failed`, `job.awaiting_review` from the job runner, with delivery log + manual re-send. |
+| **Agent feed** | New `GET /api/activity` merging job transitions, MCP tool calls, webhook deliveries and log events into one reverse-chronological stream. Requires recording MCP tool invocations — currently nothing logs them. |
+| **⌘K command bar** | Client-side parser mapping plain language onto existing endpoints. Scoped deliberately narrow: source + target languages + showcase/quick-test flags. Anything it cannot parse confidently pre-fills the New Dub form instead of guessing. |
 
-**Phase 1 — extract the style layer (mechanical, no visual change).**
-Move the `<style>` block out of index.html into `static/theme.css`, linked
-with `<link rel="stylesheet">`. This gives the redesign a single file to
-iterate on and cuts index.html by ~190 lines. Verify pixel-identical
-rendering. (FastAPI already serves all of `static/` — no server change.)
+### Stubbed, clearly labelled
 
-**Phase 2 — apply the chosen option's tokens.** Rewrite the `:root` token
-block and utility classes to the design's palette/type/spacing. Because views
-style themselves via `var(--…)` inline, most of the app follows automatically.
-Sweep for hard-coded values that bypass tokens (e.g. `#0a0a0d` appears
-inline in `.btn-primary` text color and a few components) and route them
-through tokens.
+| Feature | Stub behaviour |
+|---|---|
+| **Billing & usage** | Computes **real** minutes from `job["duration"]` × target languages, prices them with the design's published tiers ($0.080 first 500 min → $0.065 → $0.050 at 2,000+, showcase +$0.020, priority ×1.5), and shows the result as a **cost estimate**, not an invoice. Invoice list and payment method are placeholders behind an "example data" marker. |
+| **Members & roles** | Single local `owner` plus the MCP service account. The permission matrix ships as a static reference table — accurate about intent, enforcing nothing in `local` mode. |
+| **Audit log** | Real entries for key create/revoke, webhook config, job actions. No cross-user attribution (there are no other users yet). |
 
-**Phase 3 — restyle the shell.** LeftRail/TopBar/SetupBanner markup updated
-to the design's chrome; keep the narrow-breakpoint drawer behavior, the
-awaiting-review badge, and the running-job indicator (these are functional,
-not decorative). Restyle the shared controls (`btn`, `chip`, forms, badges,
-progress).
+### Shipped features the design has no home for — must be placed
 
-**Phase 4 — per-view pass.** Walk the ten views against the artboards:
-home (source input + quick test), processing (stage timeline), review,
-result, discover/scout, history, batch, voices, glossary, system (setup +
-logs). Adjust layout/spacing/hierarchy to match; leave logic intact.
+The design omits three things that exist and work. Losing them in a redesign
+would be a regression, so the plan places them explicitly:
 
-**Phase 5 — beta.html + polish.** Re-token beta.html; check dark/light
-consistency, focus states, reduced-motion, and the narrow layout on every
-view; remove any dead CSS.
+| Feature | Repo surface | Placement |
+|---|---|---|
+| Translation review (human-in-the-loop) | `awaiting_translation_review`, `/edit_translations`, `/continue` | Job detail state, plus a persistent "N awaiting review" badge on Jobs — it currently has one in `TopBar` and must keep it |
+| Publish / VK approval | `/api/publish/*`, `publishPending` inbox | **Library → Publish inbox** (Library is otherwise underspecified in the design) |
+| Discover / scout (trending) | `/api/scout/*`, `DiscoverView` | New **Work → Discover** rail item |
 
-**Verification (each phase).** Serve with
-`python tools/gochidubb_serverctl.py foreground --reload`, drive the UI with
-Playwright (Chromium is preinstalled in remote sessions) against a backend
-with no models installed — every view renders from polling data, so
-screenshots of all ten views at desktop + narrow widths are enough to
-review without running a dub. `ruff check .` stays green (no Python changes).
+Also unplaced by the design but present: voice presets, glossary, quality
+panel, beta stage-reuse page. Voices + Glossary go under **Library**; the
+quality panel folds into job detail; `beta.html` is re-tokenised in the last phase.
 
-**Deliverable.** Commits per phase on `claude/saas-redesign-plan-abe8vf`,
-screenshots in the PR description when a PR is requested.
+## 4. Mode model
 
-## 4. Risks
+One new `UserConfig` field, `mode: str = "local"` (env `GOCHIDUBB_MODE`), read
+through `app.config.cfg` like every other tunable — no scattered `os.getenv`.
 
-- **In-browser Babel + one file** means a syntax slip breaks the whole app
-  with only a console error. Mitigation: phase-sized commits, screenshot
-  verification after each, and keeping Phase 1 strictly mechanical.
-- **Inline styles everywhere** make a *structural* redesign (e.g. rail → top
-  nav) more invasive than a token swap; if the chosen option changes the
-  shell geometry, Phase 3 grows but the view logic still survives as-is.
-- **CDN fonts/libs**: the current page already depends on unpkg + Google
-  Fonts at load time. If the design introduces new fonts, they ride the same
-  mechanism; going fully offline is possible (vendor the files into
-  `static/vendor/`) but is a separate decision worth a maintainer call.
+- `local` (default): rail shows **Work + Develop**. No auth on any route. No
+  Workspace group, no billing surfaces. Identical to today.
+- `hosted`: adds the **Workspace** group (Members, Billing, Audit). API-key
+  scope checks are enforced on `/api/*`.
+
+`GET /api/system` grows a `mode` field so the UI can branch without a second
+round trip. Key enforcement is written from the start but gated on
+`mode == "hosted"`, so the local path can never be locked out by a bug in it.
+
+## 5. Information architecture
+
+```
+WORK        Agent feed   → NEW (feed of runs/jobs/events)
+            New dub      → HomeView (source, langs, voice, mode tabs)
+            Jobs         → HistoryView + BatchView + ProcessingView + ReviewView
+            Discover     → DiscoverView                    [design-omitted, kept]
+            Library      → ResultView + Publish inbox + Voices + Glossary
+DEVELOP     API keys     → NEW (real)
+            MCP server   → NEW page over the existing 23 MCP tools
+            Webhooks     → NEW (real)
+WORKSPACE   Members      → NEW (stub)          [hosted mode only]
+            Billing      → NEW (metered estimate from real durations)
+            Audit log    → NEW (real entries, no multi-user attribution)
+            Settings     → SystemView (setup + logs tabs)
+```
+
+Eleven current views collapse into ten rail destinations; no view's logic is
+discarded.
+
+## 6. Implementation phases
+
+Each phase ends with a working app and a screenshot pass.
+
+**Phase 1 — extract the style layer.** Move the `<style>` block (index.html
+:10–197) into `static/theme.css` behind a `<link>`. Mechanical, zero visual
+change, cuts ~190 lines from the 3,710-line file and gives every later phase one
+place to edit. FastAPI already serves `static/`; no server change.
+
+**Phase 2 — retune tokens.** Apply the §2 table, drop Instrument Serif and the
+grain overlay, add the glow/pulse/tabular-nums primitives. Sweep for hard-coded
+colours that bypass tokens (`#0a0a0d` is inlined in `.btn-primary` and several
+components). Whole app shifts at once because views style via `var(--…)`.
+
+**Phase 3 — shell.** Rebuild `LeftRail` into the grouped Work/Develop/Workspace
+rail with the usage tile at its foot; rebuild `TopBar` with the ⌘K field, GPU/mode
+pills and avatar. Keep the narrow-breakpoint drawer, the awaiting-review badge and
+the running-job indicator — those are functional. Add `mode` gating.
+
+**Phase 4 — Agent feed + activity API.** `GET /api/activity`, MCP tool-call
+recording, the feed cards (run → prompt → tool calls → stage chips → progress →
+per-language → cost), filter tabs, right-rail Live/Spend/MCP tiles. This is the
+largest phase and the one that defines the concept.
+
+**Phase 5 — Develop group (real).** `app/apikeys.py`, `app/webhooks.py`, their
+routes, the API Keys and MCP Server and Webhooks screens. Scope enforcement
+written, gated to hosted.
+
+**Phase 6 — Workspace group (stub).** Billing from real durations + design
+tiers; Members matrix; Audit log. Every placeholder visibly marked.
+
+**Phase 7 — re-home the omitted features and polish.** Discover into Work;
+Publish inbox / Voices / Glossary into Library; review flow into job detail;
+`beta.html` re-tokenised; ⌘K parser; narrow-width and focus-state pass across
+all screens; delete dead CSS.
+
+## 7. Verification
+
+`ruff check .` and `compileall` stay green (CI runs only these — a green CI is
+not evidence the UI works, per CLAUDE.md). Real verification is:
+
+- `python tools/gochidubb_serverctl.py foreground --reload`, then drive the UI in
+  Chrome and screenshot every rail destination at desktop **and** narrow widths.
+  Every screen renders from polling data, so no dub needs to run to review layout.
+- New pure functions get pytest coverage where the suite already has traction:
+  the metering tier maths, the ⌘K parser, and activity-stream merge/ordering.
+- Both modes checked each phase: `GOCHIDUBB_MODE=local` must look and behave
+  exactly as it does today.
+
+## 8. Risks
+
+- **One 3,710-line file compiled by in-browser Babel.** A syntax slip white-screens
+  the app with only a console error. Mitigation: phase-sized commits, Phase 1
+  strictly mechanical, screenshots after each.
+- **Feed needs data nothing currently records.** MCP tool calls are invisible to
+  the server today; if that recording proves invasive, the feed degrades to
+  job-transition events only and still reads correctly.
+- **Metering is an estimate, and could be mistaken for a bill.** Every money
+  figure carries an "estimate · local mode" marker; nothing implies a charge.
+- **Auth gating could lock out the local path.** Enforcement is gated on
+  `mode == "hosted"` and the local path is re-verified every phase.
+- **Design omissions are the real regression risk** — see §3; they are placed
+  deliberately rather than discovered missing at the end.
+
+## 9. Out of scope (and what it would take)
+
+Real accounts + sessions + 2FA, workspace tenancy on every job and output,
+enforced RBAC, Stripe metered billing, hosted streamable-HTTP MCP at
+`mcp.gochidubb.com`, a public `api.gochidubb.com/v1` with rate limits, and a
+multi-GPU worker pool. That is the "Full hosted SaaS" path: weeks of backend
+work, several new dependencies (payments, auth), and infrastructure decisions —
+and it would need `CONTRIBUTING.md`'s no-new-deps rule discussed first.
+
+Open, not blocking: the design's header note says "All creator references
+removed — brand is gochidubb only", but `README.md` currently credits
+@smolekoma and @smolemaru. Whether to strip those is a call for you, not a
+side effect of a UI redesign — flagged, untouched.
