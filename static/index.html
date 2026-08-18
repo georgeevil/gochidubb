@@ -222,6 +222,58 @@ function useMediaQuery(query) {
 
 const useIsNarrow = () => useMediaQuery(NARROW_QUERY);
 
+// ── ⌘K command parsing ───────────────────────────────────────────────
+// Deliberately narrow: a source, some target languages, and which of the four
+// run modes was asked for. It never starts a job on its own — a dub costs real
+// GPU minutes and is awkward to undo, so a parsed command pre-fills New dub
+// and the human presses Start. Anything it cannot read confidently is reported
+// rather than guessed at.
+const CMD_MODE_WORDS = [
+  [/\b(showcase|reel|stitch(ed)?)\b/i, 'showcase'],
+  [/\b(quick ?test|compare|side.by.side)\b/i, 'quick'],
+  [/\bbatch\b/i, 'batch'],
+];
+
+// Longest names first so "Chinese (Traditional)" wins over "Chinese".
+const _LANG_MATCHERS = LANGS
+  .filter(l => l.c !== 'auto')
+  .map(l => ({ code: l.c, name: l.n.toLowerCase() }))
+  .sort((a, b) => b.name.length - a.name.length);
+
+function parseCommand(text) {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+  const out = { text: raw, source: '', langs: [], mode: null, understood: [] };
+
+  const url = raw.match(/https?:\/\/\S+/i);
+  if (url) {
+    out.source = url[0].replace(/[.,;]+$/, '');
+    out.understood.push('source');
+  }
+
+  for (const [re, mode] of CMD_MODE_WORDS) {
+    if (re.test(raw)) { out.mode = mode; out.understood.push('mode'); break; }
+  }
+
+  // Match language names first, then bare two-letter codes — but only codes
+  // that appear as their own word, so the "es" in "these" is not Spanish.
+  let hay = ' ' + raw.toLowerCase().replace(/[,/]+/g, ' ') + ' ';
+  for (const l of _LANG_MATCHERS) {
+    if (hay.includes(' ' + l.name + ' ')) {
+      if (!out.langs.includes(l.code)) out.langs.push(l.code);
+      hay = hay.split(' ' + l.name + ' ').join(' ');
+    }
+  }
+  for (const l of _LANG_MATCHERS) {
+    const re = new RegExp('(^|\\s)' + l.code + '(\\s|$)');
+    if (re.test(hay) && !out.langs.includes(l.code)) out.langs.push(l.code);
+  }
+  if (out.langs.length) out.understood.push('languages');
+
+  return out;
+}
+
+
 // Wall-clock only — the log viewer shows one session, so the date is noise.
 const fmtClock = (ts) => {
   if (!ts) return '--:--:--';
@@ -597,21 +649,25 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
                     publishPendingCount = 0,
                     narrow = false, open = false, onClose }) {
   const mode = system?.mode || 'local';
-  // Jobs consolidates History/Processing/Review/Batch; its badge prefers the
-  // human-blocking count (awaiting review) over the running-job dot.
+  // Jobs consolidates History/Processing/Review/Batch, and the publish inbox
+  // lives there too — it is a filter over the History list, not a screen of
+  // its own. The badge therefore prefers whatever is blocking a human:
+  // translation review first, then publish approval, then the running dot.
   const jobsHint = awaitingReviewCount > 0 ? `${awaitingReviewCount} awaiting review`
+                 : publishPendingCount > 0 ? `${publishPendingCount} to publish`
                  : runningJob ? 'Live job' : 'All jobs';
+  const jobsBadge = awaitingReviewCount > 0 ? String(awaitingReviewCount)
+                  : publishPendingCount > 0 ? String(publishPendingCount)
+                  : runningJob ? '●' : null;
   const groups = [
     { label: 'Work', items: [
       { id: 'feed',     label: 'Agent feed', hint: 'Runs · events',           ic: I.feed },
       { id: 'home',     label: 'New dub',    hint: 'Upload · URL · showcase', ic: I.home },
       { id: 'jobs',     label: 'Jobs',       hint: jobsHint, ic: I.history,
-        badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : (runningJob ? '●' : null) },
+        badge: jobsBadge },
       { id: 'discover', label: 'Discover',   hint: 'Trending · scout',        ic: I.discover },
-      // The publish inbox rides on Library — staged uploads live with results,
-      // so the count doubles as "N jobs waiting for your approval".
-      { id: 'library',  label: 'Library',    hint: publishPendingCount > 0 ? `${publishPendingCount} to publish` : 'Results · voices · glossary', ic: I.result,
-        badge: publishPendingCount > 0 ? String(publishPendingCount) : null },
+      { id: 'library',  label: 'Library',    hint: 'Results · voices · glossary',
+        ic: I.result },
     ]},
     { label: 'Develop', items: [
       { id: 'apikeys',  label: 'API keys',   hint: 'Scoped access',    ic: I.key },
@@ -841,7 +897,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, mode = 'local'
             if (cmdRef.current) cmdRef.current.value = '';
           }}>
           <label
-            title="Natural-language commands land in a later phase — for now this opens New dub."
+            title="Describe a dub — a URL, target languages, and optionally showcase or quick test. It fills in New dub; you press Start."
             style={{ display: 'flex', alignItems: 'center', gap: 8,
                      width: 'min(440px, 100%)', padding: '5px 10px', cursor: 'text',
                      background: 'var(--bg-1)', border: '1px solid var(--line)',
@@ -895,7 +951,8 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, mode = 'local'
 // ═══════════════════════════════════════════════════════════════════
 // HOME VIEW — with dynamic model loading
 // ═══════════════════════════════════════════════════════════════════
-function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
+function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
+                   command = null, onCommandConsumed }) {
   // ── Dynamic models state ──
   const [availableModels, setAvailableModels] = useState([]);
   const [translationBackend, setTranslationBackend] = useState('lm_studio');
@@ -942,6 +999,29 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  // What ⌘K filled in, kept so the form can say what it understood — and,
+  // just as importantly, what it did not.
+  const [applied, setApplied] = useState(null);
+
+  // Apply a parsed ⌘K command. Nothing is submitted: the form is filled and
+  // the human presses Start, because a dub spends real GPU time.
+  useEffect(() => {
+    if (!command) return;
+    // Understood nothing? Then touch nothing. Resetting the mode someone had
+    // already chosen, because their sentence made no sense, is worse than
+    // simply saying it made no sense.
+    if (!command.understood.length) { setApplied(command); onCommandConsumed && onCommandConsumed(); return; }
+    if (command.source) { setYtUrl(command.source); setMode('url'); }
+    if (command.mode === 'showcase') switchTo('showcase');
+    else if (command.mode === 'quick') switchTo('quick');
+    else if (command.mode === 'batch') switchTo('batch');
+    else if (command.langs.length > 1) switchTo('quick');
+    else switchTo('single');
+    if (command.langs.length === 1) setTgtLang(command.langs[0]);
+    else if (command.langs.length > 1) setQtLangs(command.langs);
+    setApplied(command);
+    onCommandConsumed && onCommandConsumed();
+  }, [command]);
   const [lipStatus, setLipStatus] = useState(null);
 
   // ── Fetch models dynamically ──
@@ -1190,6 +1270,36 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
 
       {/* Form */}
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 32px 80px' }}>
+        {/* What ⌘K filled in. It reports what it did NOT understand too — a
+            command bar that quietly drops half your sentence is worse than one
+            that admits it only caught part of it. */}
+        {applied && (
+          <div style={{ display: 'flex', gap: 10, padding: '12px 14px',
+                        marginBottom: 18, background: 'var(--bg-1)',
+                        border: '1px solid var(--line-2)',
+                        borderRadius: 'var(--r-md)' }}>
+            <span style={{ color: 'var(--accent)', flexShrink: 0 }}>{I.feed}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 4 }}>
+                Filled in from your command — check it and press Start.
+              </div>
+              <div className="mono wrap-any" style={{ fontSize: 10.5,
+                                                      color: 'var(--ink-3)',
+                                                      lineHeight: 1.6 }}>
+                “{applied.text}”
+              </div>
+              <div className="mono" style={{ fontSize: 10.5, marginTop: 6,
+                                             color: 'var(--ink-3)' }}>
+                {applied.understood.length
+                  ? 'read: ' + applied.understood.join(' · ')
+                  : 'nothing recognised — fill the form in yourself'}
+                {!applied.source && ' · no source URL found'}
+              </div>
+            </div>
+            <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 11 }}
+                    onClick={() => setApplied(null)}>Dismiss</button>
+          </div>
+        )}
         {error && (
           <div style={{
             margin: '0 0 24px',
@@ -4926,6 +5036,8 @@ function App() {
   const [selectedReviewJobId, setSelectedReviewJobId] = useState(null);
   const [jobsTab, setJobsTab] = useState('all');
   const [libTab, setLibTab] = useState('results');
+  // What ⌘K last parsed, handed to HomeView to pre-fill the form.
+  const [pendingCommand, setPendingCommand] = useState(null);
   const narrow = useIsNarrow();
   const [navOpen, setNavOpen] = useState(false);
 
@@ -5019,7 +5131,11 @@ function App() {
           onJumpToProcessing={() => { setJobsTab('live'); setView('jobs'); }}
           onJumpToReview={() => { setJobsTab('review'); setView('jobs'); }}
           onOpenSetup={openSetup}
-          onCommand={() => setView('home')}
+          onCommand={(text) => {
+            const parsed = parseCommand(text);
+            if (parsed) setPendingCommand(parsed);
+            setView('home');
+          }}
           narrow={narrow} onOpenNav={() => setNavOpen(true)}
         />
 
@@ -5034,6 +5150,8 @@ function App() {
             voicePresets={voicePresets}
             sphereOn={sphereOn}
             onJobSubmitted={onJobSubmitted}
+            command={pendingCommand}
+            onCommandConsumed={() => setPendingCommand(null)}
           />
         )}
 
