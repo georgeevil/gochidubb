@@ -151,7 +151,7 @@ WORKSPACE   Members      → NEW (stub)          [hosted mode only]
             Settings     → SystemView (setup + logs tabs)
 ```
 
-Eleven current views collapse into ten rail destinations; no view's logic is
+The ten current views map onto ten rail destinations; no view's logic is
 discarded.
 
 ## 6. Implementation phases
@@ -192,8 +192,12 @@ all screens; delete dead CSS.
 
 ## 7. Verification
 
-`ruff check .` and `compileall` stay green (CI runs only these — a green CI is
-not evidence the UI works, per CLAUDE.md). Real verification is:
+Automated gates give us nothing here, and it is worth being precise about why:
+`.github/workflows/lint.yml` triggers on `main`, but the default branch is
+`master`, so **it never runs** — only `claude-review` fires on a PR. And
+`ruff check .` reports **105 pre-existing findings** on master (ruff 0.15.21),
+so a clean full run is not a reachable baseline; compare per-file before/after
+instead. Real verification is therefore manual:
 
 - `python tools/gochidubb_serverctl.py foreground --reload`, then drive the UI in
   Chrome and screenshot every rail destination at desktop **and** narrow widths.
