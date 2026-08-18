@@ -195,7 +195,8 @@ from pipeline.notices import (
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
-from app import logbuf, artifact_store, reuse_runtime, reuse as app_reuse, activity
+from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
+                 activity, apikeys as app_apikeys, webhooks as app_webhooks)
 
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
@@ -1201,6 +1202,12 @@ async def lifespan(app: FastAPI):
     _upload_queue = asyncio.Queue()
     _upload_worker_task = asyncio.create_task(_upload_worker())
 
+    # update() runs on the event loop for most stages but from a worker thread
+    # for the blocking ones, and asyncio.create_task() only works on the
+    # former. Holding the serving loop lets either path schedule a delivery.
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+
     # First line of the activity feed's System stream, and a useful one: it
     # dates the buffer, so "nothing before this" is explained rather than
     # looking like lost history.
@@ -1345,6 +1352,46 @@ def _tool_for_path(path: str) -> str:
         if path.startswith(prefix) and len(prefix) > len(best):
             best, name = prefix, tool
     return name if best else path
+
+
+_MAIN_LOOP = None
+
+# Job status -> the webhook event it corresponds to. Only these three fire;
+# they are the ones the design names.
+_WEBHOOK_EVENT_FOR_STATUS = {
+    "complete": "job.completed",
+    "error": "job.failed",
+    "awaiting_translation_review": "job.awaiting_review",
+}
+
+
+def _fire_webhooks(status: str, job: dict) -> None:
+    """Schedule deliveries for a job transition. Never raises, never blocks.
+
+    A dub must not slow down or fail because someone's endpoint is down, so
+    this only ever schedules detached tasks; app.webhooks handles timeouts,
+    the single retry, and turning failures into delivery records.
+    """
+    event = _WEBHOOK_EVENT_FOR_STATUS.get(status)
+    if not event:
+        return
+    hooks = app_webhooks.hooks_for(event)
+    if not hooks:
+        return
+    payload = app_webhooks.payload_for_job(job)
+
+    async def _run():
+        for h in hooks:
+            await app_webhooks.deliver_one(h, event, payload)
+        activity.record_system(
+            f"Webhook {event} · {len(hooks)} endpoint(s) · job {job.get('id')}")
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        # Called from a worker thread — hand it to the serving loop instead.
+        if _MAIN_LOOP is not None:
+            asyncio.run_coroutine_threadsafe(_run(), _MAIN_LOOP)
 
 
 @app.middleware("http")
@@ -2533,6 +2580,10 @@ async def run_pipeline_stages(
                 )
             except Exception:
                 log.debug("[activity] could not record transition", exc_info=True)
+            try:
+                _fire_webhooks(new_status, job)
+            except Exception:
+                log.debug("[webhooks] could not schedule delivery", exc_info=True)
 
     _resolve_voice_into_ctx(job, ctx)
     start_i = max(_stage_index(start_stage), 0)
@@ -2993,6 +3044,94 @@ async def get_activity(kinds: str = "", limit: int = 80, since_id: int = 0):
         ),
         "last_id": activity.last_id(),
     }
+
+
+# ── Develop: API keys ────────────────────────────────────────────────
+# Keys are hashed at rest and the plaintext is returned exactly once, at
+# creation. Scope enforcement is gated on hosted mode (see _require_scope):
+# in local mode every route stays open, as it always has been.
+
+@app.get("/api/apikeys")
+async def list_api_keys():
+    return {"keys": app_apikeys.list_keys(),
+            "scopes": app_apikeys.SCOPES,
+            "enforced": cfg.mode == "hosted"}
+
+
+@app.post("/api/apikeys")
+async def create_api_key(name: str = Form(...), scopes: str = Form(""),
+                         environment: str = Form("live"),
+                         expires_days: str = Form("")):
+    want = [s.strip() for s in scopes.split(",") if s.strip()]
+    try:
+        days = int(expires_days) if str(expires_days).strip() else None
+    except ValueError:
+        return JSONResponse({"error": "expires_days must be a number"}, 400)
+    try:
+        rec, token = app_apikeys.create(name, want, environment=environment,
+                                        expires_days=days)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, 400)
+    activity.record_system(f"API key created · {rec['name']} "
+                           f"({', '.join(rec['scopes'])})")
+    # The only time the token is ever returned.
+    return {"key": rec, "token": token}
+
+
+@app.post("/api/apikeys/{key_id}/revoke")
+async def revoke_api_key(key_id: str):
+    if not app_apikeys.revoke(key_id):
+        return JSONResponse({"error": "not found or already revoked"}, 404)
+    activity.record_system(f"API key revoked · {key_id}", severity="warn")
+    return {"ok": True}
+
+
+@app.delete("/api/apikeys/{key_id}")
+async def delete_api_key(key_id: str):
+    if not app_apikeys.delete(key_id):
+        return JSONResponse({"error": "not found"}, 404)
+    return {"ok": True}
+
+
+# ── Develop: webhooks ────────────────────────────────────────────────
+
+@app.get("/api/webhooks")
+async def list_webhooks():
+    return {"hooks": app_webhooks.list_hooks(),
+            "events": list(app_webhooks.EVENTS),
+            "deliveries": app_webhooks.deliveries(50)}
+
+
+@app.post("/api/webhooks")
+async def add_webhook(url: str = Form(...), events: str = Form(""),
+                      secret: str = Form("")):
+    want = [e.strip() for e in events.split(",") if e.strip()]
+    try:
+        rec = app_webhooks.add(url, want, secret=secret)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, 400)
+    activity.record_system(f"Webhook added · {rec['url']}")
+    return {"hook": rec}
+
+
+@app.delete("/api/webhooks/{hook_id}")
+async def delete_webhook(hook_id: str):
+    if not app_webhooks.remove(hook_id):
+        return JSONResponse({"error": "not found"}, 404)
+    return {"ok": True}
+
+
+@app.post("/api/webhooks/{hook_id}/test")
+async def test_webhook(hook_id: str):
+    """Send a sample delivery so a listener can be verified before a real run."""
+    hook = next((h for h in app_webhooks._read() if h.get("id") == hook_id), None)
+    if not hook:
+        return JSONResponse({"error": "not found"}, 404)
+    d = await app_webhooks.deliver_one(
+        hook, "job.completed",
+        {"job_id": "test_0000", "status": "complete", "title": "Test delivery",
+         "target_lang": "fr", "duration_sec": 61.0, "test": True})
+    return {"delivery": d}
 
 
 @app.post("/api/models/pull")
