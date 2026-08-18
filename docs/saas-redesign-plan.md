@@ -1,6 +1,6 @@
 # SaaS Redesign — Design & Implementation Plan
 
-Status: **plan for review.** No UI or backend code has been changed yet.
+Status: **in progress.** Phases 1–2 are done (§6 marks them); Phase 3 is next.
 
 Design source: Claude Design project `SaaS Redesign Options.dc.html`
 ([canvas](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)),
@@ -158,15 +158,18 @@ discarded.
 
 Each phase ends with a working app and a screenshot pass.
 
-**Phase 1 — extract the style layer.** Move the `<style>` block (index.html
-:10–197) into `static/theme.css` behind a `<link>`. Mechanical, zero visual
-change, cuts ~190 lines from the 3,710-line file and gives every later phase one
-place to edit. FastAPI already serves `static/`; no server change.
+**Phase 1 — extract the style layer. ✅ done.** Moved the `<style>` block
+(index.html:10–197) into `static/theme.css` behind a `<link>`. Mechanical,
+zero visual change (extracted rules verified byte-identical). One correction
+to the original claim: FastAPI served only `/` and `/beta` as individual
+routes — `static/` had no URL — so `server.py` gained a one-line
+`StaticFiles` mount at `/static`.
 
-**Phase 2 — retune tokens.** Apply the §2 table, drop Instrument Serif and the
-grain overlay, add the glow/pulse/tabular-nums primitives. Sweep for hard-coded
-colours that bypass tokens (`#0a0a0d` is inlined in `.btn-primary` and several
-components). Whole app shifts at once because views style via `var(--…)`.
+**Phase 2 — retune tokens. ✅ done.** Applied the §2 table, dropped Instrument
+Serif (the `.serif` class stays, redefined as Geist 600 display so its ~18
+call sites need no edits) and the grain overlay, added glow/pulse/tabular-nums
+primitives and radius tokens. Swept the hard-coded `#0a0a0d` bypasses in
+`.btn-primary` and three components onto `var(--bg)`.
 
 **Phase 3 — shell.** Rebuild `LeftRail` into the grouped Work/Develop/Workspace
 rail with the usage tile at its foot; rebuild `TopBar` with the ⌘K field, GPU/mode

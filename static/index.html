@@ -6,7 +6,7 @@
 <title>GoChiDUBB Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/theme.css">
 </head>
 <body>
@@ -374,7 +374,7 @@ function Toggle({ value, onChange, label, hint, disabled = false }) {
         <div style={{
           position: 'absolute', top: 1, left: value ? 14 : 1,
           width: 12, height: 12, borderRadius: '50%',
-          background: value ? '#0a0a0d' : 'var(--ink-2)',
+          background: value ? 'var(--bg)' : 'var(--ink-2)',
           transition: 'left 0.15s',
         }}/>
       </div>
@@ -628,7 +628,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 0 18px var(--accent-glow)',
           }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#0a0a0d" strokeWidth="1.6"><path d="M2 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5-.8 2.5-2 2.5"/><path d="M6 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5"/></svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" strokeWidth="1.6" style={{ stroke: 'var(--bg)' }}><path d="M2 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5-.8 2.5-2 2.5"/><path d="M6 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5"/></svg>
           </div>
           <div>
             <div className="serif" style={{ fontSize: 19, lineHeight: 1, letterSpacing: '-0.02em' }}>GoChiDUBB</div>
@@ -1533,7 +1533,7 @@ function QuickTestForm({
                 style={{
                   padding: '6px 10px', borderRadius: 4,
                   background: on ? 'var(--accent)' : 'var(--bg-1)',
-                  color: on ? '#0a0a0d' : 'var(--ink-2)',
+                  color: on ? 'var(--bg)' : 'var(--ink-2)',
                   border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
                   fontSize: 11.5, cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.4 : 1,

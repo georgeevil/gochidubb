@@ -1,22 +1,24 @@
 :root {
-  --bg: #0a0a0d;
-  --bg-1: #101014;
-  --bg-2: #16161c;
-  --bg-3: #1d1d25;
-  --line: #24242e;
-  --line-2: #2f2f3c;
-  --ink: #ece9e0;
-  --ink-2: #a3a096;
-  --ink-3: #5a5a63;
-  --ink-4: #35353d;
-  --accent: oklch(0.88 0.18 125);
-  --accent-dim: oklch(0.88 0.18 125 / 0.15);
-  --accent-glow: oklch(0.88 0.18 125 / 0.4);
-  --warn: oklch(0.78 0.15 60);
+  --bg: #060607;
+  --bg-1: #0e0e11;
+  --bg-2: #14141a;
+  --bg-3: #1b1b22;
+  --line: #1e1e25;
+  --line-2: #2a2a33;
+  --ink: #e9e7de;
+  --ink-2: #9d9c92;
+  --ink-3: #5e5e67;
+  --ink-4: #3a3a42;
+  --accent: #c8f542;
+  --accent-dim: rgba(200, 245, 66, 0.15);
+  --accent-glow: rgba(200, 245, 66, 0.35);
+  --warn: #e0a34e;
   --err: oklch(0.7 0.2 25);
-  --serif: 'Instrument Serif', ui-serif, Georgia, serif;
   --sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
@@ -54,8 +56,11 @@ body {
 button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: none; cursor: pointer; letter-spacing: inherit; }
 input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; background: transparent; border: none; outline: none; }
 
-.serif { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; }
-.mono { font-family: var(--mono); font-size: 11px; letter-spacing: -0.01em; }
+/* Display style. The class name predates the redesign (it set Instrument
+   Serif); design 1a drops the serif for Geist 600, and keeping the name
+   avoids touching its ~18 call sites in the JSX. */
+.serif { font-family: var(--sans); font-weight: 600; letter-spacing: -0.02em; }
+.mono { font-family: var(--mono); font-size: 11px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .caps { font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -63,15 +68,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.04;
-  z-index: 9999;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
-}
+/* Live elements pulse at 1.4s; anything glowing uses the accent at 35%. */
+.glow-accent { box-shadow: 0 0 16px var(--accent-glow); }
+.live-pulse { animation: pulse 1.4s ease-in-out infinite; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 8px;
@@ -90,11 +89,11 @@ body::before {
 .btn:disabled:hover { border-color: var(--line); color: var(--ink-2); background: var(--bg-1); }
 .btn-primary {
   background: var(--accent);
-  color: #0a0a0d;
+  color: var(--bg);
   border-color: var(--accent);
   font-weight: 600;
 }
-.btn-primary:hover { filter: brightness(1.1); border-color: var(--accent); color: #0a0a0d; background: var(--accent); }
+.btn-primary:hover { filter: brightness(1.1); border-color: var(--accent); color: var(--bg); background: var(--accent); }
 .btn-primary:disabled { background: var(--bg-2); color: var(--ink-3); border-color: var(--line); }
 .btn-primary:disabled:hover { filter: none; }
 .btn-ghost { border-color: transparent; background: transparent; }
