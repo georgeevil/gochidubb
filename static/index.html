@@ -3886,6 +3886,638 @@ function LibraryView({ tab, setTab, jobs, system, voicePresets, selectedResultJo
 
 // Honest placeholder for rail destinations whose screens land in a later
 // phase of the redesign — says what will be there instead of pretending.
+// ═══════════════════════════════════════════════════════════════════
+// DEVELOP — API keys · MCP server · Webhooks
+// ═══════════════════════════════════════════════════════════════════
+
+// Shared page furniture, so the three Develop screens read as one family.
+function DevPage({ title, subtitle, action, children }) {
+  return (
+    <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ padding: 'var(--pad)', display: 'flex', flexDirection: 'column',
+                    gap: 20, maxWidth: 1040 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12,
+                      flexWrap: 'wrap' }}>
+          <div className="serif" style={{ fontSize: 22 }}>{title}</div>
+          {subtitle && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              {subtitle}
+            </span>
+          )}
+          <div style={{ marginLeft: 'auto' }}>{action}</div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DevCard({ children, style }) {
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-lg)', padding: '16px 18px', ...style }}>
+      {children}
+    </div>
+  );
+}
+
+// A copyable snippet. The clipboard API needs a secure context, which
+// http://localhost is — but a LAN address over plain HTTP is not, so the
+// fallback matters for anyone running with GOCHIDUBB_HOST set.
+function CodeBlock({ code, label }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 1400);
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      {label && <div className="caps" style={{ marginBottom: 6 }}>{label}</div>}
+      <pre className="mono wrap-any" style={{
+        background: 'var(--bg-2)', border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)', padding: '11px 12px', fontSize: 11,
+        lineHeight: 1.65, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', margin: 0,
+      }}>{code}</pre>
+      <button className="btn" onClick={copy} style={{
+        position: 'absolute', top: label ? 24 : 6, right: 6, fontSize: 10,
+        padding: '3px 8px',
+      }}>{copied ? 'copied' : 'copy'}</button>
+    </div>
+  );
+}
+
+function ScopeBadge({ scope }) {
+  return (
+    <span className="mono" style={{
+      fontSize: 10, padding: '2px 6px', borderRadius: 'var(--r-sm)',
+      border: '1px solid var(--line-2)', color: 'var(--ink-2)',
+      whiteSpace: 'nowrap',
+    }}>{scope}</span>
+  );
+}
+
+function ApiKeysView({ mode }) {
+  const [data, setData] = useState(null);
+  const [name, setName] = useState('');
+  const [env, setEnv] = useState('live');
+  const [expiry, setExpiry] = useState('90');
+  const [scopes, setScopes] = useState(['dub:write', 'jobs:read', 'outputs:read']);
+  const [minted, setMinted] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => fetch('/api/apikeys').then(r => r.json()).then(setData)
+                       .catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const toggle = (s) => setScopes(cur =>
+    cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]);
+
+  const submit = async () => {
+    setBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('scopes', scopes.join(','));
+      fd.append('environment', env);
+      if (expiry) fd.append('expires_days', expiry);
+      const r = await fetch('/api/apikeys', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Could not create key'); return; }
+      setMinted(d);          // shown once — the server cannot return it again
+      setName('');
+      load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const revoke = async (id) => {
+    await fetch(`/api/apikeys/${id}/revoke`, { method: 'POST' });
+    load();
+  };
+
+  const allScopes = data?.scopes || {};
+  const keys = data?.keys || [];
+
+  return (
+    <DevPage title="API keys"
+             subtitle={`${keys.length} key${keys.length === 1 ? '' : 's'} · REST + MCP share keys`}>
+      {mode !== 'hosted' && (
+        <DevCard style={{ borderColor: 'var(--line-2)' }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <span style={{ color: 'var(--warn)', flexShrink: 0 }}>{I.warn}</span>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+              This server runs in <span className="mono">local</span> mode, where
+              every route is open and no key is required. Keys are still real —
+              hashed, scoped and revocable — so they are ready when you switch to
+              <span className="mono"> hosted</span>, but nothing is enforced yet.
+            </div>
+          </div>
+        </DevCard>
+      )}
+
+      {minted && (
+        <DevCard style={{ borderColor: 'var(--accent)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                        marginBottom: 10 }}>
+            <span className="dot" style={{ background: 'var(--accent)' }}/>
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+              Copy it now — this is the only time it is shown
+            </span>
+            <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 11 }}
+                    onClick={() => setMinted(null)}>Done</button>
+          </div>
+          <CodeBlock code={minted.token}/>
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         marginTop: 8 }}>
+            Only a salted hash is stored. If you lose this, revoke the key and
+            make another.
+          </div>
+        </DevCard>
+      )}
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>New key</div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap',
+                      alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>Name</div>
+            <input className="field" value={name} placeholder="ci-pipeline"
+                   onChange={e => setName(e.target.value)}/>
+          </div>
+          <div>
+            <div className="caps" style={{ marginBottom: 5 }}>Environment</div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['live', 'test'].map(v => (
+                <button key={v} onClick={() => setEnv(v)} className="mono" style={{
+                  fontSize: 11, padding: '7px 12px', borderRadius: 'var(--r-sm)',
+                  color: env === v ? 'var(--bg)' : 'var(--ink-2)',
+                  background: env === v ? 'var(--accent)' : 'transparent',
+                  border: '1px solid ' + (env === v ? 'var(--accent)' : 'var(--line)'),
+                }}>{v}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="caps" style={{ marginBottom: 5 }}>Expires</div>
+            <select className="field" value={expiry}
+                    onChange={e => setExpiry(e.target.value)}>
+              <option value="" style={{ background: 'var(--bg-2)' }}>never</option>
+              <option value="30" style={{ background: 'var(--bg-2)' }}>30 days</option>
+              <option value="90" style={{ background: 'var(--bg-2)' }}>90 days</option>
+              <option value="365" style={{ background: 'var(--bg-2)' }}>1 year</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="caps" style={{ marginBottom: 8 }}>Scopes</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          {Object.entries(allScopes).map(([s, desc]) => {
+            const on = scopes.includes(s);
+            return (
+              <button key={s} onClick={() => toggle(s)} title={desc} style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '6px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
+                background: on ? 'var(--accent-dim)' : 'transparent',
+                color: on ? 'var(--ink)' : 'var(--ink-2)',
+              }}>
+                <span className="mono" style={{ fontSize: 11,
+                                                color: on ? 'var(--accent)' : 'var(--ink-3)' }}>
+                  {on ? '✓' : '○'}
+                </span>
+                <span className="mono" style={{ fontSize: 11 }}>{s}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {err && (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--err)',
+                                         marginBottom: 10 }}>{err}</div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button className="btn btn-primary" onClick={submit}
+                  disabled={busy || !name.trim() || scopes.length === 0}>
+            {busy ? 'Generating…' : 'Generate key'}
+          </button>
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+            shown once · stored hashed
+          </span>
+        </div>
+      </DevCard>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse',
+                          minWidth: 620 }}>
+            <thead>
+              <tr>
+                {['Name', 'Token', 'Scopes', 'Created', 'Last used', ''].map(x => (
+                  <th key={x} className="caps" style={{
+                    textAlign: 'left', padding: '11px 14px',
+                    borderBottom: '1px solid var(--line)', whiteSpace: 'nowrap',
+                  }}>{x}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {keys.length === 0 && (
+                <tr><td colSpan={6} className="mono" style={{
+                  padding: '18px 14px', fontSize: 11, color: 'var(--ink-3)',
+                }}>No keys yet.</td></tr>
+              )}
+              {keys.map(k => {
+                const dead = !!k.revoked || (k.expires && k.expires * 1000 < Date.now());
+                return (
+                  <tr key={k.id} style={{ opacity: dead ? 0.5 : 1 }}>
+                    <td style={{ padding: '11px 14px', fontSize: 12.5,
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.name}
+                      <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                      color: 'var(--ink-3)' }}>
+                        {k.environment}
+                      </span>
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                                                  color: 'var(--ink-2)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.masked}
+                    </td>
+                    <td style={{ padding: '11px 14px',
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {(k.scopes || []).map(s => <ScopeBadge key={s} scope={s}/>)}
+                      </div>
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 10.5,
+                                                  color: 'var(--ink-3)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {fmtAge(k.created)}
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 10.5,
+                                                  color: 'var(--ink-3)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.last_used ? fmtAge(k.last_used) : '—'}
+                    </td>
+                    <td style={{ padding: '11px 14px', textAlign: 'right',
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.revoked ? (
+                        <span className="mono" style={{ fontSize: 10.5,
+                                                        color: 'var(--ink-3)' }}>revoked</span>
+                      ) : (
+                        <button className="btn" onClick={() => revoke(k.id)}
+                                style={{ fontSize: 11 }}>Revoke</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Quick start</div>
+        <CodeBlock code={`curl -X POST ${location.origin}/api/dub \\
+  -H "X-GoChiDUBB-Client: my-script" \\
+  -F source=https://youtu.be/abc \\
+  -F target_lang=fr`}/>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 10, lineHeight: 1.6 }}>
+          In hosted mode this also needs
+          <span style={{ color: 'var(--ink-2)' }}> -H "Authorization: Bearer &lt;key&gt;"</span>.
+          The X-GoChiDUBB-Client header is what makes your calls show up in the
+          agent feed — it is informational and grants nothing.
+        </div>
+      </DevCard>
+    </DevPage>
+  );
+}
+
+// The tool list mirrors tools/gochidubb_mcp.py. It is written out here rather
+// than fetched because the MCP server is a separate process that may not be
+// running when someone opens this page to learn how to start it.
+const MCP_TOOLS = [
+  ['dub', 'Start a dub — URL or file, one target language'],
+  ['compare', 'One source, several languages, side by side'],
+  ['showcase', 'Stitched multilingual reel from one source'],
+  ['redub', 'New languages for a finished job — reuses the transcript'],
+  ['get_job', 'Stage-level progress and status for one job'],
+  ['list_jobs', 'Recent jobs with filters'],
+  ['cancel_job', 'Stop a queued or running job'],
+  ['delete_job', 'Remove a job and its outputs'],
+  ['get_showcase', 'Read a showcase batch'],
+  ['rebuild_showcase', 'Re-assemble a showcase from finished parts'],
+  ['quality_report', 'Per-stage quality verdicts for a job'],
+  ['audit_job', 'What happened during a run'],
+  ['system_status', 'GPU, models, storage'],
+  ['list_languages', 'The 65 supported targets'],
+  ['list_models', 'Installed translation models'],
+  ['list_voices', 'Voice presets available for cloning'],
+  ['check_duplicate', 'Has this source been published already'],
+  ['scout_trending', 'Trending candidates to dub'],
+  ['scout_dub', 'Dub a scouted candidate'],
+  ['publish_pending', 'Uploads waiting for approval'],
+  ['publish_stage', 'Stage a finished dub for upload'],
+  ['publish_approve', 'Approve a staged upload'],
+  ['publish_cancel', 'Cancel a staged upload'],
+];
+
+function McpServerView({ mode }) {
+  const [calls, setCalls] = useState([]);
+  useEffect(() => {
+    const pull = () => fetch('/api/activity?kinds=tool_call&limit=12')
+      .then(r => r.json()).then(d => setCalls(d.events || [])).catch(() => {});
+    pull();
+    const t = setInterval(pull, 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  const clients = [];
+  for (const c of calls) {
+    if (c.actor && !clients.some(x => x.actor === c.actor)) {
+      clients.push({ actor: c.actor, ts: c.ts });
+    }
+  }
+
+  const Step = ({ n, title, note, children }) => (
+    <DevCard>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10,
+                    marginBottom: 10 }}>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+          {String(n).padStart(2, '0')}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+        {note && <span className="mono" style={{ fontSize: 10.5,
+                                                 color: 'var(--ink-3)' }}>{note}</span>}
+      </div>
+      {children}
+    </DevCard>
+  );
+
+  return (
+    <DevPage title="MCP server"
+             subtitle={clients.length
+               ? `${clients.length} client${clients.length === 1 ? '' : 's'} seen`
+               : 'no client has called yet'}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        Drive dubbing from Claude Code, Cursor, or any MCP-aware agent. The tools
+        map onto the same REST API this UI uses, so anything you can do here an
+        agent can do too — and its calls show up in the agent feed.
+      </div>
+
+      <Step n={1} title="Add the server" note="stdio · runs locally">
+        <CodeBlock code={'claude mcp add gochidubb -- python '
+                          + '/path/to/gochidubb/tools/gochidubb_mcp.py'}/>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 8, lineHeight: 1.6 }}>
+          The MCP server talks to this studio over HTTP, so it honours
+          GOCHIDUBB_URL (default {location.origin}) and can drive a remote box.
+          Set GOCHIDUBB_AGENT to name yourself in the feed.
+        </div>
+      </Step>
+
+      <Step n={2} title="Or point any MCP client at it" note="same shape for Cursor, Cline">
+        <CodeBlock code={`{
+  "mcpServers": {
+    "gochidubb": {
+      "command": "python",
+      "args": ["/path/to/gochidubb/tools/gochidubb_mcp.py"],
+      "env": { "GOCHIDUBB_URL": "${location.origin}",
+               "GOCHIDUBB_AGENT": "claude-code" }
+    }
+  }
+}`}/>
+      </Step>
+
+      <Step n={3} title="Say what you want">
+        <div style={{ borderLeft: '2px solid var(--line-2)', paddingLeft: 12,
+                      fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+          “Dub https://youtu.be/abc into French and Japanese, then stitch a
+          showcase reel.”
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)',
+                                       marginTop: 10 }}>
+          → the agent calls <span style={{ color: 'var(--accent)' }}>gochidubb_dub</span>,
+          polls <span style={{ color: 'var(--accent)' }}>gochidubb_get_job</span>,
+          and returns the output links.
+        </div>
+      </Step>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>
+          Exposed tools · {MCP_TOOLS.length}
+        </div>
+        <div style={{ display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                      gap: '8px 18px' }}>
+          {MCP_TOOLS.map(([t, d]) => (
+            <div key={t} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--accent)',
+                                              whiteSpace: 'nowrap' }}>
+                gochidubb_{t}
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{d}</span>
+            </div>
+          ))}
+        </div>
+        {mode === 'hosted' && (
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--warn)',
+                                         marginTop: 14, lineHeight: 1.6 }}>
+            Write tools cost money in hosted mode — dub, compare and showcase are
+            metered at your workspace rate.
+          </div>
+        )}
+      </DevCard>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Recent tool calls</div>
+        {calls.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            Nothing yet — a call from any MCP client will appear here and in the
+            agent feed.
+          </div>
+        ) : calls.map(c => (
+          <div key={c.id} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '7px 0', borderTop: '1px solid var(--bg-2)',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(c.ts)}</span>
+            <span style={{ color: 'var(--accent)' }}>{c.tool}</span>
+            <span style={{ color: 'var(--ink-3)' }}>{c.actor}</span>
+            <span style={{ marginLeft: 'auto',
+                           color: c.status >= 400 ? 'var(--err)' : 'var(--ink-3)' }}>
+              {c.status}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
+function WebhooksView() {
+  const [data, setData] = useState(null);
+  const [url, setUrl] = useState('');
+  const [secret, setSecret] = useState('');
+  const [events, setEvents] = useState(['job.completed', 'job.failed']);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => fetch('/api/webhooks').then(r => r.json()).then(setData)
+                       .catch(() => {});
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, []);
+
+  const toggle = (e) => setEvents(cur =>
+    cur.includes(e) ? cur.filter(x => x !== e) : [...cur, e]);
+
+  const add = async () => {
+    setBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('url', url);
+      fd.append('events', events.join(','));
+      if (secret) fd.append('secret', secret);
+      const r = await fetch('/api/webhooks', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Could not add webhook'); return; }
+      setUrl(''); setSecret(''); load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (id) => {
+    await fetch(`/api/webhooks/${id}`, { method: 'DELETE' });
+    load();
+  };
+  const test = async (id) => {
+    await fetch(`/api/webhooks/${id}/test`, { method: 'POST' });
+    load();
+  };
+
+  const hooks = data?.hooks || [];
+  const allEvents = data?.events || [];
+  const deliveries = data?.deliveries || [];
+
+  return (
+    <DevPage title="Webhooks"
+             subtitle={`${hooks.length} endpoint${hooks.length === 1 ? '' : 's'}`}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        Push job lifecycle events to your own endpoint instead of polling.
+        Deliveries are fire-and-forget with one retry, so a listener being down
+        never slows a dub or fails it.
+      </div>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>New endpoint</div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap',
+                      alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ flex: '2 1 260px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>URL</div>
+            <input className="field" value={url} placeholder="https://hooks.example.com/gochidubb"
+                   onChange={e => setUrl(e.target.value)}/>
+          </div>
+          <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>Signing secret · optional</div>
+            <input className="field" value={secret} type="password"
+                   placeholder="leave blank for unsigned"
+                   onChange={e => setSecret(e.target.value)}/>
+          </div>
+        </div>
+        <div className="caps" style={{ marginBottom: 8 }}>Events</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          {allEvents.map(e => {
+            const on = events.includes(e);
+            return (
+              <button key={e} onClick={() => toggle(e)} className="mono" style={{
+                fontSize: 11, padding: '6px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
+                background: on ? 'var(--accent-dim)' : 'transparent',
+                color: on ? 'var(--ink)' : 'var(--ink-2)',
+              }}>{on ? '✓ ' : '○ '}{e}</button>
+            );
+          })}
+        </div>
+        {err && <div className="mono" style={{ fontSize: 11, color: 'var(--err)',
+                                               marginBottom: 10 }}>{err}</div>}
+        <button className="btn btn-primary" onClick={add}
+                disabled={busy || !url.trim() || events.length === 0}>
+          {busy ? 'Adding…' : 'Add endpoint'}
+        </button>
+      </DevCard>
+
+      {hooks.length > 0 && (
+        <DevCard>
+          <div className="caps" style={{ marginBottom: 12 }}>Endpoints</div>
+          {hooks.map(hk => (
+            <div key={hk.id} style={{
+              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              padding: '10px 0', borderTop: '1px solid var(--bg-2)',
+            }}>
+              <span className="mono wrap-any" style={{ fontSize: 11.5,
+                                                       color: 'var(--ink)' }}>{hk.url}</span>
+              {hk.signed && (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--accent)',
+                                                border: '1px solid var(--accent-dim)',
+                                                borderRadius: 'var(--r-sm)',
+                                                padding: '1px 5px' }}>signed</span>
+              )}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {(hk.events || []).map(e => <ScopeBadge key={e} scope={e}/>)}
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                <button className="btn" style={{ fontSize: 11 }}
+                        onClick={() => test(hk.id)}>Send test</button>
+                <button className="btn" style={{ fontSize: 11 }}
+                        onClick={() => remove(hk.id)}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </DevCard>
+      )}
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Delivery log</div>
+        {deliveries.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            No deliveries yet.
+          </div>
+        ) : deliveries.map(d => (
+          <div key={d.id} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '7px 0', borderTop: '1px solid var(--bg-2)',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(d.ts)}</span>
+            <span style={{ color: 'var(--ink-2)' }}>{d.event}</span>
+            <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>
+              {(d.payload || {}).job_id || ''}
+            </span>
+            <span style={{ marginLeft: 'auto',
+                           color: d.ok ? 'var(--accent)' : 'var(--err)' }}>
+              {d.status || d.error || '—'}{d.ms != null ? ` · ${d.ms}ms` : ''}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
 function ComingSoonView({ icon, title, blurb, points = [], phase }) {
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 'var(--pad)' }}>
@@ -4091,32 +4723,9 @@ function App() {
             onSwitchToHome={() => setView('home')}
           />
         )}
-        {view === 'apikeys' && (
-          <ComingSoonView icon={I.key} title="API keys" phase={5}
-            blurb="Scoped, revocable keys for driving GoChiDUBB from scripts and agents."
-            points={[
-              'Create keys with named scopes: dub:write, jobs:read, outputs:read, mcp:invoke, webhooks:manage, voices:write.',
-              'Tokens stored hashed, shown once on create, masked in the table.',
-              'curl quick-start and per-key last-used, with one-click revoke.',
-            ]}/>
-        )}
-        {view === 'mcp' && (
-          <ComingSoonView icon={I.plug} title="MCP server" phase={5}
-            blurb="Point an agent at your studio: numbered onboarding, then watch its tool calls arrive."
-            points={[
-              'Endpoint + claude mcp add … + "say what you want" onboarding steps.',
-              'The full exposed-tool table — all 23 gochidubb_* tools with their arguments.',
-              'Recent tool calls with outcomes, and a metering note for hosted mode.',
-            ]}/>
-        )}
-        {view === 'webhooks' && (
-          <ComingSoonView icon={I.hook} title="Webhooks" phase={5}
-            blurb="Push job lifecycle events to your own endpoints instead of polling."
-            points={[
-              'job.completed, job.failed and job.awaiting_review deliveries.',
-              'Delivery log with response codes and manual re-send.',
-            ]}/>
-        )}
+        {view === 'apikeys' && <ApiKeysView mode={system?.mode || 'local'}/>}
+        {view === 'mcp' && <McpServerView mode={system?.mode || 'local'}/>}
+        {view === 'webhooks' && <WebhooksView/>}
         {view === 'members' && (
           <ComingSoonView icon={I.people} title="Members & roles" phase={6}
             blurb="Who can do what in a shared workspace — including what an agent's key can never exceed."
