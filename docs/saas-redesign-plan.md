@@ -37,7 +37,7 @@ jQuery-style page. It is already a React 18 app:
   animations, and a film-grain overlay. Most other styling is inline
   `style={{...}}` referencing those CSS variables.
 - App shell: `LeftRail` (nav, collapses to a drawer under a narrow
-  breakpoint) + `TopBar` + `SetupBanner`, then one of eleven views switched in
+  breakpoint) + `TopBar` + `SetupBanner`, then one of ten views switched in
   `App()` (index.html:3492): **home, processing, review, result, discover,
   history, batch, voices, glossary, system** (with setup/logs tabs).
 - ~45 function components in the same file; state is plain `useState` in
@@ -60,8 +60,13 @@ Constraints that shape the plan:
 - **No build step, no new runtime dependencies** (CONTRIBUTING.md). The
   redesign must stay a static file served by FastAPI.
 - Server API and job lifecycle are untouched — this is a frontend-only change.
-- CI is `ruff` + `compileall` only; nothing validates the UI, so the plan
-  includes manual/browser verification.
+- Nothing in CI validates the UI, so the plan includes manual/browser
+  verification. Note the Python gates do not currently run either:
+  `.github/workflows/lint.yml` triggers on `main` while the default branch is
+  `master`, so only `claude-review` executes on a PR — and `ruff check .`
+  reports 105 pre-existing findings on master, which would have to be cleared
+  (or the ruleset pinned) before that workflow could be turned on. Out of
+  scope here, but it means "CI is green" says nothing about this change.
 
 ## 2. Design approach
 
@@ -94,7 +99,7 @@ file]**:
   nav / different chrome?
 - Treatment of the three.js sphere hero (keep, restyle, or drop).
 - Any new screens or rearranged information architecture beyond the current
-  eleven views.
+  ten views.
 - Whatever behavior `support.js` encodes (theme switching, shared helpers for
   the artboards, interaction specs).
 
@@ -125,7 +130,7 @@ awaiting-review badge, and the running-job indicator (these are functional,
 not decorative). Restyle the shared controls (`btn`, `chip`, forms, badges,
 progress).
 
-**Phase 4 — per-view pass.** Walk the eleven views against the artboards:
+**Phase 4 — per-view pass.** Walk the ten views against the artboards:
 home (source input + quick test), processing (stage timeline), review,
 result, discover/scout, history, batch, voices, glossary, system (setup +
 logs). Adjust layout/spacing/hierarchy to match; leave logic intact.
@@ -138,7 +143,7 @@ view; remove any dead CSS.
 `python tools/gochidubb_serverctl.py foreground --reload`, drive the UI with
 Playwright (Chromium is preinstalled in remote sessions) against a backend
 with no models installed — every view renders from polling data, so
-screenshots of all eleven views at desktop + narrow widths are enough to
+screenshots of all ten views at desktop + narrow widths are enough to
 review without running a dub. `ruff check .` stays green (no Python changes).
 
 **Deliverable.** Commits per phase on `claude/saas-redesign-plan-abe8vf`,
