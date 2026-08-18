@@ -272,6 +272,13 @@ const I = {
   warn:       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M6 1.5L11 10.5H1zM6 5v3M6 9v.6"/></svg>,
   voice:      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="6" y="2" width="4" height="8" rx="2"/><path d="M3 8a5 5 0 0 0 10 0M8 13v1.5M5.5 14.5h5"/></svg>,
   glossary:   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2.5 3.5c1.5-1 4-1 5.5 0 1.5-1 4-1 5.5 0v9c-1.5-1-4-1-5.5 0-1.5-1-4-1-5.5 0zM8 3.5v9"/></svg>,
+  feed:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M1.5 8h3l2-4.5L9.5 12l2-4h3"/></svg>,
+  key:        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="11" r="3"/><path d="M7.2 8.8L13.5 2.5M11 5l2 2M9 7l1.5 1.5"/></svg>,
+  plug:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M5 2v3M11 2v3M4 5h8v3a4 4 0 0 1-8 0zM8 12v2.5"/></svg>,
+  hook:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M8 2v6a3 3 0 0 0 6 0M2 8a3 3 0 0 1 6 0"/><circle cx="8" cy="2" r="1"/></svg>,
+  people:     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5.5" cy="5" r="2.2"/><path d="M1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 3.2a2.2 2.2 0 0 1 0 4M12.5 9.4c1.3.6 2 1.9 2 3.6"/></svg>,
+  card:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M1.5 6.5h13M4 10h3"/></svg>,
+  ledger:     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 1.5h10v13H3zM6 5h4M6 8h4M6 11h2.5"/></svg>,
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -589,18 +596,33 @@ function NoticeCard({ n }) {
 function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
                     publishPendingCount = 0,
                     narrow = false, open = false, onClose }) {
-  const sections = [
-    { id: 'home',        label: 'Home',         hint: 'Upload · queue',       ic: I.home },
-    { id: 'discover',    label: 'Discover',     hint: 'Trending · scout',     ic: I.discover },
-    { id: 'processing',  label: 'Processing',   hint: runningJob ? 'Live job' : 'Idle', ic: I.processing, badge: runningJob ? '●' : null },
-    { id: 'review',      label: 'Review',       hint: awaitingReviewCount > 0 ? 'Wizard pause' : 'Nothing pending', ic: I.review, badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : null },
-    { id: 'result',      label: 'Result',       hint: 'Last completed',       ic: I.result },
-    // The publish inbox rides on History — that's where staged jobs live,
-    // so the count doubles as "N jobs waiting for your approval".
-    { id: 'history',     label: 'History',      hint: publishPendingCount > 0 ? `${publishPendingCount} to publish` : 'All jobs', ic: I.history, badge: publishPendingCount > 0 ? String(publishPendingCount) : null },
-    { id: 'batch',       label: 'Batch',        hint: 'Queue & scheduled',    ic: I.batch },
-    { id: 'voices',      label: 'Voices',       hint: 'Library · clone refs', ic: I.voice || I.review },
-    { id: 'glossary',    label: 'Glossary',     hint: 'Translation overrides',ic: I.glossary || I.edit },
+  const mode = system?.mode || 'local';
+  // Jobs consolidates History/Processing/Review/Batch; its badge prefers the
+  // human-blocking count (awaiting review) over the running-job dot.
+  const jobsHint = awaitingReviewCount > 0 ? `${awaitingReviewCount} awaiting review`
+                 : runningJob ? 'Live job' : 'All jobs';
+  const groups = [
+    { label: 'Work', items: [
+      { id: 'feed',     label: 'Agent feed', hint: 'Runs · events',           ic: I.feed },
+      { id: 'home',     label: 'New dub',    hint: 'Upload · URL · showcase', ic: I.home },
+      { id: 'jobs',     label: 'Jobs',       hint: jobsHint, ic: I.history,
+        badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : (runningJob ? '●' : null) },
+      { id: 'discover', label: 'Discover',   hint: 'Trending · scout',        ic: I.discover },
+      // The publish inbox rides on Library — staged uploads live with results,
+      // so the count doubles as "N jobs waiting for your approval".
+      { id: 'library',  label: 'Library',    hint: publishPendingCount > 0 ? `${publishPendingCount} to publish` : 'Results · voices · glossary', ic: I.result,
+        badge: publishPendingCount > 0 ? String(publishPendingCount) : null },
+    ]},
+    { label: 'Develop', items: [
+      { id: 'apikeys',  label: 'API keys',   hint: 'Scoped access',    ic: I.key },
+      { id: 'mcp',      label: 'MCP server', hint: 'Agent onboarding', ic: I.plug },
+      { id: 'webhooks', label: 'Webhooks',   hint: 'Job events out',   ic: I.hook },
+    ]},
+    ...(mode === 'hosted' ? [{ label: 'Workspace', items: [
+      { id: 'members',  label: 'Members',    hint: 'Roles · invites',  ic: I.people },
+      { id: 'billing',  label: 'Billing & usage', hint: 'Metered estimate', ic: I.card },
+      { id: 'audit',    label: 'Audit log',  hint: 'Key · job actions', ic: I.ledger },
+    ]}] : []),
   ];
 
   const vramTotal = system?.gpu?.vram_gb;
@@ -655,14 +677,18 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
       </div>
 
       <div style={{ padding: '0 12px', flex: 1, overflow: 'auto' }}>
-        <div className="caps" style={{ margin: '0 8px 8px' }}>Workspace</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {sections.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => go(s.id)}/>)}
-        </div>
+        {groups.map((g, gi) => (
+          <React.Fragment key={g.label}>
+            <div className="caps" style={{ margin: (gi === 0 ? '0' : '20px') + ' 8px 8px' }}>{g.label}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {g.items.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => go(s.id)}/>)}
+            </div>
+          </React.Fragment>
+        ))}
 
         <div className="caps" style={{ margin: '20px 8px 8px' }}>System</div>
         <NavItem
-          item={{ id: 'system', label: 'System', hint: sysHint, ic: I.system,
+          item={{ id: 'system', label: 'Settings', hint: sysHint, ic: I.system,
                   badge: issueCount > 0 ? String(issueCount) : null }}
           active={view === 'system'}
           onClick={() => go('system')}
@@ -748,13 +774,27 @@ function NavItem({ item, active, onClick, warn }) {
 // ═══════════════════════════════════════════════════════════════════
 // TOP BAR
 // ═══════════════════════════════════════════════════════════════════
-function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProcessing,
-                  onJumpToReview, onOpenSetup, narrow = false, onOpenNav }) {
+function TopBar({ view, runningJob, awaitingReviewCount, notices, mode = 'local',
+                  onJumpToProcessing, onJumpToReview, onOpenSetup, onCommand,
+                  narrow = false, onOpenNav }) {
   const TITLES = {
-    home: 'Home', processing: 'Processing', review: 'Review · wizard pause',
-    result: 'Result', history: 'History', batch: 'Batch queue', system: 'System',
-    voices: 'Voices', glossary: 'Glossary', discover: 'Discover · trending',
+    feed: 'Agent feed', home: 'New dub', jobs: 'Jobs', library: 'Library',
+    discover: 'Discover', apikeys: 'API keys', mcp: 'MCP server',
+    webhooks: 'Webhooks', members: 'Members', billing: 'Billing & usage',
+    audit: 'Audit log', system: 'Settings',
   };
+  // ⌘K / Ctrl-K focuses the command field from anywhere in the app.
+  const cmdRef = useRef(null);
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        cmdRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
   const issues = notices || [];
   const worst = issues.some(n => n.severity === 'error') ? 'error'
               : issues.some(n => n.severity === 'warn') ? 'warn' : '';
@@ -782,7 +822,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
                                       flexShrink: 0 }}>
         {TITLES[view] || 'GoChiDUBB Studio'}
       </div>
-      {view === 'processing' && runningJob && !narrow && (
+      {view === 'jobs' && runningJob && !narrow && (
         // A YouTube URL is ~45 chars of unbreakable text; on a phone it pushed
         // the whole bar wider than the screen, so it only shows with room.
         <span className="mono" style={{
@@ -792,9 +832,38 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
           · {(runningJob.title || runningJob.source_label || runningJob.source || runningJob.id).slice(0, 50)}
         </span>
       )}
-      <div style={{ flex: 1, minWidth: 8 }}/>
+      {!narrow && onCommand ? (
+        <form
+          style={{ flex: 1, minWidth: 8, display: 'flex', justifyContent: 'center', padding: '0 12px' }}
+          onSubmit={e => {
+            e.preventDefault();
+            onCommand(cmdRef.current ? cmdRef.current.value : '');
+            if (cmdRef.current) cmdRef.current.value = '';
+          }}>
+          <label
+            title="Natural-language commands land in a later phase — for now this opens New dub."
+            style={{ display: 'flex', alignItems: 'center', gap: 8,
+                     width: 'min(440px, 100%)', padding: '5px 10px', cursor: 'text',
+                     background: 'var(--bg-1)', border: '1px solid var(--line)',
+                     borderRadius: 'var(--r-md)' }}>
+            <input ref={cmdRef} placeholder='Dub the last upload into fr, es, ja…'
+                   style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink)' }}/>
+            <span className="mono" style={{ fontSize: 9, color: 'var(--ink-4)',
+                                            padding: '2px 5px', borderRadius: 4,
+                                            border: '1px solid var(--line)', flexShrink: 0 }}>⌘K</span>
+          </label>
+        </form>
+      ) : (
+        <div style={{ flex: 1, minWidth: 8 }}/>
+      )}
 
-      {runningJob && view !== 'processing' && (
+      <span className="chip mono" title="Deployment mode" style={{
+        fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', flexShrink: 0,
+        color: mode === 'hosted' ? 'var(--accent)' : 'var(--ink-3)',
+        borderColor: mode === 'hosted' ? 'var(--accent)' : 'var(--line)',
+      }}>{mode}</span>
+
+      {runningJob && view !== 'jobs' && (
         <button onClick={onJumpToProcessing} className="chip" style={{ color: 'var(--ink-2)', cursor: 'pointer' }}>
           <span className="dot" style={{ background: 'var(--accent)', boxShadow: '0 0 5px var(--accent-glow)', animation: 'pulse 1.5s infinite' }}/>
           <span>Running · {(overall * 100).toFixed(0)}%</span>
@@ -802,7 +871,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
         </button>
       )}
 
-      {awaitingReviewCount > 0 && view !== 'review' && (
+      {awaitingReviewCount > 0 && view !== 'jobs' && (
         <button onClick={onJumpToReview} className="chip" style={{
           color: 'var(--warn)', borderColor: 'var(--warn)',
           background: 'oklch(0.78 0.15 60 / 0.1)', cursor: 'pointer',
@@ -3319,6 +3388,126 @@ function DiscoverView({ onJumpResult, onJumpProcessing }) {
 // ═══════════════════════════════════════════════════════════════════
 // ROOT APP
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// IA WRAPPERS — Jobs and Library each consolidate several legacy views
+// behind a tab row; the views themselves are untouched.
+// ═══════════════════════════════════════════════════════════════════
+function ViewTabs({ tabs, active, onPick }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, padding: '14px var(--pad) 0', flexShrink: 0, flexWrap: 'wrap' }}>
+      {tabs.map(t => (
+        <button key={t.id} onClick={() => onPick(t.id)} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '5px 11px', borderRadius: 999, fontSize: 11, fontWeight: 500,
+          border: '1px solid ' + (active === t.id ? 'var(--line-2)' : 'transparent'),
+          background: active === t.id ? 'var(--bg-2)' : 'transparent',
+          color: active === t.id ? 'var(--ink)' : 'var(--ink-3)',
+          transition: 'all 0.12s',
+        }}>
+          {t.label}
+          {t.badge != null && (
+            <span className="mono" style={{ fontSize: 9, color: t.live ? 'var(--accent)' : 'var(--ink-3)',
+                                            animation: t.live ? 'pulse 1.4s infinite' : 'none' }}>{t.badge}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function JobsView({ tab, setTab, jobs, system, voicePresets, publishPending, runningJob,
+                    awaitingReviewCount, sphereOn, selectedReviewJobId,
+                    onPickReviewJob, onReviewContinued, onReviewCancel,
+                    onJumpResult, onJumpHome, onRefresh }) {
+  const tabs = [
+    { id: 'all',     label: 'All jobs' },
+    { id: 'live',    label: 'Live',    badge: runningJob ? '●' : null, live: !!runningJob },
+    { id: 'review',  label: 'Review',  badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : null },
+    { id: 'batches', label: 'Batches' },
+  ];
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <ViewTabs tabs={tabs} active={tab} onPick={setTab}/>
+      {tab === 'all' && (
+        <HistoryView jobs={jobs} system={system} voicePresets={voicePresets}
+          publishPending={publishPending}
+          onJumpProcessing={() => setTab('live')}
+          onJumpReview={(id) => { onPickReviewJob(id); setTab('review'); }}
+          onJumpResult={onJumpResult} onRefresh={onRefresh}/>
+      )}
+      {tab === 'live' && (
+        <ProcessingView runningJob={runningJob} sphereOn={sphereOn} system={system}
+          voicePresets={voicePresets}
+          onJobCancelled={() => setTab('all')}
+          onSwitchToHome={onJumpHome} onRefresh={onRefresh}/>
+      )}
+      {tab === 'review' && (
+        <ReviewView jobs={jobs} selectedJobId={selectedReviewJobId} voicePresets={voicePresets}
+          onContinued={() => { onReviewContinued(); setTab('live'); }}
+          onCancel={() => { onReviewCancel(); setTab('all'); }}
+          onPickJob={onPickReviewJob}/>
+      )}
+      {tab === 'batches' && (
+        <BatchView jobs={jobs} onRefresh={onRefresh}
+          onJumpProcessing={() => setTab('live')}
+          onJumpResult={onJumpResult} onJumpHome={onJumpHome}/>
+      )}
+    </div>
+  );
+}
+
+function LibraryView({ tab, setTab, jobs, system, voicePresets, selectedResultJobId,
+                       onPickResultJob, onJumpHome, onJumpJobs, onRefresh }) {
+  const tabs = [
+    { id: 'results',  label: 'Results' },
+    { id: 'voices',   label: 'Voices' },
+    { id: 'glossary', label: 'Glossary' },
+  ];
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <ViewTabs tabs={tabs} active={tab} onPick={setTab}/>
+      {tab === 'results' && (
+        <ResultView jobs={jobs} selectedJobId={selectedResultJobId} voicePresets={voicePresets}
+          system={system} onRefresh={onRefresh} onPickJob={onPickResultJob}
+          onSwitchToHome={onJumpHome} onSwitchToHistory={onJumpJobs}/>
+      )}
+      {tab === 'voices' && <VoicesView/>}
+      {tab === 'glossary' && <GlossaryEditor/>}
+    </div>
+  );
+}
+
+// Honest placeholder for rail destinations whose screens land in a later
+// phase of the redesign — says what will be there instead of pretending.
+function ComingSoonView({ icon, title, blurb, points = [], phase }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 'var(--pad)' }}>
+      <div style={{ maxWidth: 560, margin: '48px auto 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 'var(--r-md)',
+                        background: 'var(--bg-2)', border: '1px solid var(--line-2)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'var(--accent)' }}>{icon}</div>
+          <span className="caps">In development · phase {phase}</span>
+        </div>
+        <div className="serif" style={{ fontSize: 28, marginBottom: 10 }}>{title}</div>
+        <div style={{ color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 18 }}>{blurb}</div>
+        {points.length > 0 && (
+          <div style={{ padding: 14, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                        borderRadius: 'var(--r-lg)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {points.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, color: 'var(--ink-2)' }}>
+                <span style={{ color: 'var(--accent)', flexShrink: 0 }}>·</span>
+                <span>{p}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [view, setView] = useState('home');
   const [system, setSystem] = useState(null);
@@ -3328,6 +3517,8 @@ function App() {
   const [publishPending, setPublishPending] = useState([]);
   const [selectedResultJobId, setSelectedResultJobId] = useState(null);
   const [selectedReviewJobId, setSelectedReviewJobId] = useState(null);
+  const [jobsTab, setJobsTab] = useState('all');
+  const [libTab, setLibTab] = useState('results');
   const narrow = useIsNarrow();
   const [navOpen, setNavOpen] = useState(false);
 
@@ -3377,9 +3568,13 @@ function App() {
   const awaitingReviewCount = jobs.filter(j => j.status === 'awaiting_translation_review').length;
 
   const onJobSubmitted = (jobId) => {
-    setView('processing');
+    setJobsTab('live');
+    setView('jobs');
     fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || [])).catch(() => {});
   };
+
+  const refreshJobs = () => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []));
+  const jumpResult = (id) => { setSelectedResultJobId(id); setLibTab('results'); setView('library'); };
 
   const refreshSystem = () =>
     fetch('/api/system').then(r => r.json()).then(setSystem).catch(() => {});
@@ -3413,9 +3608,11 @@ function App() {
           runningJob={runningJob}
           awaitingReviewCount={awaitingReviewCount}
           notices={system?.notices}
-          onJumpToProcessing={() => setView('processing')}
-          onJumpToReview={() => setView('review')}
+          mode={system?.mode || 'local'}
+          onJumpToProcessing={() => { setJobsTab('live'); setView('jobs'); }}
+          onJumpToReview={() => { setJobsTab('review'); setView('jobs'); }}
           onOpenSetup={openSetup}
+          onCommand={() => setView('home')}
           narrow={narrow} onOpenNav={() => setNavOpen(true)}
         />
 
@@ -3433,74 +3630,101 @@ function App() {
           />
         )}
 
-        {view === 'processing' && (
-          <ProcessingView
-            runningJob={runningJob}
+        {view === 'jobs' && (
+          <JobsView
+            tab={jobsTab} setTab={setJobsTab}
+            jobs={jobs} system={system} voicePresets={voicePresets}
+            publishPending={publishPending}
+            runningJob={runningJob} awaitingReviewCount={awaitingReviewCount}
             sphereOn={sphereOn}
-            system={system}
-            voicePresets={voicePresets}
-            onJobCancelled={() => setView('history')}
-            onSwitchToHome={() => setView('home')}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
+            selectedReviewJobId={selectedReviewJobId}
+            onPickReviewJob={setSelectedReviewJobId}
+            onReviewContinued={() => setSelectedReviewJobId(null)}
+            onReviewCancel={() => setSelectedReviewJobId(null)}
+            onJumpResult={jumpResult}
+            onJumpHome={() => setView('home')}
+            onRefresh={refreshJobs}
           />
         )}
 
-        {view === 'review' && (
-          <ReviewView
-            jobs={jobs}
-            selectedJobId={selectedReviewJobId}
-            voicePresets={voicePresets}
-            onContinued={() => { setSelectedReviewJobId(null); setView('processing'); }}
-            onCancel={() => { setSelectedReviewJobId(null); setView('history'); }}
-            onPickJob={setSelectedReviewJobId}
-          />
-        )}
-
-        {view === 'result' && (
-          <ResultView
-            jobs={jobs}
-            selectedJobId={selectedResultJobId}
-            voicePresets={voicePresets}
-            system={system}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
-            onPickJob={setSelectedResultJobId}
-            onSwitchToHome={() => setView('home')}
-            onSwitchToHistory={() => setView('history')}
+        {view === 'library' && (
+          <LibraryView
+            tab={libTab} setTab={setLibTab}
+            jobs={jobs} system={system} voicePresets={voicePresets}
+            selectedResultJobId={selectedResultJobId}
+            onPickResultJob={setSelectedResultJobId}
+            onJumpHome={() => setView('home')}
+            onJumpJobs={() => { setJobsTab('all'); setView('jobs'); }}
+            onRefresh={refreshJobs}
           />
         )}
 
         {view === 'discover' && (
           <DiscoverView
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onJumpProcessing={() => setView('processing')}
+            onJumpResult={jumpResult}
+            onJumpProcessing={() => { setJobsTab('live'); setView('jobs'); }}
           />
         )}
 
-        {view === 'history' && (
-          <HistoryView
-            jobs={jobs}
-            system={system}
-            voicePresets={voicePresets}
-            publishPending={publishPending}
-            onJumpProcessing={() => setView('processing')}
-            onJumpReview={(id) => { setSelectedReviewJobId(id); setView('review'); }}
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
-          />
+        {view === 'feed' && (
+          <ComingSoonView icon={I.feed} title="Agent feed" phase={4}
+            blurb="One chronological stream of everything agents and humans do here — the screen this redesign is built around."
+            points={[
+              'Runs open with the natural-language prompt that started them, then the MCP tool calls underneath.',
+              'Per-stage chips (download ✓ · tts ● · merge ○), live progress, per-language status and cost so far.',
+              'Webhook deliveries, audit entries and system events as one-liners between the cards.',
+              'Filters for All · Runs · Tool calls · System, with live queue and GPU tiles in the right rail.',
+            ]}/>
         )}
-
-        {view === 'batch' && (
-          <BatchView
-            jobs={jobs}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
-            onJumpProcessing={() => setView('processing')}
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onJumpHome={() => setView('home')}
-          />
+        {view === 'apikeys' && (
+          <ComingSoonView icon={I.key} title="API keys" phase={5}
+            blurb="Scoped, revocable keys for driving GoChiDUBB from scripts and agents."
+            points={[
+              'Create keys with named scopes: dub:write, jobs:read, outputs:read, mcp:invoke, webhooks:manage, voices:write.',
+              'Tokens stored hashed, shown once on create, masked in the table.',
+              'curl quick-start and per-key last-used, with one-click revoke.',
+            ]}/>
         )}
-
-        {view === 'voices' && <VoicesView/>}
-        {view === 'glossary' && <GlossaryEditor/>}
+        {view === 'mcp' && (
+          <ComingSoonView icon={I.plug} title="MCP server" phase={5}
+            blurb="Point an agent at your studio: numbered onboarding, then watch its tool calls arrive."
+            points={[
+              'Endpoint + claude mcp add … + "say what you want" onboarding steps.',
+              'The full exposed-tool table — all 23 gochidubb_* tools with their arguments.',
+              'Recent tool calls with outcomes, and a metering note for hosted mode.',
+            ]}/>
+        )}
+        {view === 'webhooks' && (
+          <ComingSoonView icon={I.hook} title="Webhooks" phase={5}
+            blurb="Push job lifecycle events to your own endpoints instead of polling."
+            points={[
+              'job.completed, job.failed and job.awaiting_review deliveries.',
+              'Delivery log with response codes and manual re-send.',
+            ]}/>
+        )}
+        {view === 'members' && (
+          <ComingSoonView icon={I.people} title="Members & roles" phase={6}
+            blurb="Who can do what in a shared workspace — including what an agent's key can never exceed."
+            points={[
+              'Member table with roles, 2FA state and last activity.',
+              'The 7-role × 8-permission matrix; the agent role is capped at its creator’s rights.',
+            ]}/>
+        )}
+        {view === 'billing' && (
+          <ComingSoonView icon={I.card} title="Billing & usage" phase={6}
+            blurb="Metered minutes estimated from your real job durations — clearly marked as an estimate in local mode."
+            points={[
+              'Minutes, rate tier and budget-cap tiles; per-project breakdown.',
+              'Agent-initiated jobs hit the same meter as manual ones.',
+            ]}/>
+        )}
+        {view === 'audit' && (
+          <ComingSoonView icon={I.ledger} title="Audit log" phase={6}
+            blurb="A real record of key, webhook and job actions."
+            points={[
+              'Key create/revoke, webhook config changes, job actions.',
+            ]}/>
+        )}
 
         {view === 'system' && (
           <SystemView system={system} onRefreshSystem={refreshSystem}/>

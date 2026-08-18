@@ -2683,6 +2683,9 @@ async def system_status():
         "url": LM_STUDIO_MODELS_ENDPOINT,
     }
     status["catalog"] = MODEL_CATALOG
+    # Deployment mode ("local" | "hosted") — the UI gates the Workspace
+    # group on this without needing a second round trip.
+    status["mode"] = cfg.mode if cfg.mode in ("local", "hosted") else "local"
 
     # Live resource snapshot — the same probes the per-stage sampler uses,
     # so the System panel and the stage metrics always agree on what's

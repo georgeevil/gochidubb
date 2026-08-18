@@ -1,6 +1,6 @@
 # SaaS Redesign — Design & Implementation Plan
 
-Status: **in progress.** Phases 1–2 are done (§6 marks them); Phase 3 is next.
+Status: **in progress.** Phases 1–3 are done (§6 marks them); Phase 4 is next.
 
 Design source: Claude Design project `SaaS Redesign Options.dc.html`
 ([canvas](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)),
@@ -171,10 +171,16 @@ call sites need no edits) and the grain overlay, added glow/pulse/tabular-nums
 primitives and radius tokens. Swept the hard-coded `#0a0a0d` bypasses in
 `.btn-primary` and three components onto `var(--bg)`.
 
-**Phase 3 — shell.** Rebuild `LeftRail` into the grouped Work/Develop/Workspace
-rail with the usage tile at its foot; rebuild `TopBar` with the ⌘K field, GPU/mode
-pills and avatar. Keep the narrow-breakpoint drawer, the awaiting-review badge and
-the running-job indicator — those are functional. Add `mode` gating.
+**Phase 3 — shell. ✅ done.** `LeftRail` rebuilt into the grouped
+Work/Develop/Workspace rail (Workspace revealed only in hosted mode; Settings
+always visible); `TopBar` gained the ⌘K command field (submits to New dub —
+the parser is Phase 7's) and the mode pill. Jobs and Library are now tabbed
+wrappers over the untouched History/Processing/Review/Batch and
+Result/Voices/Glossary views, so every jump target still works; the
+awaiting-review badge and running-job indicator moved onto Jobs. Rail items
+whose screens land later (feed, Develop, Workspace) render honest
+"in development · phase N" placeholders. Backend: `UserConfig.mode`
+(`GOCHIDUBB_MODE`) and `mode` in `GET /api/system`.
 
 **Phase 4 — Agent feed + activity API.** `GET /api/activity`, MCP tool-call
 recording, the feed cards (run → prompt → tool calls → stage chips → progress →
