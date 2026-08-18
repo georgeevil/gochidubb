@@ -1,6 +1,6 @@
 # SaaS Redesign — Design & Implementation Plan
 
-Status: **in progress.** Phases 1–3 are done (§6 marks them); Phase 4 is next.
+Status: **in progress.** Phases 1–4 are done (§6 marks them); Phase 5 is next.
 
 Design source: Claude Design project `SaaS Redesign Options.dc.html`
 ([canvas](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)),
@@ -182,10 +182,23 @@ whose screens land later (feed, Develop, Workspace) render honest
 "in development · phase N" placeholders. Backend: `UserConfig.mode`
 (`GOCHIDUBB_MODE`) and `mode` in `GET /api/system`.
 
-**Phase 4 — Agent feed + activity API.** `GET /api/activity`, MCP tool-call
-recording, the feed cards (run → prompt → tool calls → stage chips → progress →
-per-language → cost), filter tabs, right-rail Live/Spend/MCP tiles. This is the
-largest phase and the one that defines the concept.
+**Phase 4 — Agent feed + activity API. ✅ done.** `app/activity.py` (bounded,
+redacted ring buffer), agent attribution via an `X-GoChiDUBB-Client` header
+that `GoChiDUBBClient` now sends, job-transition recording, and
+`GET /api/activity` paging on a monotonic event id. The feed renders run
+cards, job cards with stage chips, and system one-liners, with the design's
+filter tabs and live side tiles; it is now the landing view.
+
+Two elements of the design were deliberately **not** built, because the data
+does not exist: the natural-language prompt behind a run (agents send tool
+calls, not the sentence that produced them — it would have to be passed
+explicitly by the client) and per-job cost, which waits for the phase-6 meter.
+The right rail therefore carries Live and MCP tiles but no Spend tile yet.
+
+Note also that phases 1–4 were implemented twice, in two parallel sessions.
+The reconciliation kept this branch's phases 1–3 and re-applied phase 4 on
+top; the alternative shell survives only on the local branch
+`claude/saas-phase4-activity-feed`.
 
 **Phase 5 — Develop group (real).** `app/apikeys.py`, `app/webhooks.py`, their
 routes, the API Keys and MCP Server and Webhooks screens. Scope enforcement
