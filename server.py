@@ -195,7 +195,7 @@ from pipeline.notices import (
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
-from app import logbuf, artifact_store, reuse_runtime, reuse as app_reuse
+from app import logbuf, artifact_store, reuse_runtime, reuse as app_reuse, activity
 
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
@@ -1201,6 +1201,12 @@ async def lifespan(app: FastAPI):
     _upload_queue = asyncio.Queue()
     _upload_worker_task = asyncio.create_task(_upload_worker())
 
+    # First line of the activity feed's System stream, and a useful one: it
+    # dates the buffer, so "nothing before this" is explained rather than
+    # looking like lost history.
+    activity.record_system(
+        f"Server started · mode {cfg.mode} · {len(jobs)} job(s) loaded")
+
     if os.getenv("GOCHIDUBB_OPEN_BROWSER", "1") == "1" and not os.getenv("DOCKER"):
         async def open_browser():
             await asyncio.sleep(1.5)
@@ -1296,6 +1302,70 @@ app = FastAPI(title="GoChiDUBB Studio", version="2.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ── Agent attribution ────────────────────────────────────────────────
+# The MCP server and CLI are separate processes that drive this one over HTTP,
+# so an agent's gochidubb.dub(...) arrives as an ordinary POST /api/dub —
+# identical to the browser's. GoChiDUBBClient tags its requests with
+# X-GoChiDUBB-Client, and this records the tagged ones as tool calls for the
+# activity feed. Untagged requests (the UI) are deliberately not recorded.
+#
+# The header is informational only: it is never consulted for authorization,
+# so a forged one can add a feed line and nothing else.
+
+# Route prefix → the MCP tool it corresponds to. Longest match wins, so
+# /api/dub/{id}/retry_stage/... is a retry_stage, not a dub.
+_TOOL_ROUTES = [
+    ("/api/dub/batch", "compare"),
+    ("/api/dub", "dub"),
+    ("/api/showcase", "showcase"),
+    ("/api/quick_test", "quick_test"),
+    ("/api/jobs", "list_jobs"),
+    ("/api/job", "get_status"),
+    ("/api/system", "system_status"),
+    ("/api/voices", "list_voices"),
+    ("/api/languages", "list_languages"),
+    ("/api/scout/trending", "scout_trending"),
+    ("/api/scout/dub", "scout_dub"),
+    ("/api/publish/pending", "publish_pending"),
+]
+
+
+def _tool_for_path(path: str) -> str:
+    if "/retry_stage/" in path:
+        return "retry_stage"
+    if path.endswith("/cancel"):
+        return "cancel"
+    if path.endswith("/redub"):
+        return "redub"
+    if path.endswith("/quality"):
+        return "quality_report"
+    best = ""
+    for prefix, tool in _TOOL_ROUTES:
+        if path.startswith(prefix) and len(prefix) > len(best):
+            best, name = prefix, tool
+    return name if best else path
+
+
+@app.middleware("http")
+async def _record_agent_calls(request, call_next):
+    client_id = request.headers.get("X-GoChiDUBB-Client")
+    if not client_id or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    started = time.time()
+    response = await call_next(request)
+    try:
+        activity.record_tool_call(
+            _tool_for_path(request.url.path),
+            client_id[:64],
+            status=response.status_code,
+            ms=(time.time() - started) * 1000.0,
+        )
+    except Exception:
+        # A feed line is never worth failing a request over.
+        log.debug("[activity] could not record tool call", exc_info=True)
+    return response
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2447,8 +2517,22 @@ async def run_pipeline_stages(
         if job.get("cancel_requested"):
             _maybe_terminate_tts_worker()
             raise JobCancelled(f"Job {job_id} cancelled by user")
+        prev_status = job.get("status")
         job.update(kwargs)
         save_job(job)
+        # Feed the activity stream, but only on a real transition: update() is
+        # called for progress ticks an order of magnitude more often than for
+        # status changes, and a feed of "still transcribing" is not a feed.
+        new_status = kwargs.get("status")
+        if new_status and new_status != prev_status:
+            try:
+                activity.record_job(
+                    job_id, new_status,
+                    title=job.get("title") or job.get("source_label"),
+                    stage=kwargs.get("step_detail"),
+                )
+            except Exception:
+                log.debug("[activity] could not record transition", exc_info=True)
 
     _resolve_voice_into_ctx(job, ctx)
     start_i = max(_stage_index(start_stage), 0)
@@ -2880,6 +2964,35 @@ async def get_logs(level: str = "", limit: int = 300, since_seq: int = 0):
     """
     return logbuf.snapshot(level=level, limit=max(1, min(int(limit or 300), 2000)),
                            since_seq=int(since_seq or 0))
+
+
+@app.get("/api/activity")
+async def get_activity(kinds: str = "", limit: int = 80, since_id: int = 0):
+    """The activity feed: agent tool calls and job transitions, newest first.
+
+    `kinds` is a comma-separated subset of app.activity.KINDS, matching the
+    design's filter tabs. `since_id` is a monotonic event id rather than a
+    timestamp, so the UI can poll for only what it has not seen without two
+    events in the same millisecond hiding each other.
+
+    In-memory and bounded — this is "what is happening now", not an audit
+    trail. The persisted audit log is a separate concern.
+    """
+    want = [k.strip() for k in kinds.split(",") if k.strip()] if kinds else None
+    if want:
+        bad = [k for k in want if k not in activity.KINDS]
+        if bad:
+            return JSONResponse(
+                {"error": f"unknown kind(s): {', '.join(bad)}",
+                 "valid": list(activity.KINDS)}, 400)
+    return {
+        "events": activity.recent(
+            limit=max(1, min(int(limit or 80), 400)),
+            kinds=want,
+            since_id=int(since_id or 0),
+        ),
+        "last_id": activity.last_id(),
+    }
 
 
 @app.post("/api/models/pull")

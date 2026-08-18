@@ -37,9 +37,18 @@ class GoChiDUBBClient:
     """Async client. Use as `async with GoChiDUBBClient() as c:` or call
     `await c.aclose()` manually."""
 
-    def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 120.0):
+    def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 120.0,
+                 client_id: str = "cli"):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.AsyncClient(timeout=timeout)
+        # Who is calling. The server records header-carrying requests in its
+        # activity feed as agent tool calls, which is the only way it can tell
+        # an MCP-driven dub from someone clicking Start in the browser: both
+        # are the same POST to the same route. Purely informational — it grants
+        # nothing and is never used for authorization.
+        self._http = httpx.AsyncClient(
+            timeout=timeout,
+            headers={"X-GoChiDUBB-Client": client_id},
+        )
 
     async def __aenter__(self) -> "GoChiDUBBClient":
         return self

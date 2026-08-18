@@ -2595,6 +2595,413 @@ function PublishPanel({ jobId, defaultOpen = false }) {
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSING VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// AGENT FEED — home in concept 1a
+// ═══════════════════════════════════════════════════════════════════
+// One reverse-chronological stream of what the agent, a teammate, or the
+// server just did. Three shapes, matching the design:
+//
+//   · a run card    — the tool calls one agent made, grouped
+//   · a job card    — a dub, with its stage chips and live progress
+//   · an event row  — a one-line system note
+//
+// Two things the design shows are absent on purpose rather than faked: the
+// natural-language prompt behind a run (agents send tool calls, not the
+// sentence that produced them) and per-job cost (the meter arrives with
+// billing). Inventing either would put numbers on screen that mean nothing.
+
+// Consecutive calls by the same actor inside this window read as one run.
+const RUN_WINDOW_SEC = 300;
+
+const groupFeed = (events, jobs, { groupRuns = true } = {}) => {
+  const byId = new Map(jobs.map(j => [j.id, j]));
+  const jobCards = new Map();
+  const out = [];
+  for (const ev of events) {
+    const prev = out[out.length - 1];
+    if (ev.kind === 'tool_call') {
+      if (!groupRuns) { out.push({ type: 'call', key: 'c' + ev.id, ev, ts: ev.ts }); continue; }
+      if (prev && prev.type === 'run' && prev.actor === ev.actor
+          && prev.lastTs - ev.ts < RUN_WINDOW_SEC) {
+        prev.calls.push(ev);
+        prev.lastTs = ev.ts;
+        continue;
+      }
+      out.push({ type: 'run', key: 'run' + ev.id, actor: ev.actor,
+                 ts: ev.ts, lastTs: ev.ts, calls: [ev] });
+      continue;
+    }
+    if (ev.kind === 'job') {
+      // One card per job, and it must merge transitions that are NOT adjacent
+      // in the stream: the middleware records a tool call only once its
+      // response is on the way out, by which time the job runner has often
+      // already emitted its next transition, so a job's events routinely
+      // arrive with a tool call wedged between them. Collapsing only
+      // neighbours therefore showed the same job twice.
+      const seen = jobCards.get(ev.job_id);
+      if (seen) { seen.transitions.push(ev); continue; }
+      const card = { type: 'job', key: 'job' + ev.job_id, jobId: ev.job_id,
+                     ts: ev.ts, job: byId.get(ev.job_id) || null,
+                     title: ev.title, transitions: [ev] };
+      jobCards.set(ev.job_id, card);
+      out.push(card);
+      continue;
+    }
+    out.push({ type: 'event', key: 'ev' + ev.id, ev, ts: ev.ts });
+  }
+  return out;
+};
+
+function FeedFilter({ value, onChange }) {
+  const opts = [['all', 'All'], ['run', 'Runs'], ['tool_call', 'Tool calls'],
+                ['system', 'System']];
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {opts.map(([id, label]) => (
+        <button key={id} onClick={() => onChange(id)} className="mono" style={{
+          fontSize: 10.5, fontWeight: 500, padding: '4px 10px', borderRadius: 5,
+          color: value === id ? 'var(--bg)' : 'var(--ink-2)',
+          background: value === id ? 'var(--accent)' : 'transparent',
+          border: '1px solid ' + (value === id ? 'var(--accent)' : 'var(--line)'),
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+// The design renders the pipeline as a row of chips: done ✓, running ●,
+// pending ○. Built from the 6-stage map the rest of the app already uses.
+function FeedStageChips({ job, transitions }) {
+  const done = job.status === 'complete';
+  // stageForStatus() only knows about live statuses, so an errored or
+  // cancelled job maps to -1 and every chip drew as pending — hiding how far
+  // it actually got. The transitions we recorded name the last live stage.
+  let idx = stageForStatus(job.status);
+  if (idx < 0 && !done) {
+    idx = (transitions || []).reduce(
+      (best, t) => Math.max(best, stageForStatus(t.status)), -1);
+  }
+  return (
+    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+      {STAGES.map((s, i) => {
+        const stalled = job.status === 'error' || job.status === 'cancelled';
+        const state = done || i < idx ? 'done'
+                    : (i === idx ? (stalled ? 'stalled' : 'live') : 'pending');
+        const live = state === 'live' && ACTIVE_STATUSES.has(job.status);
+        return (
+          <span key={s.id} className="mono" style={{
+            fontSize: 10, fontWeight: 500, padding: '3px 8px', borderRadius: 4,
+            color: state === 'live' ? 'var(--bg)'
+                 : state === 'done' ? 'var(--accent)'
+                 : state === 'stalled' ? 'var(--err)' : 'var(--ink-3)',
+            background: state === 'live' ? 'var(--accent)' : 'transparent',
+            border: '1px solid ' + (state === 'done' ? 'var(--accent-dim)'
+                                  : state === 'live' ? 'var(--accent)'
+                                  : state === 'stalled' ? 'var(--err)' : 'var(--line)'),
+            animation: live ? 'pulse 1.4s infinite' : 'none',
+          }}>
+            {s.label.toLowerCase()} {state === 'done' ? '✓' : state === 'live' ? '●'
+                                   : state === 'stalled' ? '✕' : '○'}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function FeedJobCard({ item, onOpen }) {
+  const job = item.job;
+  // A job deleted since its events were recorded still has a feed entry.
+  if (!job) {
+    return (
+      <div className="panel" style={{ padding: '12px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span className="dot" style={{ background: 'var(--ink-4)' }}/>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>
+            {item.title || item.jobId} · no longer available
+          </span>
+          <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                          color: 'var(--ink-4)' }}>{fmtAge(item.ts)}</span>
+        </div>
+      </div>
+    );
+  }
+  const meta = STATUS_META[job.status] || { color: 'var(--ink-3)', label: job.status };
+  const active = ACTIVE_STATUSES.has(job.status);
+  const pct = Math.max(0, Math.min(100, job.progress ?? 0));
+  return (
+    <div className="panel" style={{
+      padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12,
+      borderColor: active ? 'var(--line-2)' : 'var(--line)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <span className="dot" style={{
+          width: 7, height: 7, background: meta.color,
+          boxShadow: active ? '0 0 6px var(--accent-glow)' : 'none',
+          animation: active ? 'pulse 1.4s infinite' : 'none',
+        }}/>
+        <button onClick={() => onOpen(job)} className="wrap-any" style={{
+          fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left',
+        }}>{job.title || job.source_label || job.source || job.id}</button>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{job.id}</span>
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                        color: 'var(--ink-3)' }}>
+          {meta.label} · {fmtAge(item.ts)}
+        </span>
+      </div>
+
+      <FeedStageChips job={job} transitions={item.transitions}/>
+
+      {active && (
+        <div style={{ height: 4, background: 'var(--line)', borderRadius: 2,
+                      overflow: 'hidden' }}>
+          <div style={{ width: pct + '%', height: '100%', background: 'var(--accent)',
+                        transition: 'width 0.4s' }}/>
+        </div>
+      )}
+
+      <div className="mono" style={{ display: 'flex', gap: 14, flexWrap: 'wrap',
+                                     fontSize: 10.5, color: 'var(--ink-3)' }}>
+        {job.target_lang && <span style={{ color: 'var(--ink-2)' }}>{job.target_lang}</span>}
+        {job.duration ? <span>{fmtSec(job.duration)} source</span> : null}
+        {active && <span>{pct}%</span>}
+        {job.step_detail && (
+          <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>{job.step_detail}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FeedRunCard({ item }) {
+  // Repeated polling of the same tool is one line with a count, the way the
+  // design shows "get_status ×4".
+  const rolled = [];
+  for (const c of item.calls) {
+    const last = rolled[rolled.length - 1];
+    if (last && last.tool === c.tool) { last.n += 1; continue; }
+    rolled.push({ tool: c.tool, n: 1, status: c.status, ms: c.ms, id: c.id });
+  }
+  const failed = item.calls.some(c => c.status && c.status >= 400);
+  return (
+    <div className="panel" style={{ padding: '14px 18px', display: 'flex',
+                                    flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <span className="dot" style={{ width: 7, height: 7,
+                                       background: failed ? 'var(--err)' : 'var(--accent)' }}/>
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+          {item.actor.startsWith('mcp/')
+            ? `Agent run · ${item.actor.slice(4)} via MCP`
+            : `${item.actor} run`}
+        </span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+          {item.calls.length} call{item.calls.length === 1 ? '' : 's'}
+        </span>
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                        color: 'var(--ink-3)' }}>{fmtAge(item.lastTs)}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {rolled.map(c => (
+          <div key={c.id} className="mono" style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+            <span style={{ color: 'var(--ink-3)' }}>→</span>
+            <span style={{ color: 'var(--accent)' }}>gochidubb.{c.tool}</span>
+            {c.n > 1 && <span style={{ color: 'var(--ink-3)' }}>×{c.n}</span>}
+            <span style={{ marginLeft: 'auto',
+                           color: c.status >= 400 ? 'var(--err)' : 'var(--ink-3)' }}>
+              ⇒ {c.status}{c.ms != null ? ` · ${c.ms}ms` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeedCallRow({ ev }) {
+  const bad = ev.status && ev.status >= 400;
+  return (
+    <div className="mono" style={{
+      display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 4px',
+      borderTop: '1px solid var(--bg-2)', fontSize: 11,
+    }}>
+      <span style={{ color: 'var(--ink-4)' }}>{fmtClock(ev.ts)}</span>
+      <span style={{ color: 'var(--accent)' }}>gochidubb.{ev.tool}</span>
+      <span style={{ color: 'var(--ink-3)' }}>{ev.actor}</span>
+      <span style={{ marginLeft: 'auto', color: bad ? 'var(--err)' : 'var(--ink-3)' }}>
+        ⇒ {ev.status}{ev.ms != null ? ` · ${ev.ms}ms` : ''}
+      </span>
+    </div>
+  );
+}
+
+function FeedEventRow({ ev }) {
+  const color = ev.severity === 'error' ? 'var(--err)'
+              : ev.severity === 'warn' ? 'var(--warn)' : 'var(--ink-3)';
+  return (
+    <div className="mono" style={{
+      display: 'flex', alignItems: 'baseline', gap: 10, padding: '9px 4px',
+      borderTop: '1px solid var(--bg-2)', fontSize: 11, color,
+    }}>
+      <span style={{ color: 'var(--ink-4)' }}>{fmtClock(ev.ts)}</span>
+      <span className="wrap-any">{ev.title}</span>
+      <span style={{ marginLeft: 'auto', color: 'var(--ink-4)' }}>{fmtAge(ev.ts)}</span>
+    </div>
+  );
+}
+
+function FeedSideTiles({ jobs, system, events }) {
+  const queued = jobs.filter(j => j.status === 'queued' || j.status === 'scheduled').length;
+  const running = jobs.filter(j => ACTIVE_STATUSES.has(j.status)).length;
+  const acc = system?.accelerator;
+  const res = system?.resources || {};
+  // Minutes of source media dubbed today, from the jobs themselves. Real
+  // figure; the money it would cost arrives with billing.
+  const dayAgo = Date.now() / 1000 - 86400;
+  const minsToday = jobs
+    .filter(j => (j.created || 0) > dayAgo && j.duration)
+    .reduce((a, j) => a + j.duration, 0) / 60;
+
+  // Which agents have called recently, newest first.
+  const clients = [];
+  for (const e of events) {
+    if (e.kind !== 'tool_call' || !e.actor) continue;
+    if (!clients.some(c => c.actor === e.actor)) clients.push({ actor: e.actor, ts: e.ts });
+  }
+
+  const Tile = ({ label, children }) => (
+    <div className="panel" style={{ padding: '13px 14px', background: 'var(--bg-1)' }}>
+      <div className="caps" style={{ marginBottom: 10 }}>{label}</div>
+      {children}
+    </div>
+  );
+  const Row = ({ k, v, tint }) => (
+    <div className="mono" style={{ display: 'flex', justifyContent: 'space-between',
+                                   fontSize: 11, color: 'var(--ink-2)', padding: '4px 0' }}>
+      <span>{k}</span><span style={{ color: tint || 'var(--ink)' }}>{v}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Tile label="Live">
+        <Row k="queue depth" v={`${queued} job${queued === 1 ? '' : 's'}`}/>
+        <Row k="running" v={running} tint={running ? 'var(--accent)' : 'var(--ink)'}/>
+        {acc && <Row k={acc.backend || 'accelerator'}
+                     v={acc.ok ? 'ready' : 'CPU only'}
+                     tint={acc.ok ? 'var(--accent)' : 'var(--warn)'}/>}
+        {res.ram_percent != null && (
+          <>
+            <Row k="RAM" v={`${Math.round(res.ram_percent)}%`}/>
+            <div style={{ height: 3, background: 'var(--line)', borderRadius: 2,
+                          overflow: 'hidden', margin: '2px 0 6px' }}>
+              <div style={{ width: Math.min(100, res.ram_percent) + '%', height: '100%',
+                            background: 'var(--accent)' }}/>
+            </div>
+          </>
+        )}
+        <Row k="minutes · 24h" v={minsToday.toFixed(0)}/>
+      </Tile>
+
+      <Tile label="MCP">
+        {clients.length === 0 ? (
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         lineHeight: 1.6 }}>
+            No agent has called yet. Point an MCP client at this server and its
+            calls appear here.
+          </div>
+        ) : clients.slice(0, 6).map(c => (
+          <Row key={c.actor} k={c.actor.replace(/^mcp\//, '')} v={fmtAge(c.ts)}
+               tint="var(--ink-3)"/>
+        ))}
+      </Tile>
+    </div>
+  );
+}
+
+function AgentFeedView({ jobs, system, narrow, onOpenJob, onSwitchToHome }) {
+  const [filter, setFilter] = useState('all');
+  const [events, setEvents] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  // Same cadence logic as the jobs poll: brisk while something is running,
+  // relaxed when the box is idle.
+  const busy = jobs.some(j => ACTIVE_STATUSES.has(j.status));
+  useEffect(() => {
+    let stopped = false;
+    const kinds = filter === 'all' ? '' : (filter === 'run' ? 'tool_call' : filter);
+    const pull = async () => {
+      try {
+        const r = await fetch('/api/activity?limit=120'
+                              + (kinds ? '&kinds=' + encodeURIComponent(kinds) : ''));
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!stopped) { setEvents(d.events || []); setLoaded(true); }
+      } catch (_) {}
+    };
+    pull();
+    const t = setInterval(pull, busy ? 2000 : 8000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [filter, busy]);
+
+  const items = groupFeed(events, jobs, { groupRuns: filter !== 'tool_call' })
+    .filter(it => {
+      if (filter === 'all') return true;
+      if (filter === 'run') return it.type === 'run';
+      if (filter === 'tool_call') return it.type === 'call';
+      if (filter === 'system') return it.type === 'event';
+      return true;
+    });
+
+  return (
+    <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: 'var(--gutter)', padding: '22px var(--gutter)',
+                    alignItems: 'flex-start', flexDirection: narrow ? 'column' : 'row' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+                      gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+                        flexWrap: 'wrap' }}>
+            <div className="serif" style={{ fontSize: 15 }}>Agent activity</div>
+            <div style={{ marginLeft: 'auto' }}>
+              <FeedFilter value={filter} onChange={setFilter}/>
+            </div>
+          </div>
+
+          {!loaded ? (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              Loading activity…
+            </div>
+          ) : items.length === 0 ? (
+            <div className="panel" style={{ padding: '26px 22px', display: 'flex',
+                                            flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Nothing has happened yet</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                            maxWidth: 460 }}>
+                This feed fills up as dubs run and as agents call the MCP tools.
+                Jobs you start here appear alongside anything an agent does, so
+                both show up in one place.
+              </div>
+              <div>
+                <button className="btn btn-primary" onClick={onSwitchToHome}>
+                  Start a dub
+                </button>
+              </div>
+            </div>
+          ) : items.map(it =>
+            it.type === 'run' ? <FeedRunCard key={it.key} item={it}/>
+            : it.type === 'job' ? <FeedJobCard key={it.key} item={it} onOpen={onOpenJob}/>
+            : it.type === 'call' ? <FeedCallRow key={it.key} ev={it.ev}/>
+            : <FeedEventRow key={it.key} ev={it.ev}/>
+          )}
+        </div>
+
+        <div style={{ width: narrow ? '100%' : 300, flexShrink: 0 }}>
+          <FeedSideTiles jobs={jobs} system={system} events={events}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCancelled, onSwitchToHome, onRefresh }) {
   if (!runningJob) {
     return (
@@ -3509,7 +3916,9 @@ function ComingSoonView({ icon, title, blurb, points = [], phase }) {
 }
 
 function App() {
-  const [view, setView] = useState('home');
+  // 1a's home is the feed. It landed on New dub while the feed was still a
+  // placeholder; now that it renders real activity it takes the front door.
+  const [view, setView] = useState('feed');
   const [system, setSystem] = useState(null);
   const [voicePresets, setVoicePresets] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -3667,14 +4076,20 @@ function App() {
         )}
 
         {view === 'feed' && (
-          <ComingSoonView icon={I.feed} title="Agent feed" phase={4}
-            blurb="One chronological stream of everything agents and humans do here — the screen this redesign is built around."
-            points={[
-              'Runs open with the natural-language prompt that started them, then the MCP tool calls underneath.',
-              'Per-stage chips (download ✓ · tts ● · merge ○), live progress, per-language status and cost so far.',
-              'Webhook deliveries, audit entries and system events as one-liners between the cards.',
-              'Filters for All · Runs · Tool calls · System, with live queue and GPU tiles in the right rail.',
-            ]}/>
+          <AgentFeedView
+            jobs={jobs}
+            system={system}
+            narrow={narrow}
+            onOpenJob={(job) => {
+              // A finished dub opens on its result; a live one on the running
+              // job. Both go through the wrappers' own tab targeting.
+              if (ACTIVE_STATUSES.has(job.status)) {
+                setJobsTab('live'); setView('jobs'); return;
+              }
+              jumpResult(job.id);
+            }}
+            onSwitchToHome={() => setView('home')}
+          />
         )}
         {view === 'apikeys' && (
           <ComingSoonView icon={I.key} title="API keys" phase={5}

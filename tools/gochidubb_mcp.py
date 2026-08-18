@@ -72,7 +72,13 @@ async def _get_client() -> GoChiDUBBClient:
     global _client
     async with _client_lock:
         if _client is None:
-            _client = GoChiDUBBClient(base_url=os.environ.get("GOCHIDUBB_URL", DEFAULT_URL))
+            # Name the agent when one identifies itself, so the activity feed
+            # can say "claude-code via MCP" rather than just "an agent".
+            _agent = os.environ.get("GOCHIDUBB_AGENT") or "agent"
+            _client = GoChiDUBBClient(
+                base_url=os.environ.get("GOCHIDUBB_URL", DEFAULT_URL),
+                client_id=f"mcp/{_agent}",
+            )
         return _client
 
 
