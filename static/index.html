@@ -285,9 +285,12 @@ function mountSphere(el, opts) {
       var(--bg-2),var(--bg) 70%);"></div>`;
     return () => { el.innerHTML = ''; };
   }
+  // Concept-1a palette: a near-black body that only reveals itself at the
+  // rim — idle keeps the rim in ink with a whisper of accent, live goes
+  // full #c8f542 with the same 1.4s breath as every other live element.
   const palette = variant === 'live'
-    ? { core: 0xccff66, rim: 0x88dd44, breath: 1.6 }
-    : { core: 0x9ab4d4, rim: 0x5a7094, breath: 3.2 };
+    ? { core: 0x1a2005, rim: 0xc8f542, mid: 0x86a532, breath: 4.5, dots: 0.55 }
+    : { core: 0x0e0e11, rim: 0xc8f542, mid: 0x5e5e67, breath: 2.2, dots: 0.28 };
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
@@ -298,9 +301,14 @@ function mountSphere(el, opts) {
   renderer.setSize(size, size);
   el.appendChild(renderer.domElement);
 
-  const geo = new THREE.IcosahedronGeometry(1.4, 3);
+  const geo = new THREE.IcosahedronGeometry(1.4, 4);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 }, uCore: { value: new THREE.Color(palette.core) }, uRim: { value: new THREE.Color(palette.rim) } },
+    uniforms: {
+      uTime: { value: 0 },
+      uCore: { value: new THREE.Color(palette.core) },
+      uMid: { value: new THREE.Color(palette.mid) },
+      uRim: { value: new THREE.Color(palette.rim) },
+    },
     vertexShader: `
       varying vec3 vNormal; varying vec3 vPos;
       uniform float uTime;
@@ -309,28 +317,37 @@ function mountSphere(el, opts) {
       }
       void main() {
         vNormal = normal; vPos = position;
-        float n = noise(position*0.8) * 0.12;
+        float n = noise(position*0.8) * 0.09;
         vec3 d = position + normal * n;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(d, 1.0);
       }`,
     fragmentShader: `
       varying vec3 vNormal; varying vec3 vPos;
-      uniform vec3 uCore; uniform vec3 uRim; uniform float uTime;
+      uniform vec3 uCore; uniform vec3 uMid; uniform vec3 uRim; uniform float uTime;
       void main() {
         vec3 view = normalize(cameraPosition - vPos);
-        float rim = pow(1.0 - max(dot(vNormal, view), 0.0), 2.2);
-        float pulse = 0.5 + 0.5 * sin(uTime * 0.5);
-        vec3 col = mix(uCore * 0.25, uRim, rim);
-        col *= 0.8 + pulse * 0.3;
-        gl_FragColor = vec4(col, 0.95);
+        float fres = 1.0 - max(dot(normalize(vNormal), view), 0.0);
+        // Two-stage rim: a wide soft ink falloff, then a tight accent edge —
+        // the body stays near-black so only the silhouette carries color.
+        float mid = pow(fres, 1.8);
+        float edge = pow(fres, 4.5);
+        float breath = 0.5 + 0.5 * sin(uTime);
+        vec3 col = uCore + uMid * mid * 0.55 + uRim * edge * (0.75 + breath * 0.45);
+        gl_FragColor = vec4(col, 0.96);
       }`,
     transparent: true, depthWrite: false,
   });
   const mesh = new THREE.Mesh(geo, mat);
   scene.add(mesh);
-  const halo = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1.7, 2),
-    new THREE.MeshBasicMaterial({ color: palette.rim, wireframe: true, transparent: true, opacity: variant === 'live' ? 0.35 : 0.18 })
+  // Constellation halo: accent points drifting on a sparse shell — replaces
+  // the old wireframe cage, which read as a different (blue) product.
+  const shell = new THREE.IcosahedronGeometry(1.85, 1);
+  const halo = new THREE.Points(
+    shell,
+    new THREE.PointsMaterial({
+      color: palette.rim, size: 0.035, transparent: true,
+      opacity: palette.dots, depthWrite: false, sizeAttenuation: true,
+    })
   );
   scene.add(halo);
 
