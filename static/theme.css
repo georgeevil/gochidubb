@@ -1,0 +1,186 @@
+:root {
+  --bg: #0a0a0d;
+  --bg-1: #101014;
+  --bg-2: #16161c;
+  --bg-3: #1d1d25;
+  --line: #24242e;
+  --line-2: #2f2f3c;
+  --ink: #ece9e0;
+  --ink-2: #a3a096;
+  --ink-3: #5a5a63;
+  --ink-4: #35353d;
+  --accent: oklch(0.88 0.18 125);
+  --accent-dim: oklch(0.88 0.18 125 / 0.15);
+  --accent-glow: oklch(0.88 0.18 125 / 0.4);
+  --warn: oklch(0.78 0.15 60);
+  --err: oklch(0.7 0.2 25);
+  --serif: 'Instrument Serif', ui-serif, Georgia, serif;
+  --sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  /* Nothing should ever be reachable only by scrolling sideways. */
+  overflow-x: hidden;
+}
+/* 100vw includes the scrollbar gutter and causes a permanent horizontal
+   overflow on desktop; 100dvh tracks the mobile URL bar collapsing, where
+   100vh leaves the bottom of the app under it. */
+#root { width: 100%; height: 100vh; height: 100dvh; }
+
+/* View padding is set inline all over the app; routing it through a custom
+   property is what lets one media query retune every screen at once. */
+:root { --pad: 40px; --gutter: 22px; --rail-w: 232px; }
+
+/* Long URLs (a YouTube source is the common case) must wrap instead of
+   forcing the whole column wider than the viewport. */
+.wrap-any { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+
+button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: none; cursor: pointer; letter-spacing: inherit; }
+input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; background: transparent; border: none; outline: none; }
+
+.serif { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; }
+.mono { font-family: var(--mono); font-size: 11px; letter-spacing: -0.01em; }
+.caps { font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
+}
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--line-2); color: var(--ink); background: var(--bg-2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--line); color: var(--ink-2); background: var(--bg-1); }
+.btn-primary {
+  background: var(--accent);
+  color: #0a0a0d;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.1); border-color: var(--accent); color: #0a0a0d; background: var(--accent); }
+.btn-primary:disabled { background: var(--bg-2); color: var(--ink-3); border-color: var(--line); }
+.btn-primary:disabled:hover { filter: none; }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { border-color: var(--line); background: var(--bg-1); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
+  /* Without this a pill in a narrow column wraps its label one word per
+     line and the border-radius turns it into a circle. */
+  white-space: nowrap;
+  max-width: 100%;
+}
+.chip.accent { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.panel { background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; }
+
+.field {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  transition: border-color 0.12s;
+  width: 100%;
+  font-size: 12.5px;
+}
+.field:hover { border-color: var(--line-2); }
+.field:focus { border-color: var(--accent); }
+
+.tab {
+  padding: 8px 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.tab:hover { color: var(--ink-2); }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+.scroll { overflow-y: auto; overflow-x: hidden; }
+.scroll::-webkit-scrollbar { width: 4px; }
+
+.dropzone {
+  border: 1px dashed var(--line-2);
+  border-radius: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--bg-1);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dropzone:hover { border-color: var(--accent-dim); background: var(--bg-2); }
+.dropzone.dragging { border-color: var(--accent); background: var(--accent-dim); }
+
+/* ── Phones / narrow windows ──────────────────────────────────────
+   The desktop shell is a fixed 232px rail beside a flex column. At 390px
+   that leaves ~158px of content, which is why every label wrapped one word
+   per line. Below this breakpoint the rail becomes an off-canvas drawer
+   (see LeftRail/useIsNarrow in the app) and the content takes the full
+   width. Keep this in sync with NARROW_QUERY in the script below. */
+@media (max-width: 860px) {
+  :root { --pad: 16px; --gutter: 14px; }
+
+  /* Tables, timelines and code blocks scroll inside their own box rather
+     than widening the page. */
+  .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Touch targets: 12px labels are legible but 24px buttons are not
+     tappable. Only pad the interactive ones. */
+  .btn { padding: 9px 14px; }
+  .tab { padding: 10px 4px; }
+}
+
+/* Backdrop behind the mobile nav drawer. */
+.scrim {
+  position: fixed; inset: 0; z-index: 55;
+  background: rgba(0, 0, 0, 0.55);
+  animation: fadeIn 0.15s;
+}
