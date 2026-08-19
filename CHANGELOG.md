@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The Studio UI is redesigned around an agent-first workflow** (concept 1a,
+  `docs/saas-redesign-plan.md`). The Agent feed — a chronological stream of
+  runs, tool calls and system events — is the new home screen; the rail groups
+  Work / Develop / Workspace; Jobs and Library consolidate the old
+  History/Processing/Review/Batch and Result/Voices/Glossary views behind
+  tabs; a ⌘K command bar turns plain language ("dub the last upload into fr,
+  es") into dubs. The dark theme is retuned (#c8f542 accent, Geist display
+  type) and the hero sphere redrawn to match. Local mode keeps today's
+  behavior exactly: no auth, no billing surfaces.
+
 ### Fixed
 - **Long videos no longer die at the final render with `timed out after 600
   seconds`.** The ffmpeg timeout in the merge/extract stages is now *soft*
@@ -18,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config (env: `GOCHIDUBB_FFMPEG_TIMEOUT`, `GOCHIDUBB_FFMPEG_STALL_TIMEOUT`).
 
 ### Added
+- **Develop surfaces for driving GoChiDUBB from agents and scripts**: scoped
+  API keys (stored hashed, shown once, revocable), webhooks for
+  `job.completed` / `job.failed` / `job.awaiting_review` with a delivery log,
+  an MCP server onboarding page over the existing tool set, and a merged
+  `GET /api/activity` stream. `GOCHIDUBB_MODE=hosted` additionally reveals
+  Members, metered-estimate Billing (clearly marked as an estimate), and an
+  Audit log; `local` stays the default.
 - **37 new target languages — 65 total.** Every candidate was verified live
   against the edge-tts voice catalog and Whisper's language list before being
   registered. New targets: Bengali, Urdu, Persian, Hebrew, Swahili, Filipino
