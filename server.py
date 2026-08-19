@@ -195,7 +195,9 @@ from pipeline.notices import (
 
 from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
-from app import logbuf, artifact_store, reuse_runtime, reuse as app_reuse
+from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
+                 activity, apikeys as app_apikeys, webhooks as app_webhooks,
+                 billing as app_billing, audit as app_audit)
 
 
 # Force UTF-8 stdout for foreign-language transcripts on Windows cp1252 consoles
@@ -1201,6 +1203,18 @@ async def lifespan(app: FastAPI):
     _upload_queue = asyncio.Queue()
     _upload_worker_task = asyncio.create_task(_upload_worker())
 
+    # update() runs on the event loop for most stages but from a worker thread
+    # for the blocking ones, and asyncio.create_task() only works on the
+    # former. Holding the serving loop lets either path schedule a delivery.
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+
+    # First line of the activity feed's System stream, and a useful one: it
+    # dates the buffer, so "nothing before this" is explained rather than
+    # looking like lost history.
+    activity.record_system(
+        f"Server started · mode {cfg.mode} · {len(jobs)} job(s) loaded")
+
     if os.getenv("GOCHIDUBB_OPEN_BROWSER", "1") == "1" and not os.getenv("DOCKER"):
         async def open_browser():
             await asyncio.sleep(1.5)
@@ -1296,6 +1310,110 @@ app = FastAPI(title="GoChiDUBB Studio", version="2.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ── Agent attribution ────────────────────────────────────────────────
+# The MCP server and CLI are separate processes that drive this one over HTTP,
+# so an agent's gochidubb.dub(...) arrives as an ordinary POST /api/dub —
+# identical to the browser's. GoChiDUBBClient tags its requests with
+# X-GoChiDUBB-Client, and this records the tagged ones as tool calls for the
+# activity feed. Untagged requests (the UI) are deliberately not recorded.
+#
+# The header is informational only: it is never consulted for authorization,
+# so a forged one can add a feed line and nothing else.
+
+# Route prefix → the MCP tool it corresponds to. Longest match wins, so
+# /api/dub/{id}/retry_stage/... is a retry_stage, not a dub.
+_TOOL_ROUTES = [
+    ("/api/dub/batch", "compare"),
+    ("/api/dub", "dub"),
+    ("/api/showcase", "showcase"),
+    ("/api/quick_test", "quick_test"),
+    ("/api/jobs", "list_jobs"),
+    ("/api/job", "get_status"),
+    ("/api/system", "system_status"),
+    ("/api/voices", "list_voices"),
+    ("/api/languages", "list_languages"),
+    ("/api/scout/trending", "scout_trending"),
+    ("/api/scout/dub", "scout_dub"),
+    ("/api/publish/pending", "publish_pending"),
+]
+
+
+def _tool_for_path(path: str) -> str:
+    if "/retry_stage/" in path:
+        return "retry_stage"
+    if path.endswith("/cancel"):
+        return "cancel"
+    if path.endswith("/redub"):
+        return "redub"
+    if path.endswith("/quality"):
+        return "quality_report"
+    best = ""
+    for prefix, tool in _TOOL_ROUTES:
+        if path.startswith(prefix) and len(prefix) > len(best):
+            best, name = prefix, tool
+    return name if best else path
+
+
+_MAIN_LOOP = None
+
+# Job status -> the webhook event it corresponds to. Only these three fire;
+# they are the ones the design names.
+_WEBHOOK_EVENT_FOR_STATUS = {
+    "complete": "job.completed",
+    "error": "job.failed",
+    "awaiting_translation_review": "job.awaiting_review",
+}
+
+
+def _fire_webhooks(status: str, job: dict) -> None:
+    """Schedule deliveries for a job transition. Never raises, never blocks.
+
+    A dub must not slow down or fail because someone's endpoint is down, so
+    this only ever schedules detached tasks; app.webhooks handles timeouts,
+    the single retry, and turning failures into delivery records.
+    """
+    event = _WEBHOOK_EVENT_FOR_STATUS.get(status)
+    if not event:
+        return
+    hooks = app_webhooks.hooks_for(event)
+    if not hooks:
+        return
+    payload = app_webhooks.payload_for_job(job)
+
+    async def _run():
+        for h in hooks:
+            await app_webhooks.deliver_one(h, event, payload)
+        activity.record_system(
+            f"Webhook {event} · {len(hooks)} endpoint(s) · job {job.get('id')}")
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        # Called from a worker thread — hand it to the serving loop instead.
+        if _MAIN_LOOP is not None:
+            asyncio.run_coroutine_threadsafe(_run(), _MAIN_LOOP)
+
+
+@app.middleware("http")
+async def _record_agent_calls(request, call_next):
+    client_id = request.headers.get("X-GoChiDUBB-Client")
+    if not client_id or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    started = time.time()
+    response = await call_next(request)
+    try:
+        activity.record_tool_call(
+            _tool_for_path(request.url.path),
+            client_id[:64],
+            status=response.status_code,
+            ms=(time.time() - started) * 1000.0,
+        )
+    except Exception:
+        # A feed line is never worth failing a request over.
+        log.debug("[activity] could not record tool call", exc_info=True)
+    return response
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2447,8 +2565,26 @@ async def run_pipeline_stages(
         if job.get("cancel_requested"):
             _maybe_terminate_tts_worker()
             raise JobCancelled(f"Job {job_id} cancelled by user")
+        prev_status = job.get("status")
         job.update(kwargs)
         save_job(job)
+        # Feed the activity stream, but only on a real transition: update() is
+        # called for progress ticks an order of magnitude more often than for
+        # status changes, and a feed of "still transcribing" is not a feed.
+        new_status = kwargs.get("status")
+        if new_status and new_status != prev_status:
+            try:
+                activity.record_job(
+                    job_id, new_status,
+                    title=job.get("title") or job.get("source_label"),
+                    stage=kwargs.get("step_detail"),
+                )
+            except Exception:
+                log.debug("[activity] could not record transition", exc_info=True)
+            try:
+                _fire_webhooks(new_status, job)
+            except Exception:
+                log.debug("[webhooks] could not schedule delivery", exc_info=True)
 
     _resolve_voice_into_ctx(job, ctx)
     start_i = max(_stage_index(start_stage), 0)
@@ -2683,6 +2819,9 @@ async def system_status():
         "url": LM_STUDIO_MODELS_ENDPOINT,
     }
     status["catalog"] = MODEL_CATALOG
+    # Deployment mode ("local" | "hosted") — the UI gates the Workspace
+    # group on this without needing a second round trip.
+    status["mode"] = cfg.mode if cfg.mode in ("local", "hosted") else "local"
 
     # Live resource snapshot — the same probes the per-stage sampler uses,
     # so the System panel and the stage metrics always agree on what's
@@ -2877,6 +3016,169 @@ async def get_logs(level: str = "", limit: int = 300, since_seq: int = 0):
     """
     return logbuf.snapshot(level=level, limit=max(1, min(int(limit or 300), 2000)),
                            since_seq=int(since_seq or 0))
+
+
+@app.get("/api/activity")
+async def get_activity(kinds: str = "", limit: int = 80, since_id: int = 0):
+    """The activity feed: agent tool calls and job transitions, newest first.
+
+    `kinds` is a comma-separated subset of app.activity.KINDS, matching the
+    design's filter tabs. `since_id` is a monotonic event id rather than a
+    timestamp, so the UI can poll for only what it has not seen without two
+    events in the same millisecond hiding each other.
+
+    In-memory and bounded — this is "what is happening now", not an audit
+    trail. The persisted audit log is a separate concern.
+    """
+    want = [k.strip() for k in kinds.split(",") if k.strip()] if kinds else None
+    if want:
+        bad = [k for k in want if k not in activity.KINDS]
+        if bad:
+            return JSONResponse(
+                {"error": f"unknown kind(s): {', '.join(bad)}",
+                 "valid": list(activity.KINDS)}, 400)
+    return {
+        "events": activity.recent(
+            limit=max(1, min(int(limit or 80), 400)),
+            kinds=want,
+            since_id=int(since_id or 0),
+        ),
+        "last_id": activity.last_id(),
+    }
+
+
+# ── Develop: API keys ────────────────────────────────────────────────
+# Keys are hashed at rest and the plaintext is returned exactly once, at
+# creation. Scope enforcement is gated on hosted mode (see _require_scope):
+# in local mode every route stays open, as it always has been.
+
+@app.get("/api/apikeys")
+async def list_api_keys():
+    return {"keys": app_apikeys.list_keys(),
+            "scopes": app_apikeys.SCOPES,
+            "enforced": cfg.mode == "hosted"}
+
+
+@app.post("/api/apikeys")
+async def create_api_key(name: str = Form(...), scopes: str = Form(""),
+                         environment: str = Form("live"),
+                         expires_days: str = Form("")):
+    want = [s.strip() for s in scopes.split(",") if s.strip()]
+    try:
+        days = int(expires_days) if str(expires_days).strip() else None
+    except ValueError:
+        return JSONResponse({"error": "expires_days must be a number"}, 400)
+    try:
+        rec, token = app_apikeys.create(name, want, environment=environment,
+                                        expires_days=days)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, 400)
+    activity.record_system(f"API key created · {rec['name']} "
+                           f"({', '.join(rec['scopes'])})")
+    app_audit.record("apikey.create", target=rec["id"],
+                     detail=f"{rec['name']} · {', '.join(rec['scopes'])}",
+                     environment=rec["environment"])
+    # The only time the token is ever returned.
+    return {"key": rec, "token": token}
+
+
+@app.post("/api/apikeys/{key_id}/revoke")
+async def revoke_api_key(key_id: str):
+    if not app_apikeys.revoke(key_id):
+        return JSONResponse({"error": "not found or already revoked"}, 404)
+    activity.record_system(f"API key revoked · {key_id}", severity="warn")
+    app_audit.record("apikey.revoke", target=key_id)
+    return {"ok": True}
+
+
+@app.delete("/api/apikeys/{key_id}")
+async def delete_api_key(key_id: str):
+    if not app_apikeys.delete(key_id):
+        return JSONResponse({"error": "not found"}, 404)
+    return {"ok": True}
+
+
+# ── Develop: webhooks ────────────────────────────────────────────────
+
+@app.get("/api/webhooks")
+async def list_webhooks():
+    return {"hooks": app_webhooks.list_hooks(),
+            "events": list(app_webhooks.EVENTS),
+            "deliveries": app_webhooks.deliveries(50)}
+
+
+@app.post("/api/webhooks")
+async def add_webhook(url: str = Form(...), events: str = Form(""),
+                      secret: str = Form("")):
+    want = [e.strip() for e in events.split(",") if e.strip()]
+    try:
+        rec = app_webhooks.add(url, want, secret=secret)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, 400)
+    activity.record_system(f"Webhook added · {rec['url']}")
+    app_audit.record("webhook.add", target=rec["id"], detail=rec["url"],
+                     events=rec["events"])
+    return {"hook": rec}
+
+
+@app.delete("/api/webhooks/{hook_id}")
+async def delete_webhook(hook_id: str):
+    if not app_webhooks.remove(hook_id):
+        return JSONResponse({"error": "not found"}, 404)
+    app_audit.record("webhook.remove", target=hook_id)
+    return {"ok": True}
+
+
+@app.post("/api/webhooks/{hook_id}/test")
+async def test_webhook(hook_id: str):
+    """Send a sample delivery so a listener can be verified before a real run."""
+    hook = next((h for h in app_webhooks._read() if h.get("id") == hook_id), None)
+    if not hook:
+        return JSONResponse({"error": "not found"}, 404)
+    d = await app_webhooks.deliver_one(
+        hook, "job.completed",
+        {"job_id": "test_0000", "status": "complete", "title": "Test delivery",
+         "target_lang": "fr", "duration_sec": 61.0, "test": True})
+    return {"delivery": d}
+
+
+# ── Workspace: usage, members, audit ─────────────────────────────────
+# The minutes here are real — measured source duration × target languages, the
+# way the design meters. The money is an ESTIMATE of what a hosted workspace
+# would charge at the design's published rates; this server bills nobody. The
+# UI must present it as such.
+
+@app.get("/api/billing/usage")
+async def billing_usage(window_days: int = 30):
+    since = time.time() - max(1, int(window_days or 30)) * 86400
+    try:
+        # Defined further down; resolved at call time. It walks each job's
+        # output dir, which is fine for an on-demand page but not for a poll.
+        storage = await storage_stats()
+    except Exception:
+        storage = {}
+    gb = float(storage.get("total_gb") or 0.0)
+    summary = app_billing.summarize(list(jobs.values()), since=since,
+                                    storage_gb=gb)
+    summary["window_days"] = int(window_days or 30)
+    summary["mode"] = cfg.mode
+    # Spelled out so no caller can mistake this for an invoice.
+    summary["disclaimer"] = (
+        "Estimate only. Minutes are measured from real jobs; the cost applies "
+        "the design's published hosted rates. This server bills nobody."
+    )
+    summary["tiers"] = [
+        {"from": 0, "to": 500, "rate": 0.080},
+        {"from": 500, "to": 2000, "rate": 0.065},
+        {"from": 2000, "to": None, "rate": 0.050},
+    ]
+    return summary
+
+
+@app.get("/api/audit")
+async def get_audit(limit: int = 200):
+    return {"entries": app_audit.recent(limit=max(1, min(int(limit or 200), 1000))),
+            "total": app_audit.count()}
 
 
 @app.post("/api/models/pull")

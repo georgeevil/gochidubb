@@ -6,7 +6,7 @@
 <title>GoChiDUBB Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/theme.css">
 </head>
 <body>
@@ -222,6 +222,58 @@ function useMediaQuery(query) {
 
 const useIsNarrow = () => useMediaQuery(NARROW_QUERY);
 
+// ── ⌘K command parsing ───────────────────────────────────────────────
+// Deliberately narrow: a source, some target languages, and which of the four
+// run modes was asked for. It never starts a job on its own — a dub costs real
+// GPU minutes and is awkward to undo, so a parsed command pre-fills New dub
+// and the human presses Start. Anything it cannot read confidently is reported
+// rather than guessed at.
+const CMD_MODE_WORDS = [
+  [/\b(showcase|reel|stitch(ed)?)\b/i, 'showcase'],
+  [/\b(quick ?test|compare|side.by.side)\b/i, 'quick'],
+  [/\bbatch\b/i, 'batch'],
+];
+
+// Longest names first so "Chinese (Traditional)" wins over "Chinese".
+const _LANG_MATCHERS = LANGS
+  .filter(l => l.c !== 'auto')
+  .map(l => ({ code: l.c, name: l.n.toLowerCase() }))
+  .sort((a, b) => b.name.length - a.name.length);
+
+function parseCommand(text) {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+  const out = { text: raw, source: '', langs: [], mode: null, understood: [] };
+
+  const url = raw.match(/https?:\/\/\S+/i);
+  if (url) {
+    out.source = url[0].replace(/[.,;]+$/, '');
+    out.understood.push('source');
+  }
+
+  for (const [re, mode] of CMD_MODE_WORDS) {
+    if (re.test(raw)) { out.mode = mode; out.understood.push('mode'); break; }
+  }
+
+  // Match language names first, then bare two-letter codes — but only codes
+  // that appear as their own word, so the "es" in "these" is not Spanish.
+  let hay = ' ' + raw.toLowerCase().replace(/[,/]+/g, ' ') + ' ';
+  for (const l of _LANG_MATCHERS) {
+    if (hay.includes(' ' + l.name + ' ')) {
+      if (!out.langs.includes(l.code)) out.langs.push(l.code);
+      hay = hay.split(' ' + l.name + ' ').join(' ');
+    }
+  }
+  for (const l of _LANG_MATCHERS) {
+    const re = new RegExp('(^|\\s)' + l.code + '(\\s|$)');
+    if (re.test(hay) && !out.langs.includes(l.code)) out.langs.push(l.code);
+  }
+  if (out.langs.length) out.understood.push('languages');
+
+  return out;
+}
+
+
 // Wall-clock only — the log viewer shows one session, so the date is noise.
 const fmtClock = (ts) => {
   if (!ts) return '--:--:--';
@@ -272,6 +324,13 @@ const I = {
   warn:       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M6 1.5L11 10.5H1zM6 5v3M6 9v.6"/></svg>,
   voice:      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="6" y="2" width="4" height="8" rx="2"/><path d="M3 8a5 5 0 0 0 10 0M8 13v1.5M5.5 14.5h5"/></svg>,
   glossary:   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2.5 3.5c1.5-1 4-1 5.5 0 1.5-1 4-1 5.5 0v9c-1.5-1-4-1-5.5 0-1.5-1-4-1-5.5 0zM8 3.5v9"/></svg>,
+  feed:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M1.5 8h3l2-4.5L9.5 12l2-4h3"/></svg>,
+  key:        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="11" r="3"/><path d="M7.2 8.8L13.5 2.5M11 5l2 2M9 7l1.5 1.5"/></svg>,
+  plug:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M5 2v3M11 2v3M4 5h8v3a4 4 0 0 1-8 0zM8 12v2.5"/></svg>,
+  hook:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M8 2v6a3 3 0 0 0 6 0M2 8a3 3 0 0 1 6 0"/><circle cx="8" cy="2" r="1"/></svg>,
+  people:     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5.5" cy="5" r="2.2"/><path d="M1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 3.2a2.2 2.2 0 0 1 0 4M12.5 9.4c1.3.6 2 1.9 2 3.6"/></svg>,
+  card:       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M1.5 6.5h13M4 10h3"/></svg>,
+  ledger:     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 1.5h10v13H3zM6 5h4M6 8h4M6 11h2.5"/></svg>,
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -285,9 +344,12 @@ function mountSphere(el, opts) {
       var(--bg-2),var(--bg) 70%);"></div>`;
     return () => { el.innerHTML = ''; };
   }
+  // Concept-1a palette: a near-black body that only reveals itself at the
+  // rim — idle keeps the rim in ink with a whisper of accent, live goes
+  // full #c8f542 with the same 1.4s breath as every other live element.
   const palette = variant === 'live'
-    ? { core: 0xccff66, rim: 0x88dd44, breath: 1.6 }
-    : { core: 0x9ab4d4, rim: 0x5a7094, breath: 3.2 };
+    ? { core: 0x1a2005, rim: 0xc8f542, mid: 0x86a532, breath: 4.5, dots: 0.55 }
+    : { core: 0x0e0e11, rim: 0xc8f542, mid: 0x5e5e67, breath: 2.2, dots: 0.28 };
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
@@ -298,9 +360,14 @@ function mountSphere(el, opts) {
   renderer.setSize(size, size);
   el.appendChild(renderer.domElement);
 
-  const geo = new THREE.IcosahedronGeometry(1.4, 3);
+  const geo = new THREE.IcosahedronGeometry(1.4, 4);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 }, uCore: { value: new THREE.Color(palette.core) }, uRim: { value: new THREE.Color(palette.rim) } },
+    uniforms: {
+      uTime: { value: 0 },
+      uCore: { value: new THREE.Color(palette.core) },
+      uMid: { value: new THREE.Color(palette.mid) },
+      uRim: { value: new THREE.Color(palette.rim) },
+    },
     vertexShader: `
       varying vec3 vNormal; varying vec3 vPos;
       uniform float uTime;
@@ -309,28 +376,37 @@ function mountSphere(el, opts) {
       }
       void main() {
         vNormal = normal; vPos = position;
-        float n = noise(position*0.8) * 0.12;
+        float n = noise(position*0.8) * 0.09;
         vec3 d = position + normal * n;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(d, 1.0);
       }`,
     fragmentShader: `
       varying vec3 vNormal; varying vec3 vPos;
-      uniform vec3 uCore; uniform vec3 uRim; uniform float uTime;
+      uniform vec3 uCore; uniform vec3 uMid; uniform vec3 uRim; uniform float uTime;
       void main() {
         vec3 view = normalize(cameraPosition - vPos);
-        float rim = pow(1.0 - max(dot(vNormal, view), 0.0), 2.2);
-        float pulse = 0.5 + 0.5 * sin(uTime * 0.5);
-        vec3 col = mix(uCore * 0.25, uRim, rim);
-        col *= 0.8 + pulse * 0.3;
-        gl_FragColor = vec4(col, 0.95);
+        float fres = 1.0 - max(dot(normalize(vNormal), view), 0.0);
+        // Two-stage rim: a wide soft ink falloff, then a tight accent edge —
+        // the body stays near-black so only the silhouette carries color.
+        float mid = pow(fres, 1.8);
+        float edge = pow(fres, 4.5);
+        float breath = 0.5 + 0.5 * sin(uTime);
+        vec3 col = uCore + uMid * mid * 0.55 + uRim * edge * (0.75 + breath * 0.45);
+        gl_FragColor = vec4(col, 0.96);
       }`,
     transparent: true, depthWrite: false,
   });
   const mesh = new THREE.Mesh(geo, mat);
   scene.add(mesh);
-  const halo = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1.7, 2),
-    new THREE.MeshBasicMaterial({ color: palette.rim, wireframe: true, transparent: true, opacity: variant === 'live' ? 0.35 : 0.18 })
+  // Constellation halo: accent points drifting on a sparse shell — replaces
+  // the old wireframe cage, which read as a different (blue) product.
+  const shell = new THREE.IcosahedronGeometry(1.85, 1);
+  const halo = new THREE.Points(
+    shell,
+    new THREE.PointsMaterial({
+      color: palette.rim, size: 0.035, transparent: true,
+      opacity: palette.dots, depthWrite: false, sizeAttenuation: true,
+    })
   );
   scene.add(halo);
 
@@ -374,7 +450,7 @@ function Toggle({ value, onChange, label, hint, disabled = false }) {
         <div style={{
           position: 'absolute', top: 1, left: value ? 14 : 1,
           width: 12, height: 12, borderRadius: '50%',
-          background: value ? '#0a0a0d' : 'var(--ink-2)',
+          background: value ? 'var(--bg)' : 'var(--ink-2)',
           transition: 'left 0.15s',
         }}/>
       </div>
@@ -572,18 +648,37 @@ function NoticeCard({ n }) {
 function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
                     publishPendingCount = 0,
                     narrow = false, open = false, onClose }) {
-  const sections = [
-    { id: 'home',        label: 'Home',         hint: 'Upload · queue',       ic: I.home },
-    { id: 'discover',    label: 'Discover',     hint: 'Trending · scout',     ic: I.discover },
-    { id: 'processing',  label: 'Processing',   hint: runningJob ? 'Live job' : 'Idle', ic: I.processing, badge: runningJob ? '●' : null },
-    { id: 'review',      label: 'Review',       hint: awaitingReviewCount > 0 ? 'Wizard pause' : 'Nothing pending', ic: I.review, badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : null },
-    { id: 'result',      label: 'Result',       hint: 'Last completed',       ic: I.result },
-    // The publish inbox rides on History — that's where staged jobs live,
-    // so the count doubles as "N jobs waiting for your approval".
-    { id: 'history',     label: 'History',      hint: publishPendingCount > 0 ? `${publishPendingCount} to publish` : 'All jobs', ic: I.history, badge: publishPendingCount > 0 ? String(publishPendingCount) : null },
-    { id: 'batch',       label: 'Batch',        hint: 'Queue & scheduled',    ic: I.batch },
-    { id: 'voices',      label: 'Voices',       hint: 'Library · clone refs', ic: I.voice || I.review },
-    { id: 'glossary',    label: 'Glossary',     hint: 'Translation overrides',ic: I.glossary || I.edit },
+  const mode = system?.mode || 'local';
+  // Jobs consolidates History/Processing/Review/Batch, and the publish inbox
+  // lives there too — it is a filter over the History list, not a screen of
+  // its own. The badge therefore prefers whatever is blocking a human:
+  // translation review first, then publish approval, then the running dot.
+  const jobsHint = awaitingReviewCount > 0 ? `${awaitingReviewCount} awaiting review`
+                 : publishPendingCount > 0 ? `${publishPendingCount} to publish`
+                 : runningJob ? 'Live job' : 'All jobs';
+  const jobsBadge = awaitingReviewCount > 0 ? String(awaitingReviewCount)
+                  : publishPendingCount > 0 ? String(publishPendingCount)
+                  : runningJob ? '●' : null;
+  const groups = [
+    { label: 'Work', items: [
+      { id: 'feed',     label: 'Agent feed', hint: 'Runs · events',           ic: I.feed },
+      { id: 'home',     label: 'New dub',    hint: 'Upload · URL · showcase', ic: I.home },
+      { id: 'jobs',     label: 'Jobs',       hint: jobsHint, ic: I.history,
+        badge: jobsBadge },
+      { id: 'discover', label: 'Discover',   hint: 'Trending · scout',        ic: I.discover },
+      { id: 'library',  label: 'Library',    hint: 'Results · voices · glossary',
+        ic: I.result },
+    ]},
+    { label: 'Develop', items: [
+      { id: 'apikeys',  label: 'API keys',   hint: 'Scoped access',    ic: I.key },
+      { id: 'mcp',      label: 'MCP server', hint: 'Agent onboarding', ic: I.plug },
+      { id: 'webhooks', label: 'Webhooks',   hint: 'Job events out',   ic: I.hook },
+    ]},
+    ...(mode === 'hosted' ? [{ label: 'Workspace', items: [
+      { id: 'members',  label: 'Members',    hint: 'Roles · invites',  ic: I.people },
+      { id: 'billing',  label: 'Billing & usage', hint: 'Metered estimate', ic: I.card },
+      { id: 'audit',    label: 'Audit log',  hint: 'Key · job actions', ic: I.ledger },
+    ]}] : []),
   ];
 
   const vramTotal = system?.gpu?.vram_gb;
@@ -628,7 +723,7 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 0 18px var(--accent-glow)',
           }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#0a0a0d" strokeWidth="1.6"><path d="M2 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5-.8 2.5-2 2.5"/><path d="M6 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5"/></svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" strokeWidth="1.6" style={{ stroke: 'var(--bg)' }}><path d="M2 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5-.8 2.5-2 2.5"/><path d="M6 6c0-1.5.8-2.5 2-2.5s2 1 2 2.5"/></svg>
           </div>
           <div>
             <div className="serif" style={{ fontSize: 19, lineHeight: 1, letterSpacing: '-0.02em' }}>GoChiDUBB</div>
@@ -638,14 +733,18 @@ function LeftRail({ view, setView, runningJob, awaitingReviewCount, system,
       </div>
 
       <div style={{ padding: '0 12px', flex: 1, overflow: 'auto' }}>
-        <div className="caps" style={{ margin: '0 8px 8px' }}>Workspace</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {sections.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => go(s.id)}/>)}
-        </div>
+        {groups.map((g, gi) => (
+          <React.Fragment key={g.label}>
+            <div className="caps" style={{ margin: (gi === 0 ? '0' : '20px') + ' 8px 8px' }}>{g.label}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {g.items.map(s => <NavItem key={s.id} item={s} active={view === s.id} onClick={() => go(s.id)}/>)}
+            </div>
+          </React.Fragment>
+        ))}
 
         <div className="caps" style={{ margin: '20px 8px 8px' }}>System</div>
         <NavItem
-          item={{ id: 'system', label: 'System', hint: sysHint, ic: I.system,
+          item={{ id: 'system', label: 'Settings', hint: sysHint, ic: I.system,
                   badge: issueCount > 0 ? String(issueCount) : null }}
           active={view === 'system'}
           onClick={() => go('system')}
@@ -731,13 +830,27 @@ function NavItem({ item, active, onClick, warn }) {
 // ═══════════════════════════════════════════════════════════════════
 // TOP BAR
 // ═══════════════════════════════════════════════════════════════════
-function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProcessing,
-                  onJumpToReview, onOpenSetup, narrow = false, onOpenNav }) {
+function TopBar({ view, runningJob, awaitingReviewCount, notices, mode = 'local',
+                  onJumpToProcessing, onJumpToReview, onOpenSetup, onCommand,
+                  narrow = false, onOpenNav }) {
   const TITLES = {
-    home: 'Home', processing: 'Processing', review: 'Review · wizard pause',
-    result: 'Result', history: 'History', batch: 'Batch queue', system: 'System',
-    voices: 'Voices', glossary: 'Glossary', discover: 'Discover · trending',
+    feed: 'Agent feed', home: 'New dub', jobs: 'Jobs', library: 'Library',
+    discover: 'Discover', apikeys: 'API keys', mcp: 'MCP server',
+    webhooks: 'Webhooks', members: 'Members', billing: 'Billing & usage',
+    audit: 'Audit log', system: 'Settings',
   };
+  // ⌘K / Ctrl-K focuses the command field from anywhere in the app.
+  const cmdRef = useRef(null);
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        cmdRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
   const issues = notices || [];
   const worst = issues.some(n => n.severity === 'error') ? 'error'
               : issues.some(n => n.severity === 'warn') ? 'warn' : '';
@@ -765,7 +878,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
                                       flexShrink: 0 }}>
         {TITLES[view] || 'GoChiDUBB Studio'}
       </div>
-      {view === 'processing' && runningJob && !narrow && (
+      {view === 'jobs' && runningJob && !narrow && (
         // A YouTube URL is ~45 chars of unbreakable text; on a phone it pushed
         // the whole bar wider than the screen, so it only shows with room.
         <span className="mono" style={{
@@ -775,9 +888,38 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
           · {(runningJob.title || runningJob.source_label || runningJob.source || runningJob.id).slice(0, 50)}
         </span>
       )}
-      <div style={{ flex: 1, minWidth: 8 }}/>
+      {!narrow && onCommand ? (
+        <form
+          style={{ flex: 1, minWidth: 8, display: 'flex', justifyContent: 'center', padding: '0 12px' }}
+          onSubmit={e => {
+            e.preventDefault();
+            onCommand(cmdRef.current ? cmdRef.current.value : '');
+            if (cmdRef.current) cmdRef.current.value = '';
+          }}>
+          <label
+            title="Describe a dub — a URL, target languages, and optionally showcase or quick test. It fills in New dub; you press Start."
+            style={{ display: 'flex', alignItems: 'center', gap: 8,
+                     width: 'min(440px, 100%)', padding: '5px 10px', cursor: 'text',
+                     background: 'var(--bg-1)', border: '1px solid var(--line)',
+                     borderRadius: 'var(--r-md)' }}>
+            <input ref={cmdRef} placeholder='Dub the last upload into fr, es, ja…'
+                   style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink)' }}/>
+            <span className="mono" style={{ fontSize: 9, color: 'var(--ink-4)',
+                                            padding: '2px 5px', borderRadius: 4,
+                                            border: '1px solid var(--line)', flexShrink: 0 }}>⌘K</span>
+          </label>
+        </form>
+      ) : (
+        <div style={{ flex: 1, minWidth: 8 }}/>
+      )}
 
-      {runningJob && view !== 'processing' && (
+      <span className="chip mono" title="Deployment mode" style={{
+        fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', flexShrink: 0,
+        color: mode === 'hosted' ? 'var(--accent)' : 'var(--ink-3)',
+        borderColor: mode === 'hosted' ? 'var(--accent)' : 'var(--line)',
+      }}>{mode}</span>
+
+      {runningJob && view !== 'jobs' && (
         <button onClick={onJumpToProcessing} className="chip" style={{ color: 'var(--ink-2)', cursor: 'pointer' }}>
           <span className="dot" style={{ background: 'var(--accent)', boxShadow: '0 0 5px var(--accent-glow)', animation: 'pulse 1.5s infinite' }}/>
           <span>Running · {(overall * 100).toFixed(0)}%</span>
@@ -785,7 +927,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
         </button>
       )}
 
-      {awaitingReviewCount > 0 && view !== 'review' && (
+      {awaitingReviewCount > 0 && view !== 'jobs' && (
         <button onClick={onJumpToReview} className="chip" style={{
           color: 'var(--warn)', borderColor: 'var(--warn)',
           background: 'oklch(0.78 0.15 60 / 0.1)', cursor: 'pointer',
@@ -809,7 +951,8 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, onJumpToProces
 // ═══════════════════════════════════════════════════════════════════
 // HOME VIEW — with dynamic model loading
 // ═══════════════════════════════════════════════════════════════════
-function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
+function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
+                   command = null, onCommandConsumed }) {
   // ── Dynamic models state ──
   const [availableModels, setAvailableModels] = useState([]);
   const [translationBackend, setTranslationBackend] = useState('lm_studio');
@@ -856,6 +999,29 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  // What ⌘K filled in, kept so the form can say what it understood — and,
+  // just as importantly, what it did not.
+  const [applied, setApplied] = useState(null);
+
+  // Apply a parsed ⌘K command. Nothing is submitted: the form is filled and
+  // the human presses Start, because a dub spends real GPU time.
+  useEffect(() => {
+    if (!command) return;
+    // Understood nothing? Then touch nothing. Resetting the mode someone had
+    // already chosen, because their sentence made no sense, is worse than
+    // simply saying it made no sense.
+    if (!command.understood.length) { setApplied(command); onCommandConsumed && onCommandConsumed(); return; }
+    if (command.source) { setYtUrl(command.source); setMode('url'); }
+    if (command.mode === 'showcase') switchTo('showcase');
+    else if (command.mode === 'quick') switchTo('quick');
+    else if (command.mode === 'batch') switchTo('batch');
+    else if (command.langs.length > 1) switchTo('quick');
+    else switchTo('single');
+    if (command.langs.length === 1) setTgtLang(command.langs[0]);
+    else if (command.langs.length > 1) setQtLangs(command.langs);
+    setApplied(command);
+    onCommandConsumed && onCommandConsumed();
+  }, [command]);
   const [lipStatus, setLipStatus] = useState(null);
 
   // ── Fetch models dynamically ──
@@ -1104,6 +1270,36 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted }) {
 
       {/* Form */}
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 32px 80px' }}>
+        {/* What ⌘K filled in. It reports what it did NOT understand too — a
+            command bar that quietly drops half your sentence is worse than one
+            that admits it only caught part of it. */}
+        {applied && (
+          <div style={{ display: 'flex', gap: 10, padding: '12px 14px',
+                        marginBottom: 18, background: 'var(--bg-1)',
+                        border: '1px solid var(--line-2)',
+                        borderRadius: 'var(--r-md)' }}>
+            <span style={{ color: 'var(--accent)', flexShrink: 0 }}>{I.feed}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 4 }}>
+                Filled in from your command — check it and press Start.
+              </div>
+              <div className="mono wrap-any" style={{ fontSize: 10.5,
+                                                      color: 'var(--ink-3)',
+                                                      lineHeight: 1.6 }}>
+                “{applied.text}”
+              </div>
+              <div className="mono" style={{ fontSize: 10.5, marginTop: 6,
+                                             color: 'var(--ink-3)' }}>
+                {applied.understood.length
+                  ? 'read: ' + applied.understood.join(' · ')
+                  : 'nothing recognised — fill the form in yourself'}
+                {!applied.source && ' · no source URL found'}
+              </div>
+            </div>
+            <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 11 }}
+                    onClick={() => setApplied(null)}>Dismiss</button>
+          </div>
+        )}
         {error && (
           <div style={{
             margin: '0 0 24px',
@@ -1533,7 +1729,7 @@ function QuickTestForm({
                 style={{
                   padding: '6px 10px', borderRadius: 4,
                   background: on ? 'var(--accent)' : 'var(--bg-1)',
-                  color: on ? '#0a0a0d' : 'var(--ink-2)',
+                  color: on ? 'var(--bg)' : 'var(--ink-2)',
                   border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
                   fontSize: 11.5, cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.4 : 1,
@@ -2509,6 +2705,413 @@ function PublishPanel({ jobId, defaultOpen = false }) {
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSING VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// AGENT FEED — home in concept 1a
+// ═══════════════════════════════════════════════════════════════════
+// One reverse-chronological stream of what the agent, a teammate, or the
+// server just did. Three shapes, matching the design:
+//
+//   · a run card    — the tool calls one agent made, grouped
+//   · a job card    — a dub, with its stage chips and live progress
+//   · an event row  — a one-line system note
+//
+// Two things the design shows are absent on purpose rather than faked: the
+// natural-language prompt behind a run (agents send tool calls, not the
+// sentence that produced them) and per-job cost (the meter arrives with
+// billing). Inventing either would put numbers on screen that mean nothing.
+
+// Consecutive calls by the same actor inside this window read as one run.
+const RUN_WINDOW_SEC = 300;
+
+const groupFeed = (events, jobs, { groupRuns = true } = {}) => {
+  const byId = new Map(jobs.map(j => [j.id, j]));
+  const jobCards = new Map();
+  const out = [];
+  for (const ev of events) {
+    const prev = out[out.length - 1];
+    if (ev.kind === 'tool_call') {
+      if (!groupRuns) { out.push({ type: 'call', key: 'c' + ev.id, ev, ts: ev.ts }); continue; }
+      if (prev && prev.type === 'run' && prev.actor === ev.actor
+          && prev.lastTs - ev.ts < RUN_WINDOW_SEC) {
+        prev.calls.push(ev);
+        prev.lastTs = ev.ts;
+        continue;
+      }
+      out.push({ type: 'run', key: 'run' + ev.id, actor: ev.actor,
+                 ts: ev.ts, lastTs: ev.ts, calls: [ev] });
+      continue;
+    }
+    if (ev.kind === 'job') {
+      // One card per job, and it must merge transitions that are NOT adjacent
+      // in the stream: the middleware records a tool call only once its
+      // response is on the way out, by which time the job runner has often
+      // already emitted its next transition, so a job's events routinely
+      // arrive with a tool call wedged between them. Collapsing only
+      // neighbours therefore showed the same job twice.
+      const seen = jobCards.get(ev.job_id);
+      if (seen) { seen.transitions.push(ev); continue; }
+      const card = { type: 'job', key: 'job' + ev.job_id, jobId: ev.job_id,
+                     ts: ev.ts, job: byId.get(ev.job_id) || null,
+                     title: ev.title, transitions: [ev] };
+      jobCards.set(ev.job_id, card);
+      out.push(card);
+      continue;
+    }
+    out.push({ type: 'event', key: 'ev' + ev.id, ev, ts: ev.ts });
+  }
+  return out;
+};
+
+function FeedFilter({ value, onChange }) {
+  const opts = [['all', 'All'], ['run', 'Runs'], ['tool_call', 'Tool calls'],
+                ['system', 'System']];
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {opts.map(([id, label]) => (
+        <button key={id} onClick={() => onChange(id)} className="mono" style={{
+          fontSize: 10.5, fontWeight: 500, padding: '4px 10px', borderRadius: 5,
+          color: value === id ? 'var(--bg)' : 'var(--ink-2)',
+          background: value === id ? 'var(--accent)' : 'transparent',
+          border: '1px solid ' + (value === id ? 'var(--accent)' : 'var(--line)'),
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+// The design renders the pipeline as a row of chips: done ✓, running ●,
+// pending ○. Built from the 6-stage map the rest of the app already uses.
+function FeedStageChips({ job, transitions }) {
+  const done = job.status === 'complete';
+  // stageForStatus() only knows about live statuses, so an errored or
+  // cancelled job maps to -1 and every chip drew as pending — hiding how far
+  // it actually got. The transitions we recorded name the last live stage.
+  let idx = stageForStatus(job.status);
+  if (idx < 0 && !done) {
+    idx = (transitions || []).reduce(
+      (best, t) => Math.max(best, stageForStatus(t.status)), -1);
+  }
+  return (
+    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+      {STAGES.map((s, i) => {
+        const stalled = job.status === 'error' || job.status === 'cancelled';
+        const state = done || i < idx ? 'done'
+                    : (i === idx ? (stalled ? 'stalled' : 'live') : 'pending');
+        const live = state === 'live' && ACTIVE_STATUSES.has(job.status);
+        return (
+          <span key={s.id} className="mono" style={{
+            fontSize: 10, fontWeight: 500, padding: '3px 8px', borderRadius: 4,
+            color: state === 'live' ? 'var(--bg)'
+                 : state === 'done' ? 'var(--accent)'
+                 : state === 'stalled' ? 'var(--err)' : 'var(--ink-3)',
+            background: state === 'live' ? 'var(--accent)' : 'transparent',
+            border: '1px solid ' + (state === 'done' ? 'var(--accent-dim)'
+                                  : state === 'live' ? 'var(--accent)'
+                                  : state === 'stalled' ? 'var(--err)' : 'var(--line)'),
+            animation: live ? 'pulse 1.4s infinite' : 'none',
+          }}>
+            {s.label.toLowerCase()} {state === 'done' ? '✓' : state === 'live' ? '●'
+                                   : state === 'stalled' ? '✕' : '○'}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function FeedJobCard({ item, onOpen }) {
+  const job = item.job;
+  // A job deleted since its events were recorded still has a feed entry.
+  if (!job) {
+    return (
+      <div className="panel" style={{ padding: '12px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span className="dot" style={{ background: 'var(--ink-4)' }}/>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>
+            {item.title || item.jobId} · no longer available
+          </span>
+          <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                          color: 'var(--ink-4)' }}>{fmtAge(item.ts)}</span>
+        </div>
+      </div>
+    );
+  }
+  const meta = STATUS_META[job.status] || { color: 'var(--ink-3)', label: job.status };
+  const active = ACTIVE_STATUSES.has(job.status);
+  const pct = Math.max(0, Math.min(100, job.progress ?? 0));
+  return (
+    <div className="panel" style={{
+      padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12,
+      borderColor: active ? 'var(--line-2)' : 'var(--line)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <span className="dot" style={{
+          width: 7, height: 7, background: meta.color,
+          boxShadow: active ? '0 0 6px var(--accent-glow)' : 'none',
+          animation: active ? 'pulse 1.4s infinite' : 'none',
+        }}/>
+        <button onClick={() => onOpen(job)} className="wrap-any" style={{
+          fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left',
+        }}>{job.title || job.source_label || job.source || job.id}</button>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{job.id}</span>
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                        color: 'var(--ink-3)' }}>
+          {meta.label} · {fmtAge(item.ts)}
+        </span>
+      </div>
+
+      <FeedStageChips job={job} transitions={item.transitions}/>
+
+      {active && (
+        <div style={{ height: 4, background: 'var(--line)', borderRadius: 2,
+                      overflow: 'hidden' }}>
+          <div style={{ width: pct + '%', height: '100%', background: 'var(--accent)',
+                        transition: 'width 0.4s' }}/>
+        </div>
+      )}
+
+      <div className="mono" style={{ display: 'flex', gap: 14, flexWrap: 'wrap',
+                                     fontSize: 10.5, color: 'var(--ink-3)' }}>
+        {job.target_lang && <span style={{ color: 'var(--ink-2)' }}>{job.target_lang}</span>}
+        {job.duration ? <span>{fmtSec(job.duration)} source</span> : null}
+        {active && <span>{pct}%</span>}
+        {job.step_detail && (
+          <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>{job.step_detail}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FeedRunCard({ item }) {
+  // Repeated polling of the same tool is one line with a count, the way the
+  // design shows "get_status ×4".
+  const rolled = [];
+  for (const c of item.calls) {
+    const last = rolled[rolled.length - 1];
+    if (last && last.tool === c.tool) { last.n += 1; continue; }
+    rolled.push({ tool: c.tool, n: 1, status: c.status, ms: c.ms, id: c.id });
+  }
+  const failed = item.calls.some(c => c.status && c.status >= 400);
+  return (
+    <div className="panel" style={{ padding: '14px 18px', display: 'flex',
+                                    flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <span className="dot" style={{ width: 7, height: 7,
+                                       background: failed ? 'var(--err)' : 'var(--accent)' }}/>
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+          {item.actor.startsWith('mcp/')
+            ? `Agent run · ${item.actor.slice(4)} via MCP`
+            : `${item.actor} run`}
+        </span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+          {item.calls.length} call{item.calls.length === 1 ? '' : 's'}
+        </span>
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 10.5,
+                                        color: 'var(--ink-3)' }}>{fmtAge(item.lastTs)}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {rolled.map(c => (
+          <div key={c.id} className="mono" style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+            <span style={{ color: 'var(--ink-3)' }}>→</span>
+            <span style={{ color: 'var(--accent)' }}>gochidubb.{c.tool}</span>
+            {c.n > 1 && <span style={{ color: 'var(--ink-3)' }}>×{c.n}</span>}
+            <span style={{ marginLeft: 'auto',
+                           color: c.status >= 400 ? 'var(--err)' : 'var(--ink-3)' }}>
+              ⇒ {c.status}{c.ms != null ? ` · ${c.ms}ms` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeedCallRow({ ev }) {
+  const bad = ev.status && ev.status >= 400;
+  return (
+    <div className="mono" style={{
+      display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 4px',
+      borderTop: '1px solid var(--bg-2)', fontSize: 11,
+    }}>
+      <span style={{ color: 'var(--ink-4)' }}>{fmtClock(ev.ts)}</span>
+      <span style={{ color: 'var(--accent)' }}>gochidubb.{ev.tool}</span>
+      <span style={{ color: 'var(--ink-3)' }}>{ev.actor}</span>
+      <span style={{ marginLeft: 'auto', color: bad ? 'var(--err)' : 'var(--ink-3)' }}>
+        ⇒ {ev.status}{ev.ms != null ? ` · ${ev.ms}ms` : ''}
+      </span>
+    </div>
+  );
+}
+
+function FeedEventRow({ ev }) {
+  const color = ev.severity === 'error' ? 'var(--err)'
+              : ev.severity === 'warn' ? 'var(--warn)' : 'var(--ink-3)';
+  return (
+    <div className="mono" style={{
+      display: 'flex', alignItems: 'baseline', gap: 10, padding: '9px 4px',
+      borderTop: '1px solid var(--bg-2)', fontSize: 11, color,
+    }}>
+      <span style={{ color: 'var(--ink-4)' }}>{fmtClock(ev.ts)}</span>
+      <span className="wrap-any">{ev.title}</span>
+      <span style={{ marginLeft: 'auto', color: 'var(--ink-4)' }}>{fmtAge(ev.ts)}</span>
+    </div>
+  );
+}
+
+function FeedSideTiles({ jobs, system, events }) {
+  const queued = jobs.filter(j => j.status === 'queued' || j.status === 'scheduled').length;
+  const running = jobs.filter(j => ACTIVE_STATUSES.has(j.status)).length;
+  const acc = system?.accelerator;
+  const res = system?.resources || {};
+  // Minutes of source media dubbed today, from the jobs themselves. Real
+  // figure; the money it would cost arrives with billing.
+  const dayAgo = Date.now() / 1000 - 86400;
+  const minsToday = jobs
+    .filter(j => (j.created || 0) > dayAgo && j.duration)
+    .reduce((a, j) => a + j.duration, 0) / 60;
+
+  // Which agents have called recently, newest first.
+  const clients = [];
+  for (const e of events) {
+    if (e.kind !== 'tool_call' || !e.actor) continue;
+    if (!clients.some(c => c.actor === e.actor)) clients.push({ actor: e.actor, ts: e.ts });
+  }
+
+  const Tile = ({ label, children }) => (
+    <div className="panel" style={{ padding: '13px 14px', background: 'var(--bg-1)' }}>
+      <div className="caps" style={{ marginBottom: 10 }}>{label}</div>
+      {children}
+    </div>
+  );
+  const Row = ({ k, v, tint }) => (
+    <div className="mono" style={{ display: 'flex', justifyContent: 'space-between',
+                                   fontSize: 11, color: 'var(--ink-2)', padding: '4px 0' }}>
+      <span>{k}</span><span style={{ color: tint || 'var(--ink)' }}>{v}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Tile label="Live">
+        <Row k="queue depth" v={`${queued} job${queued === 1 ? '' : 's'}`}/>
+        <Row k="running" v={running} tint={running ? 'var(--accent)' : 'var(--ink)'}/>
+        {acc && <Row k={acc.backend || 'accelerator'}
+                     v={acc.ok ? 'ready' : 'CPU only'}
+                     tint={acc.ok ? 'var(--accent)' : 'var(--warn)'}/>}
+        {res.ram_percent != null && (
+          <>
+            <Row k="RAM" v={`${Math.round(res.ram_percent)}%`}/>
+            <div style={{ height: 3, background: 'var(--line)', borderRadius: 2,
+                          overflow: 'hidden', margin: '2px 0 6px' }}>
+              <div style={{ width: Math.min(100, res.ram_percent) + '%', height: '100%',
+                            background: 'var(--accent)' }}/>
+            </div>
+          </>
+        )}
+        <Row k="minutes · 24h" v={minsToday.toFixed(0)}/>
+      </Tile>
+
+      <Tile label="MCP">
+        {clients.length === 0 ? (
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         lineHeight: 1.6 }}>
+            No agent has called yet. Point an MCP client at this server and its
+            calls appear here.
+          </div>
+        ) : clients.slice(0, 6).map(c => (
+          <Row key={c.actor} k={c.actor.replace(/^mcp\//, '')} v={fmtAge(c.ts)}
+               tint="var(--ink-3)"/>
+        ))}
+      </Tile>
+    </div>
+  );
+}
+
+function AgentFeedView({ jobs, system, narrow, onOpenJob, onSwitchToHome }) {
+  const [filter, setFilter] = useState('all');
+  const [events, setEvents] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  // Same cadence logic as the jobs poll: brisk while something is running,
+  // relaxed when the box is idle.
+  const busy = jobs.some(j => ACTIVE_STATUSES.has(j.status));
+  useEffect(() => {
+    let stopped = false;
+    const kinds = filter === 'all' ? '' : (filter === 'run' ? 'tool_call' : filter);
+    const pull = async () => {
+      try {
+        const r = await fetch('/api/activity?limit=120'
+                              + (kinds ? '&kinds=' + encodeURIComponent(kinds) : ''));
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!stopped) { setEvents(d.events || []); setLoaded(true); }
+      } catch (_) {}
+    };
+    pull();
+    const t = setInterval(pull, busy ? 2000 : 8000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [filter, busy]);
+
+  const items = groupFeed(events, jobs, { groupRuns: filter !== 'tool_call' })
+    .filter(it => {
+      if (filter === 'all') return true;
+      if (filter === 'run') return it.type === 'run';
+      if (filter === 'tool_call') return it.type === 'call';
+      if (filter === 'system') return it.type === 'event';
+      return true;
+    });
+
+  return (
+    <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: 'var(--gutter)', padding: '22px var(--gutter)',
+                    alignItems: 'flex-start', flexDirection: narrow ? 'column' : 'row' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+                      gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+                        flexWrap: 'wrap' }}>
+            <div className="serif" style={{ fontSize: 15 }}>Agent activity</div>
+            <div style={{ marginLeft: 'auto' }}>
+              <FeedFilter value={filter} onChange={setFilter}/>
+            </div>
+          </div>
+
+          {!loaded ? (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              Loading activity…
+            </div>
+          ) : items.length === 0 ? (
+            <div className="panel" style={{ padding: '26px 22px', display: 'flex',
+                                            flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Nothing has happened yet</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                            maxWidth: 460 }}>
+                This feed fills up as dubs run and as agents call the MCP tools.
+                Jobs you start here appear alongside anything an agent does, so
+                both show up in one place.
+              </div>
+              <div>
+                <button className="btn btn-primary" onClick={onSwitchToHome}>
+                  Start a dub
+                </button>
+              </div>
+            </div>
+          ) : items.map(it =>
+            it.type === 'run' ? <FeedRunCard key={it.key} item={it}/>
+            : it.type === 'job' ? <FeedJobCard key={it.key} item={it} onOpen={onOpenJob}/>
+            : it.type === 'call' ? <FeedCallRow key={it.key} ev={it.ev}/>
+            : <FeedEventRow key={it.key} ev={it.ev}/>
+          )}
+        </div>
+
+        <div style={{ width: narrow ? '100%' : 300, flexShrink: 0 }}>
+          <FeedSideTiles jobs={jobs} system={system} events={events}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCancelled, onSwitchToHome, onRefresh }) {
   if (!runningJob) {
     return (
@@ -3302,8 +3905,1128 @@ function DiscoverView({ onJumpResult, onJumpProcessing }) {
 // ═══════════════════════════════════════════════════════════════════
 // ROOT APP
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// IA WRAPPERS — Jobs and Library each consolidate several legacy views
+// behind a tab row; the views themselves are untouched.
+// ═══════════════════════════════════════════════════════════════════
+function ViewTabs({ tabs, active, onPick }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, padding: '14px var(--pad) 0', flexShrink: 0, flexWrap: 'wrap' }}>
+      {tabs.map(t => (
+        <button key={t.id} onClick={() => onPick(t.id)} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '5px 11px', borderRadius: 999, fontSize: 11, fontWeight: 500,
+          border: '1px solid ' + (active === t.id ? 'var(--line-2)' : 'transparent'),
+          background: active === t.id ? 'var(--bg-2)' : 'transparent',
+          color: active === t.id ? 'var(--ink)' : 'var(--ink-3)',
+          transition: 'all 0.12s',
+        }}>
+          {t.label}
+          {t.badge != null && (
+            <span className="mono" style={{ fontSize: 9, color: t.live ? 'var(--accent)' : 'var(--ink-3)',
+                                            animation: t.live ? 'pulse 1.4s infinite' : 'none' }}>{t.badge}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function JobsView({ tab, setTab, jobs, system, voicePresets, publishPending, runningJob,
+                    awaitingReviewCount, sphereOn, selectedReviewJobId,
+                    onPickReviewJob, onReviewContinued, onReviewCancel,
+                    onJumpResult, onJumpHome, onRefresh }) {
+  const tabs = [
+    { id: 'all',     label: 'All jobs' },
+    { id: 'live',    label: 'Live',    badge: runningJob ? '●' : null, live: !!runningJob },
+    { id: 'review',  label: 'Review',  badge: awaitingReviewCount > 0 ? String(awaitingReviewCount) : null },
+    { id: 'batches', label: 'Batches' },
+  ];
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <ViewTabs tabs={tabs} active={tab} onPick={setTab}/>
+      {tab === 'all' && (
+        <HistoryView jobs={jobs} system={system} voicePresets={voicePresets}
+          publishPending={publishPending}
+          onJumpProcessing={() => setTab('live')}
+          onJumpReview={(id) => { onPickReviewJob(id); setTab('review'); }}
+          onJumpResult={onJumpResult} onRefresh={onRefresh}/>
+      )}
+      {tab === 'live' && (
+        <ProcessingView runningJob={runningJob} sphereOn={sphereOn} system={system}
+          voicePresets={voicePresets}
+          onJobCancelled={() => setTab('all')}
+          onSwitchToHome={onJumpHome} onRefresh={onRefresh}/>
+      )}
+      {tab === 'review' && (
+        <ReviewView jobs={jobs} selectedJobId={selectedReviewJobId} voicePresets={voicePresets}
+          onContinued={() => { onReviewContinued(); setTab('live'); }}
+          onCancel={() => { onReviewCancel(); setTab('all'); }}
+          onPickJob={onPickReviewJob}/>
+      )}
+      {tab === 'batches' && (
+        <BatchView jobs={jobs} onRefresh={onRefresh}
+          onJumpProcessing={() => setTab('live')}
+          onJumpResult={onJumpResult} onJumpHome={onJumpHome}/>
+      )}
+    </div>
+  );
+}
+
+function LibraryView({ tab, setTab, jobs, system, voicePresets, selectedResultJobId,
+                       onPickResultJob, onJumpHome, onJumpJobs, onRefresh }) {
+  const tabs = [
+    { id: 'results',  label: 'Results' },
+    { id: 'voices',   label: 'Voices' },
+    { id: 'glossary', label: 'Glossary' },
+  ];
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <ViewTabs tabs={tabs} active={tab} onPick={setTab}/>
+      {tab === 'results' && (
+        <ResultView jobs={jobs} selectedJobId={selectedResultJobId} voicePresets={voicePresets}
+          system={system} onRefresh={onRefresh} onPickJob={onPickResultJob}
+          onSwitchToHome={onJumpHome} onSwitchToHistory={onJumpJobs}/>
+      )}
+      {tab === 'voices' && <VoicesView/>}
+      {tab === 'glossary' && <GlossaryEditor/>}
+    </div>
+  );
+}
+
+// Honest placeholder for rail destinations whose screens land in a later
+// phase of the redesign — says what will be there instead of pretending.
+// ═══════════════════════════════════════════════════════════════════
+// DEVELOP — API keys · MCP server · Webhooks
+// ═══════════════════════════════════════════════════════════════════
+
+// Shared page furniture, so the three Develop screens read as one family.
+function DevPage({ title, subtitle, action, children }) {
+  return (
+    <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ padding: 'var(--pad)', display: 'flex', flexDirection: 'column',
+                    gap: 20, maxWidth: 1040 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12,
+                      flexWrap: 'wrap' }}>
+          <div className="serif" style={{ fontSize: 22 }}>{title}</div>
+          {subtitle && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              {subtitle}
+            </span>
+          )}
+          <div style={{ marginLeft: 'auto' }}>{action}</div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DevCard({ children, style }) {
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-lg)', padding: '16px 18px', ...style }}>
+      {children}
+    </div>
+  );
+}
+
+// A copyable snippet. The clipboard API needs a secure context, which
+// http://localhost is — but a LAN address over plain HTTP is not, so the
+// fallback matters for anyone running with GOCHIDUBB_HOST set.
+function CodeBlock({ code, label }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 1400);
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      {label && <div className="caps" style={{ marginBottom: 6 }}>{label}</div>}
+      <pre className="mono wrap-any" style={{
+        background: 'var(--bg-2)', border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)', padding: '11px 12px', fontSize: 11,
+        lineHeight: 1.65, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', margin: 0,
+      }}>{code}</pre>
+      <button className="btn" onClick={copy} style={{
+        position: 'absolute', top: label ? 24 : 6, right: 6, fontSize: 10,
+        padding: '3px 8px',
+      }}>{copied ? 'copied' : 'copy'}</button>
+    </div>
+  );
+}
+
+function ScopeBadge({ scope }) {
+  return (
+    <span className="mono" style={{
+      fontSize: 10, padding: '2px 6px', borderRadius: 'var(--r-sm)',
+      border: '1px solid var(--line-2)', color: 'var(--ink-2)',
+      whiteSpace: 'nowrap',
+    }}>{scope}</span>
+  );
+}
+
+function ApiKeysView({ mode }) {
+  const [data, setData] = useState(null);
+  const [name, setName] = useState('');
+  const [env, setEnv] = useState('live');
+  const [expiry, setExpiry] = useState('90');
+  const [scopes, setScopes] = useState(['dub:write', 'jobs:read', 'outputs:read']);
+  const [minted, setMinted] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => fetch('/api/apikeys').then(r => r.json()).then(setData)
+                       .catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const toggle = (s) => setScopes(cur =>
+    cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]);
+
+  const submit = async () => {
+    setBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('scopes', scopes.join(','));
+      fd.append('environment', env);
+      if (expiry) fd.append('expires_days', expiry);
+      const r = await fetch('/api/apikeys', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Could not create key'); return; }
+      setMinted(d);          // shown once — the server cannot return it again
+      setName('');
+      load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const revoke = async (id) => {
+    await fetch(`/api/apikeys/${id}/revoke`, { method: 'POST' });
+    load();
+  };
+
+  const allScopes = data?.scopes || {};
+  const keys = data?.keys || [];
+
+  return (
+    <DevPage title="API keys"
+             subtitle={`${keys.length} key${keys.length === 1 ? '' : 's'} · REST + MCP share keys`}>
+      {mode !== 'hosted' && (
+        <DevCard style={{ borderColor: 'var(--line-2)' }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <span style={{ color: 'var(--warn)', flexShrink: 0 }}>{I.warn}</span>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+              This server runs in <span className="mono">local</span> mode, where
+              every route is open and no key is required. Keys are still real —
+              hashed, scoped and revocable — so they are ready when you switch to
+              <span className="mono"> hosted</span>, but nothing is enforced yet.
+            </div>
+          </div>
+        </DevCard>
+      )}
+
+      {minted && (
+        <DevCard style={{ borderColor: 'var(--accent)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                        marginBottom: 10 }}>
+            <span className="dot" style={{ background: 'var(--accent)' }}/>
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+              Copy it now — this is the only time it is shown
+            </span>
+            <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 11 }}
+                    onClick={() => setMinted(null)}>Done</button>
+          </div>
+          <CodeBlock code={minted.token}/>
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         marginTop: 8 }}>
+            Only a salted hash is stored. If you lose this, revoke the key and
+            make another.
+          </div>
+        </DevCard>
+      )}
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>New key</div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap',
+                      alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>Name</div>
+            <input className="field" value={name} placeholder="ci-pipeline"
+                   onChange={e => setName(e.target.value)}/>
+          </div>
+          <div>
+            <div className="caps" style={{ marginBottom: 5 }}>Environment</div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['live', 'test'].map(v => (
+                <button key={v} onClick={() => setEnv(v)} className="mono" style={{
+                  fontSize: 11, padding: '7px 12px', borderRadius: 'var(--r-sm)',
+                  color: env === v ? 'var(--bg)' : 'var(--ink-2)',
+                  background: env === v ? 'var(--accent)' : 'transparent',
+                  border: '1px solid ' + (env === v ? 'var(--accent)' : 'var(--line)'),
+                }}>{v}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="caps" style={{ marginBottom: 5 }}>Expires</div>
+            <select className="field" value={expiry}
+                    onChange={e => setExpiry(e.target.value)}>
+              <option value="" style={{ background: 'var(--bg-2)' }}>never</option>
+              <option value="30" style={{ background: 'var(--bg-2)' }}>30 days</option>
+              <option value="90" style={{ background: 'var(--bg-2)' }}>90 days</option>
+              <option value="365" style={{ background: 'var(--bg-2)' }}>1 year</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="caps" style={{ marginBottom: 8 }}>Scopes</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          {Object.entries(allScopes).map(([s, desc]) => {
+            const on = scopes.includes(s);
+            return (
+              <button key={s} onClick={() => toggle(s)} title={desc} style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '6px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
+                background: on ? 'var(--accent-dim)' : 'transparent',
+                color: on ? 'var(--ink)' : 'var(--ink-2)',
+              }}>
+                <span className="mono" style={{ fontSize: 11,
+                                                color: on ? 'var(--accent)' : 'var(--ink-3)' }}>
+                  {on ? '✓' : '○'}
+                </span>
+                <span className="mono" style={{ fontSize: 11 }}>{s}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {err && (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--err)',
+                                         marginBottom: 10 }}>{err}</div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button className="btn btn-primary" onClick={submit}
+                  disabled={busy || !name.trim() || scopes.length === 0}>
+            {busy ? 'Generating…' : 'Generate key'}
+          </button>
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+            shown once · stored hashed
+          </span>
+        </div>
+      </DevCard>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse',
+                          minWidth: 620 }}>
+            <thead>
+              <tr>
+                {['Name', 'Token', 'Scopes', 'Created', 'Last used', ''].map(x => (
+                  <th key={x} className="caps" style={{
+                    textAlign: 'left', padding: '11px 14px',
+                    borderBottom: '1px solid var(--line)', whiteSpace: 'nowrap',
+                  }}>{x}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {keys.length === 0 && (
+                <tr><td colSpan={6} className="mono" style={{
+                  padding: '18px 14px', fontSize: 11, color: 'var(--ink-3)',
+                }}>No keys yet.</td></tr>
+              )}
+              {keys.map(k => {
+                const dead = !!k.revoked || (k.expires && k.expires * 1000 < Date.now());
+                return (
+                  <tr key={k.id} style={{ opacity: dead ? 0.5 : 1 }}>
+                    <td style={{ padding: '11px 14px', fontSize: 12.5,
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.name}
+                      <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                      color: 'var(--ink-3)' }}>
+                        {k.environment}
+                      </span>
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                                                  color: 'var(--ink-2)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.masked}
+                    </td>
+                    <td style={{ padding: '11px 14px',
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {(k.scopes || []).map(s => <ScopeBadge key={s} scope={s}/>)}
+                      </div>
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 10.5,
+                                                  color: 'var(--ink-3)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {fmtAge(k.created)}
+                    </td>
+                    <td className="mono" style={{ padding: '11px 14px', fontSize: 10.5,
+                                                  color: 'var(--ink-3)',
+                                                  borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.last_used ? fmtAge(k.last_used) : '—'}
+                    </td>
+                    <td style={{ padding: '11px 14px', textAlign: 'right',
+                                 borderBottom: '1px solid var(--bg-2)' }}>
+                      {k.revoked ? (
+                        <span className="mono" style={{ fontSize: 10.5,
+                                                        color: 'var(--ink-3)' }}>revoked</span>
+                      ) : (
+                        <button className="btn" onClick={() => revoke(k.id)}
+                                style={{ fontSize: 11 }}>Revoke</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Quick start</div>
+        <CodeBlock code={`curl -X POST ${location.origin}/api/dub \\
+  -H "X-GoChiDUBB-Client: my-script" \\
+  -F source=https://youtu.be/abc \\
+  -F target_lang=fr`}/>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 10, lineHeight: 1.6 }}>
+          In hosted mode this also needs
+          <span style={{ color: 'var(--ink-2)' }}> -H "Authorization: Bearer &lt;key&gt;"</span>.
+          The X-GoChiDUBB-Client header is what makes your calls show up in the
+          agent feed — it is informational and grants nothing.
+        </div>
+      </DevCard>
+    </DevPage>
+  );
+}
+
+// The tool list mirrors tools/gochidubb_mcp.py. It is written out here rather
+// than fetched because the MCP server is a separate process that may not be
+// running when someone opens this page to learn how to start it.
+const MCP_TOOLS = [
+  ['dub', 'Start a dub — URL or file, one target language'],
+  ['compare', 'One source, several languages, side by side'],
+  ['showcase', 'Stitched multilingual reel from one source'],
+  ['redub', 'New languages for a finished job — reuses the transcript'],
+  ['get_job', 'Stage-level progress and status for one job'],
+  ['list_jobs', 'Recent jobs with filters'],
+  ['cancel_job', 'Stop a queued or running job'],
+  ['delete_job', 'Remove a job and its outputs'],
+  ['get_showcase', 'Read a showcase batch'],
+  ['rebuild_showcase', 'Re-assemble a showcase from finished parts'],
+  ['quality_report', 'Per-stage quality verdicts for a job'],
+  ['audit_job', 'What happened during a run'],
+  ['system_status', 'GPU, models, storage'],
+  ['list_languages', 'The 65 supported targets'],
+  ['list_models', 'Installed translation models'],
+  ['list_voices', 'Voice presets available for cloning'],
+  ['check_duplicate', 'Has this source been published already'],
+  ['scout_trending', 'Trending candidates to dub'],
+  ['scout_dub', 'Dub a scouted candidate'],
+  ['publish_pending', 'Uploads waiting for approval'],
+  ['publish_stage', 'Stage a finished dub for upload'],
+  ['publish_approve', 'Approve a staged upload'],
+  ['publish_cancel', 'Cancel a staged upload'],
+];
+
+function McpServerView({ mode }) {
+  const [calls, setCalls] = useState([]);
+  useEffect(() => {
+    const pull = () => fetch('/api/activity?kinds=tool_call&limit=12')
+      .then(r => r.json()).then(d => setCalls(d.events || [])).catch(() => {});
+    pull();
+    const t = setInterval(pull, 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  const clients = [];
+  for (const c of calls) {
+    if (c.actor && !clients.some(x => x.actor === c.actor)) {
+      clients.push({ actor: c.actor, ts: c.ts });
+    }
+  }
+
+  const Step = ({ n, title, note, children }) => (
+    <DevCard>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10,
+                    marginBottom: 10 }}>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+          {String(n).padStart(2, '0')}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+        {note && <span className="mono" style={{ fontSize: 10.5,
+                                                 color: 'var(--ink-3)' }}>{note}</span>}
+      </div>
+      {children}
+    </DevCard>
+  );
+
+  return (
+    <DevPage title="MCP server"
+             subtitle={clients.length
+               ? `${clients.length} client${clients.length === 1 ? '' : 's'} seen`
+               : 'no client has called yet'}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        Drive dubbing from Claude Code, Cursor, or any MCP-aware agent. The tools
+        map onto the same REST API this UI uses, so anything you can do here an
+        agent can do too — and its calls show up in the agent feed.
+      </div>
+
+      <Step n={1} title="Add the server" note="stdio · runs locally">
+        <CodeBlock code={'claude mcp add gochidubb -- python '
+                          + '/path/to/gochidubb/tools/gochidubb_mcp.py'}/>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 8, lineHeight: 1.6 }}>
+          The MCP server talks to this studio over HTTP, so it honours
+          GOCHIDUBB_URL (default {location.origin}) and can drive a remote box.
+          Set GOCHIDUBB_AGENT to name yourself in the feed.
+        </div>
+      </Step>
+
+      <Step n={2} title="Or point any MCP client at it" note="same shape for Cursor, Cline">
+        <CodeBlock code={`{
+  "mcpServers": {
+    "gochidubb": {
+      "command": "python",
+      "args": ["/path/to/gochidubb/tools/gochidubb_mcp.py"],
+      "env": { "GOCHIDUBB_URL": "${location.origin}",
+               "GOCHIDUBB_AGENT": "claude-code" }
+    }
+  }
+}`}/>
+      </Step>
+
+      <Step n={3} title="Say what you want">
+        <div style={{ borderLeft: '2px solid var(--line-2)', paddingLeft: 12,
+                      fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+          “Dub https://youtu.be/abc into French and Japanese, then stitch a
+          showcase reel.”
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)',
+                                       marginTop: 10 }}>
+          → the agent calls <span style={{ color: 'var(--accent)' }}>gochidubb_dub</span>,
+          polls <span style={{ color: 'var(--accent)' }}>gochidubb_get_job</span>,
+          and returns the output links.
+        </div>
+      </Step>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>
+          Exposed tools · {MCP_TOOLS.length}
+        </div>
+        <div style={{ display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                      gap: '8px 18px' }}>
+          {MCP_TOOLS.map(([t, d]) => (
+            <div key={t} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--accent)',
+                                              whiteSpace: 'nowrap' }}>
+                gochidubb_{t}
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{d}</span>
+            </div>
+          ))}
+        </div>
+        {mode === 'hosted' && (
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--warn)',
+                                         marginTop: 14, lineHeight: 1.6 }}>
+            Write tools cost money in hosted mode — dub, compare and showcase are
+            metered at your workspace rate.
+          </div>
+        )}
+      </DevCard>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Recent tool calls</div>
+        {calls.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            Nothing yet — a call from any MCP client will appear here and in the
+            agent feed.
+          </div>
+        ) : calls.map(c => (
+          <div key={c.id} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '7px 0', borderTop: '1px solid var(--bg-2)',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(c.ts)}</span>
+            <span style={{ color: 'var(--accent)' }}>{c.tool}</span>
+            <span style={{ color: 'var(--ink-3)' }}>{c.actor}</span>
+            <span style={{ marginLeft: 'auto',
+                           color: c.status >= 400 ? 'var(--err)' : 'var(--ink-3)' }}>
+              {c.status}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
+function WebhooksView() {
+  const [data, setData] = useState(null);
+  const [url, setUrl] = useState('');
+  const [secret, setSecret] = useState('');
+  const [events, setEvents] = useState(['job.completed', 'job.failed']);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => fetch('/api/webhooks').then(r => r.json()).then(setData)
+                       .catch(() => {});
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, []);
+
+  const toggle = (e) => setEvents(cur =>
+    cur.includes(e) ? cur.filter(x => x !== e) : [...cur, e]);
+
+  const add = async () => {
+    setBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('url', url);
+      fd.append('events', events.join(','));
+      if (secret) fd.append('secret', secret);
+      const r = await fetch('/api/webhooks', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Could not add webhook'); return; }
+      setUrl(''); setSecret(''); load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (id) => {
+    await fetch(`/api/webhooks/${id}`, { method: 'DELETE' });
+    load();
+  };
+  const test = async (id) => {
+    await fetch(`/api/webhooks/${id}/test`, { method: 'POST' });
+    load();
+  };
+
+  const hooks = data?.hooks || [];
+  const allEvents = data?.events || [];
+  const deliveries = data?.deliveries || [];
+
+  return (
+    <DevPage title="Webhooks"
+             subtitle={`${hooks.length} endpoint${hooks.length === 1 ? '' : 's'}`}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        Push job lifecycle events to your own endpoint instead of polling.
+        Deliveries are fire-and-forget with one retry, so a listener being down
+        never slows a dub or fails it.
+      </div>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>New endpoint</div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap',
+                      alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ flex: '2 1 260px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>URL</div>
+            <input className="field" value={url} placeholder="https://hooks.example.com/gochidubb"
+                   onChange={e => setUrl(e.target.value)}/>
+          </div>
+          <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+            <div className="caps" style={{ marginBottom: 5 }}>Signing secret · optional</div>
+            <input className="field" value={secret} type="password"
+                   placeholder="leave blank for unsigned"
+                   onChange={e => setSecret(e.target.value)}/>
+          </div>
+        </div>
+        <div className="caps" style={{ marginBottom: 8 }}>Events</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          {allEvents.map(e => {
+            const on = events.includes(e);
+            return (
+              <button key={e} onClick={() => toggle(e)} className="mono" style={{
+                fontSize: 11, padding: '6px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid ' + (on ? 'var(--accent)' : 'var(--line)'),
+                background: on ? 'var(--accent-dim)' : 'transparent',
+                color: on ? 'var(--ink)' : 'var(--ink-2)',
+              }}>{on ? '✓ ' : '○ '}{e}</button>
+            );
+          })}
+        </div>
+        {err && <div className="mono" style={{ fontSize: 11, color: 'var(--err)',
+                                               marginBottom: 10 }}>{err}</div>}
+        <button className="btn btn-primary" onClick={add}
+                disabled={busy || !url.trim() || events.length === 0}>
+          {busy ? 'Adding…' : 'Add endpoint'}
+        </button>
+      </DevCard>
+
+      {hooks.length > 0 && (
+        <DevCard>
+          <div className="caps" style={{ marginBottom: 12 }}>Endpoints</div>
+          {hooks.map(hk => (
+            <div key={hk.id} style={{
+              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              padding: '10px 0', borderTop: '1px solid var(--bg-2)',
+            }}>
+              <span className="mono wrap-any" style={{ fontSize: 11.5,
+                                                       color: 'var(--ink)' }}>{hk.url}</span>
+              {hk.signed && (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--accent)',
+                                                border: '1px solid var(--accent-dim)',
+                                                borderRadius: 'var(--r-sm)',
+                                                padding: '1px 5px' }}>signed</span>
+              )}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {(hk.events || []).map(e => <ScopeBadge key={e} scope={e}/>)}
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                <button className="btn" style={{ fontSize: 11 }}
+                        onClick={() => test(hk.id)}>Send test</button>
+                <button className="btn" style={{ fontSize: 11 }}
+                        onClick={() => remove(hk.id)}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </DevCard>
+      )}
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 10 }}>Delivery log</div>
+        {deliveries.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            No deliveries yet.
+          </div>
+        ) : deliveries.map(d => (
+          <div key={d.id} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '7px 0', borderTop: '1px solid var(--bg-2)',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(d.ts)}</span>
+            <span style={{ color: 'var(--ink-2)' }}>{d.event}</span>
+            <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>
+              {(d.payload || {}).job_id || ''}
+            </span>
+            <span style={{ marginLeft: 'auto',
+                           color: d.ok ? 'var(--accent)' : 'var(--err)' }}>
+              {d.status || d.error || '—'}{d.ms != null ? ` · ${d.ms}ms` : ''}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WORKSPACE — members · billing · audit  (hosted mode only)
+// ═══════════════════════════════════════════════════════════════════
+
+// Anything on these screens that is not backed by real data says so. The
+// minutes on Billing are measured; the money is an estimate at the design's
+// published rates, and this server bills nobody.
+function EstimateNote({ children }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, padding: '11px 14px',
+                  background: 'var(--bg-2)', border: '1px solid var(--line-2)',
+                  borderRadius: 'var(--r-md)' }}>
+      <span style={{ color: 'var(--warn)', flexShrink: 0 }}>{I.warn}</span>
+      <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, unit, note, tint }) {
+  return (
+    <DevCard>
+      <div className="caps" style={{ marginBottom: 8 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
+        <span className="mono" style={{ fontSize: 22, fontWeight: 600,
+                                        color: tint || 'var(--ink)' }}>{value}</span>
+        {unit && <span className="mono" style={{ fontSize: 10.5,
+                                                 color: 'var(--ink-3)' }}>{unit}</span>}
+      </div>
+      {note && <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                              marginTop: 5, lineHeight: 1.5 }}>{note}</div>}
+    </DevCard>
+  );
+}
+
+function BillingView() {
+  const [d, setD] = useState(null);
+  const [days, setDays] = useState(30);
+  useEffect(() => {
+    setD(null);
+    fetch(`/api/billing/usage?window_days=${days}`)
+      .then(r => r.json()).then(setD).catch(() => {});
+  }, [days]);
+
+  if (!d) {
+    return <DevPage title="Billing & usage"><div className="mono" style={{
+      fontSize: 11, color: 'var(--ink-3)' }}>Measuring…</div></DevPage>;
+  }
+
+  const langs = Object.entries(d.by_lang || {});
+  const maxLang = langs.length ? Math.max(...langs.map(([, v]) => v)) : 1;
+
+  return (
+    <DevPage title="Billing & usage"
+             subtitle="pure usage · no seats"
+             action={
+               <div style={{ display: 'flex', gap: 4 }}>
+                 {[7, 30, 3650].map(n => (
+                   <button key={n} onClick={() => setDays(n)} className="mono" style={{
+                     fontSize: 10.5, padding: '4px 10px', borderRadius: 'var(--r-sm)',
+                     color: days === n ? 'var(--bg)' : 'var(--ink-2)',
+                     background: days === n ? 'var(--accent)' : 'transparent',
+                     border: '1px solid ' + (days === n ? 'var(--accent)' : 'var(--line)'),
+                   }}>{n === 3650 ? 'all time' : n + 'd'}</button>
+                 ))}
+               </div>
+             }>
+      <EstimateNote>
+        <strong style={{ color: 'var(--ink)' }}>Estimate, not an invoice.</strong>{' '}
+        The minutes are real — measured source duration × target languages,
+        from {d.jobs_counted} job{d.jobs_counted === 1 ? '' : 's'} on this
+        machine. The money applies the rates the design publishes for a hosted
+        workspace, so you can see what this usage would cost. This server bills
+        nobody, and in <span className="mono">local</span> mode never will.
+      </EstimateNote>
+
+      <div style={{ display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                    gap: 12 }}>
+        <StatTile label="Minutes dubbed" value={d.minutes.toFixed(0)} unit="min"
+                  note={`${d.jobs_counted} billable · ${d.jobs_unbilled} failed or cancelled, never billed`}/>
+        <StatTile label="Estimated cost" value={'$' + d.cost.toFixed(2)}
+                  note={`over the last ${d.window_days >= 3650 ? 'all time' : d.window_days + ' days'}`}/>
+        <StatTile label="Current rate" value={'$' + d.rate.toFixed(3)} unit="/min"
+                  tint="var(--accent)"
+                  note={d.next_tier
+                    ? `${d.next_tier.minutes.toFixed(0)} min to $${d.next_tier.next_rate.toFixed(3)}`
+                    : 'lowest tier reached'}/>
+        <StatTile label="Storage" value={d.storage_gb.toFixed(1)} unit="GB"
+                  note={d.storage_cost > 0
+                    ? `$${d.storage_cost.toFixed(2)} beyond the 100 GB included`
+                    : '100 GB included — nothing to pay'}/>
+      </div>
+
+      <DevCard>
+        <div className="caps" style={{ marginBottom: 12 }}>
+          Metered rates · per minute of source, per language
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 420 }}>
+            <thead>
+              <tr>{['Monthly volume', 'Rate', 'Your usage'].map(x => (
+                <th key={x} className="caps" style={{ textAlign: 'left',
+                      padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>{x}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {(d.bands || []).map((b, i) => {
+                const live = b.minutes > 0 && (i === (d.bands.filter(x => x.minutes > 0).length - 1));
+                return (
+                  <tr key={i}>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: 'var(--ink-2)', borderBottom: '1px solid var(--bg-2)' }}>
+                      {b.to === null ? `${b.from}+ min` : `${b.from} – ${b.to} min`}
+                    </td>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: 'var(--ink)', borderBottom: '1px solid var(--bg-2)' }}>
+                      ${b.rate.toFixed(3)}
+                    </td>
+                    <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                          color: b.minutes > 0 ? 'var(--accent)' : 'var(--ink-4)',
+                          borderBottom: '1px solid var(--bg-2)' }}>
+                      {b.minutes > 0 ? `${b.minutes.toFixed(0)}${live ? ' · current' : ' ✓'}` : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {d.showcase_minutes > 0 && (
+                <tr>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--ink-2)' }}>showcase stitch</td>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--ink)' }}>+$0.020</td>
+                  <td className="mono" style={{ padding: '9px 10px', fontSize: 11,
+                        color: 'var(--accent)' }}>
+                    {d.showcase_minutes.toFixed(0)} · ${d.showcase_surcharge.toFixed(2)}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                       marginTop: 12, lineHeight: 1.6 }}>
+          Failed jobs are never billed · agent-initiated jobs hit the same meter
+          as manual ones
+        </div>
+      </DevCard>
+
+      {langs.length > 0 && (
+        <DevCard>
+          <div className="caps" style={{ marginBottom: 12 }}>By target language</div>
+          {langs.slice(0, 8).map(([lang, mins]) => (
+            <div key={lang} style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                     padding: '5px 0' }}>
+              <span className="mono" style={{ fontSize: 11, width: 42,
+                                              color: 'var(--ink-2)' }}>{lang}</span>
+              <div style={{ flex: 1, height: 6, background: 'var(--bg-2)',
+                            borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: (mins / maxLang * 100) + '%', height: '100%',
+                              background: 'var(--accent)', opacity: 0.8 }}/>
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)',
+                                              width: 64, textAlign: 'right' }}>
+                {mins.toFixed(0)} min
+              </span>
+            </div>
+          ))}
+        </DevCard>
+      )}
+    </DevPage>
+  );
+}
+
+// The permission matrix from the design. It is a reference table, not an
+// enforcement surface: local mode has exactly one user and enforces nothing.
+// Shipping it as documentation is honest; pretending it gates anything is not.
+const ROLES = ['Owner', 'Admin', 'Developer', 'Editor', 'Viewer', 'Agent'];
+const PERMISSIONS = [
+  ['Start / cancel dubs',        [1, 1, 1, 1, 0, 1]],
+  ['Review / edit translations', [1, 1, 0, 1, 0, 0]],
+  ['Retry pipeline stages',      [1, 1, 1, 1, 0, 1]],
+  ['Download outputs',           [1, 1, 1, 1, 1, 1]],
+  ['Create / revoke API keys',   [1, 1, 1, 0, 0, 0]],
+  ['Manage webhooks',            [1, 1, 1, 0, 0, 0]],
+  ['Invite members / set roles', [1, 1, 0, 0, 0, 0]],
+  ['View / manage billing',      [1, 2, 0, 0, 0, 0]],   // 2 = view only
+];
+
+function MembersView() {
+  const [keys, setKeys] = useState([]);
+  useEffect(() => {
+    fetch('/api/apikeys').then(r => r.json()).then(d => setKeys(d.keys || []))
+      .catch(() => {});
+  }, []);
+  // The only "members" that genuinely exist here: this machine's user, and any
+  // API key, which is what an agent actually authenticates as.
+  const agentKeys = keys.filter(k => !k.revoked);
+
+  return (
+    <DevPage title="Members & roles" subtitle="local workspace">
+      <EstimateNote>
+        <strong style={{ color: 'var(--ink)' }}>Reference, not enforcement.</strong>{' '}
+        This server runs one local user and checks no permissions. The matrix
+        below documents the roles a hosted workspace would have; the rows above
+        it are the real principals on this machine — you, and each live API key.
+      </EstimateNote>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+            <thead>
+              <tr>{['Principal', 'Role', 'Kind', 'Last active'].map(x => (
+                <th key={x} className="caps" style={{ textAlign: 'left',
+                      padding: '11px 14px', borderBottom: '1px solid var(--line)' }}>{x}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ padding: '11px 14px', fontSize: 12.5,
+                             borderBottom: '1px solid var(--bg-2)' }}>
+                  This machine
+                  <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                  color: 'var(--ink-3)' }}>local</span>
+                </td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--accent)', borderBottom: '1px solid var(--bg-2)' }}>owner</td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>human</td>
+                <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                      color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>now</td>
+              </tr>
+              {agentKeys.map(k => (
+                <tr key={k.id}>
+                  <td style={{ padding: '11px 14px', fontSize: 12.5,
+                               borderBottom: '1px solid var(--bg-2)' }}>
+                    {k.name}
+                    <span className="mono" style={{ fontSize: 10, marginLeft: 6,
+                                                    color: 'var(--ink-3)' }}>{k.masked}</span>
+                  </td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-2)', borderBottom: '1px solid var(--bg-2)' }}>agent</td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>
+                    service account
+                  </td>
+                  <td className="mono" style={{ padding: '11px 14px', fontSize: 11,
+                        color: 'var(--ink-3)', borderBottom: '1px solid var(--bg-2)' }}>
+                    {k.last_used ? fmtAge(k.last_used) : 'never'}
+                  </td>
+                </tr>
+              ))}
+              {agentKeys.length === 0 && (
+                <tr><td colSpan={4} className="mono" style={{ padding: '14px',
+                      fontSize: 11, color: 'var(--ink-3)' }}>
+                  No API keys yet — create one under Develop → API keys.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+
+      <DevCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px 0' }}>
+          <div className="caps">Permission matrix</div>
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)',
+                                         margin: '6px 0 12px' }}>
+            the agent role is what an MCP key can do — never more than its creator
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <thead>
+              <tr>
+                <th className="caps" style={{ textAlign: 'left', padding: '9px 14px',
+                      borderBottom: '1px solid var(--line)' }}>Permission</th>
+                {ROLES.map(r => (
+                  <th key={r} className="caps" style={{ textAlign: 'center',
+                        padding: '9px 8px', borderBottom: '1px solid var(--line)' }}>{r}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {PERMISSIONS.map(([label, row]) => (
+                <tr key={label}>
+                  <td style={{ padding: '9px 14px', fontSize: 12,
+                               color: 'var(--ink-2)',
+                               borderBottom: '1px solid var(--bg-2)' }}>{label}</td>
+                  {row.map((v, i) => (
+                    <td key={i} className="mono" style={{ textAlign: 'center',
+                          padding: '9px 8px', fontSize: 11,
+                          color: v === 1 ? 'var(--accent)'
+                               : v === 2 ? 'var(--ink-2)' : 'var(--ink-4)',
+                          borderBottom: '1px solid var(--bg-2)' }}>
+                      {v === 1 ? '✓' : v === 2 ? 'view' : '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </DevCard>
+    </DevPage>
+  );
+}
+
+const AUDIT_LABELS = {
+  'apikey.create': 'API key created',
+  'apikey.revoke': 'API key revoked',
+  'webhook.add': 'Webhook added',
+  'webhook.remove': 'Webhook removed',
+};
+
+function AuditView() {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    const pull = () => fetch('/api/audit').then(r => r.json()).then(setD)
+                         .catch(() => {});
+    pull();
+    const t = setInterval(pull, 15000);
+    return () => clearInterval(t);
+  }, []);
+  const entries = d?.entries || [];
+
+  return (
+    <DevPage title="Audit log"
+             subtitle={d ? `${d.total} entr${d.total === 1 ? 'y' : 'ies'}` : ''}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6,
+                    maxWidth: 620 }}>
+        An append-only record of key and webhook changes, written to
+        <span className="mono"> audit.jsonl</span> and flushed to disk on every
+        entry. Unlike the agent feed, nothing here is ever dropped, updated or
+        deleted — a trail with holes in it would be worse than none.
+      </div>
+
+      <DevCard>
+        {entries.length === 0 ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            Nothing audited yet. Creating or revoking an API key, or changing a
+            webhook, writes an entry here.
+          </div>
+        ) : entries.map((e, i) => (
+          <div key={i} className="mono" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11,
+            padding: '9px 0', borderTop: i ? '1px solid var(--bg-2)' : 'none',
+          }}>
+            <span style={{ color: 'var(--ink-4)' }}>{fmtClock(e.ts)}</span>
+            <span style={{ color: 'var(--ink)' }}>
+              {AUDIT_LABELS[e.action] || e.action}
+            </span>
+            <span className="wrap-any" style={{ color: 'var(--ink-3)' }}>
+              {e.detail || e.target || ''}
+            </span>
+            <span style={{ marginLeft: 'auto', color: 'var(--ink-4)' }}>
+              {e.actor} · {fmtAge(e.ts)}
+            </span>
+          </div>
+        ))}
+      </DevCard>
+    </DevPage>
+  );
+}
+
+function ComingSoonView({ icon, title, blurb, points = [], phase }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 'var(--pad)' }}>
+      <div style={{ maxWidth: 560, margin: '48px auto 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 'var(--r-md)',
+                        background: 'var(--bg-2)', border: '1px solid var(--line-2)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'var(--accent)' }}>{icon}</div>
+          <span className="caps">In development · phase {phase}</span>
+        </div>
+        <div className="serif" style={{ fontSize: 28, marginBottom: 10 }}>{title}</div>
+        <div style={{ color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 18 }}>{blurb}</div>
+        {points.length > 0 && (
+          <div style={{ padding: 14, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                        borderRadius: 'var(--r-lg)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {points.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, color: 'var(--ink-2)' }}>
+                <span style={{ color: 'var(--accent)', flexShrink: 0 }}>·</span>
+                <span>{p}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
-  const [view, setView] = useState('home');
+  // 1a's home is the feed. It landed on New dub while the feed was still a
+  // placeholder; now that it renders real activity it takes the front door.
+  const [view, setView] = useState('feed');
   const [system, setSystem] = useState(null);
   const [voicePresets, setVoicePresets] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -3311,6 +5034,10 @@ function App() {
   const [publishPending, setPublishPending] = useState([]);
   const [selectedResultJobId, setSelectedResultJobId] = useState(null);
   const [selectedReviewJobId, setSelectedReviewJobId] = useState(null);
+  const [jobsTab, setJobsTab] = useState('all');
+  const [libTab, setLibTab] = useState('results');
+  // What ⌘K last parsed, handed to HomeView to pre-fill the form.
+  const [pendingCommand, setPendingCommand] = useState(null);
   const narrow = useIsNarrow();
   const [navOpen, setNavOpen] = useState(false);
 
@@ -3360,9 +5087,13 @@ function App() {
   const awaitingReviewCount = jobs.filter(j => j.status === 'awaiting_translation_review').length;
 
   const onJobSubmitted = (jobId) => {
-    setView('processing');
+    setJobsTab('live');
+    setView('jobs');
     fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || [])).catch(() => {});
   };
+
+  const refreshJobs = () => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []));
+  const jumpResult = (id) => { setSelectedResultJobId(id); setLibTab('results'); setView('library'); };
 
   const refreshSystem = () =>
     fetch('/api/system').then(r => r.json()).then(setSystem).catch(() => {});
@@ -3396,9 +5127,15 @@ function App() {
           runningJob={runningJob}
           awaitingReviewCount={awaitingReviewCount}
           notices={system?.notices}
-          onJumpToProcessing={() => setView('processing')}
-          onJumpToReview={() => setView('review')}
+          mode={system?.mode || 'local'}
+          onJumpToProcessing={() => { setJobsTab('live'); setView('jobs'); }}
+          onJumpToReview={() => { setJobsTab('review'); setView('jobs'); }}
           onOpenSetup={openSetup}
+          onCommand={(text) => {
+            const parsed = parseCommand(text);
+            if (parsed) setPendingCommand(parsed);
+            setView('home');
+          }}
           narrow={narrow} onOpenNav={() => setNavOpen(true)}
         />
 
@@ -3413,77 +5150,69 @@ function App() {
             voicePresets={voicePresets}
             sphereOn={sphereOn}
             onJobSubmitted={onJobSubmitted}
+            command={pendingCommand}
+            onCommandConsumed={() => setPendingCommand(null)}
           />
         )}
 
-        {view === 'processing' && (
-          <ProcessingView
-            runningJob={runningJob}
+        {view === 'jobs' && (
+          <JobsView
+            tab={jobsTab} setTab={setJobsTab}
+            jobs={jobs} system={system} voicePresets={voicePresets}
+            publishPending={publishPending}
+            runningJob={runningJob} awaitingReviewCount={awaitingReviewCount}
             sphereOn={sphereOn}
-            system={system}
-            voicePresets={voicePresets}
-            onJobCancelled={() => setView('history')}
-            onSwitchToHome={() => setView('home')}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
+            selectedReviewJobId={selectedReviewJobId}
+            onPickReviewJob={setSelectedReviewJobId}
+            onReviewContinued={() => setSelectedReviewJobId(null)}
+            onReviewCancel={() => setSelectedReviewJobId(null)}
+            onJumpResult={jumpResult}
+            onJumpHome={() => setView('home')}
+            onRefresh={refreshJobs}
           />
         )}
 
-        {view === 'review' && (
-          <ReviewView
-            jobs={jobs}
-            selectedJobId={selectedReviewJobId}
-            voicePresets={voicePresets}
-            onContinued={() => { setSelectedReviewJobId(null); setView('processing'); }}
-            onCancel={() => { setSelectedReviewJobId(null); setView('history'); }}
-            onPickJob={setSelectedReviewJobId}
-          />
-        )}
-
-        {view === 'result' && (
-          <ResultView
-            jobs={jobs}
-            selectedJobId={selectedResultJobId}
-            voicePresets={voicePresets}
-            system={system}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
-            onPickJob={setSelectedResultJobId}
-            onSwitchToHome={() => setView('home')}
-            onSwitchToHistory={() => setView('history')}
+        {view === 'library' && (
+          <LibraryView
+            tab={libTab} setTab={setLibTab}
+            jobs={jobs} system={system} voicePresets={voicePresets}
+            selectedResultJobId={selectedResultJobId}
+            onPickResultJob={setSelectedResultJobId}
+            onJumpHome={() => setView('home')}
+            onJumpJobs={() => { setJobsTab('all'); setView('jobs'); }}
+            onRefresh={refreshJobs}
           />
         )}
 
         {view === 'discover' && (
           <DiscoverView
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onJumpProcessing={() => setView('processing')}
+            onJumpResult={jumpResult}
+            onJumpProcessing={() => { setJobsTab('live'); setView('jobs'); }}
           />
         )}
 
-        {view === 'history' && (
-          <HistoryView
+        {view === 'feed' && (
+          <AgentFeedView
             jobs={jobs}
             system={system}
-            voicePresets={voicePresets}
-            publishPending={publishPending}
-            onJumpProcessing={() => setView('processing')}
-            onJumpReview={(id) => { setSelectedReviewJobId(id); setView('review'); }}
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
+            narrow={narrow}
+            onOpenJob={(job) => {
+              // A finished dub opens on its result; a live one on the running
+              // job. Both go through the wrappers' own tab targeting.
+              if (ACTIVE_STATUSES.has(job.status)) {
+                setJobsTab('live'); setView('jobs'); return;
+              }
+              jumpResult(job.id);
+            }}
+            onSwitchToHome={() => setView('home')}
           />
         )}
-
-        {view === 'batch' && (
-          <BatchView
-            jobs={jobs}
-            onRefresh={() => fetch('/api/jobs').then(r => r.json()).then(d => setJobs(d.jobs || []))}
-            onJumpProcessing={() => setView('processing')}
-            onJumpResult={(id) => { setSelectedResultJobId(id); setView('result'); }}
-            onJumpHome={() => setView('home')}
-          />
-        )}
-
-        {view === 'voices' && <VoicesView/>}
-        {view === 'glossary' && <GlossaryEditor/>}
+        {view === 'apikeys' && <ApiKeysView mode={system?.mode || 'local'}/>}
+        {view === 'mcp' && <McpServerView mode={system?.mode || 'local'}/>}
+        {view === 'webhooks' && <WebhooksView/>}
+        {view === 'members' && <MembersView/>}
+        {view === 'billing' && <BillingView/>}
+        {view === 'audit' && <AuditView/>}
 
         {view === 'system' && (
           <SystemView system={system} onRefreshSystem={refreshSystem}/>

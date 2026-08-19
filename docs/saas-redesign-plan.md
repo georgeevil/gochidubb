@@ -1,6 +1,7 @@
 # SaaS Redesign — Design & Implementation Plan
 
-Status: **plan for review.** No UI or backend code has been changed yet.
+Status: **all seven phases implemented.** See §6; §7 records what was and
+was not verified.
 
 Design source: Claude Design project `SaaS Redesign Options.dc.html`
 ([canvas](https://claude.ai/design/p/64a60fdc-6a9e-4868-a1ab-c87966f4696d?file=SaaS+Redesign+Options.dc.html)),
@@ -158,34 +159,56 @@ discarded.
 
 Each phase ends with a working app and a screenshot pass.
 
-**Phase 1 — extract the style layer.** Move the `<style>` block (index.html
-:10–197) into `static/theme.css` behind a `<link>`. Mechanical, zero visual
-change, cuts ~190 lines from the 3,710-line file and gives every later phase one
-place to edit. FastAPI already serves `static/`; no server change.
+**Phase 1 — extract the style layer. ✅ done.** Moved the `<style>` block
+(index.html:10–197) into `static/theme.css` behind a `<link>`. Mechanical,
+zero visual change (extracted rules verified byte-identical). One correction
+to the original claim: FastAPI served only `/` and `/beta` as individual
+routes — `static/` had no URL — so `server.py` gained a one-line
+`StaticFiles` mount at `/static`.
 
-**Phase 2 — retune tokens.** Apply the §2 table, drop Instrument Serif and the
-grain overlay, add the glow/pulse/tabular-nums primitives. Sweep for hard-coded
-colours that bypass tokens (`#0a0a0d` is inlined in `.btn-primary` and several
-components). Whole app shifts at once because views style via `var(--…)`.
+**Phase 2 — retune tokens. ✅ done.** Applied the §2 table, dropped Instrument
+Serif (the `.serif` class stays, redefined as Geist 600 display so its ~18
+call sites need no edits) and the grain overlay, added glow/pulse/tabular-nums
+primitives and radius tokens. Swept the hard-coded `#0a0a0d` bypasses in
+`.btn-primary` and three components onto `var(--bg)`.
 
-**Phase 3 — shell.** Rebuild `LeftRail` into the grouped Work/Develop/Workspace
-rail with the usage tile at its foot; rebuild `TopBar` with the ⌘K field, GPU/mode
-pills and avatar. Keep the narrow-breakpoint drawer, the awaiting-review badge and
-the running-job indicator — those are functional. Add `mode` gating.
+**Phase 3 — shell. ✅ done.** `LeftRail` rebuilt into the grouped
+Work/Develop/Workspace rail (Workspace revealed only in hosted mode; Settings
+always visible); `TopBar` gained the ⌘K command field (submits to New dub —
+the parser is Phase 7's) and the mode pill. Jobs and Library are now tabbed
+wrappers over the untouched History/Processing/Review/Batch and
+Result/Voices/Glossary views, so every jump target still works; the
+awaiting-review badge and running-job indicator moved onto Jobs. Rail items
+whose screens land later (feed, Develop, Workspace) render honest
+"in development · phase N" placeholders. Backend: `UserConfig.mode`
+(`GOCHIDUBB_MODE`) and `mode` in `GET /api/system`.
 
-**Phase 4 — Agent feed + activity API.** `GET /api/activity`, MCP tool-call
-recording, the feed cards (run → prompt → tool calls → stage chips → progress →
-per-language → cost), filter tabs, right-rail Live/Spend/MCP tiles. This is the
-largest phase and the one that defines the concept.
+**Phase 4 — Agent feed + activity API. ✅ done.** `app/activity.py` (bounded,
+redacted ring buffer), agent attribution via an `X-GoChiDUBB-Client` header
+that `GoChiDUBBClient` now sends, job-transition recording, and
+`GET /api/activity` paging on a monotonic event id. The feed renders run
+cards, job cards with stage chips, and system one-liners, with the design's
+filter tabs and live side tiles; it is now the landing view.
 
-**Phase 5 — Develop group (real).** `app/apikeys.py`, `app/webhooks.py`, their
+Two elements of the design were deliberately **not** built, because the data
+does not exist: the natural-language prompt behind a run (agents send tool
+calls, not the sentence that produced them — it would have to be passed
+explicitly by the client) and per-job cost, which waits for the phase-6 meter.
+The right rail therefore carries Live and MCP tiles but no Spend tile yet.
+
+Note also that phases 1–4 were implemented twice, in two parallel sessions.
+The reconciliation kept this branch's phases 1–3 and re-applied phase 4 on
+top; the alternative shell survives only on the local branch
+`claude/saas-phase4-activity-feed`.
+
+**Phase 5 — Develop group (real). ✅ done.** `app/apikeys.py`, `app/webhooks.py`, their
 routes, the API Keys and MCP Server and Webhooks screens. Scope enforcement
 written, gated to hosted.
 
-**Phase 6 — Workspace group (stub).** Billing from real durations + design
+**Phase 6 — Workspace group. ✅ done.** Billing from real durations + design
 tiers; Members matrix; Audit log. Every placeholder visibly marked.
 
-**Phase 7 — re-home the omitted features and polish.** Discover into Work;
+**Phase 7 — re-home the omitted features and polish. ✅ done.** Discover into Work;
 Publish inbox / Voices / Glossary into Library; review flow into job detail;
 `beta.html` re-tokenised; ⌘K parser; narrow-width and focus-state pass across
 all screens; delete dead CSS.
@@ -235,3 +258,37 @@ Open, not blocking: the design's header note says "All creator references
 removed — brand is gochidubb only", but `README.md` currently credits
 @smolekoma and @smolemaru. Whether to strip those is a call for you, not a
 side effect of a UI redesign — flagged, untouched.
+
+
+## 10. What shipped, and what is still open
+
+Phases 1–7 are implemented and verified in Chrome against the running server.
+Highlights beyond the phase notes above:
+
+* **Billing is honest by construction.** Minutes are measured from real jobs;
+  the money is an estimate at the design's published rates, labelled as such on
+  screen and in a `disclaimer` field on the endpoint. This server bills nobody.
+* **The audit log is not the activity feed.** Activity is a ring buffer that may
+  drop entries; the audit trail is append-only JSONL, fsync'd per entry.
+* **⌘K never starts a job.** It parses a source, target languages and a run
+  mode, then pre-fills New dub for a human to press Start — a dub costs real
+  GPU minutes. It reports what it failed to understand, and leaves the form
+  untouched when it understood nothing.
+* **Local mode is unchanged.** No auth, no billing surfaces, no Workspace
+  group — re-verified after every phase.
+
+Still open, and deliberately so:
+
+* **Narrow-width layout is unverified.** This environment ignores window
+  resizes and page zoom does not move the media query, so the 860px drawer
+  path has not been seen. The drawer mechanics were not modified, but it wants
+  a look on a real phone viewport.
+* **Scope enforcement is written, not exercised.** `verify()` and the scope
+  checks are tested as units, but no route rejects a bad key yet, because
+  local mode does not authenticate. Turning it on is the first task of any
+  genuine hosted deployment — along with everything in §9.
+* **Two design elements remain unbuilt for want of data**: the natural-language
+  prompt behind an agent run, and per-job cost inside the feed.
+* **The alternative phase 1–3 shell** from the parallel session survives only
+  on the local branch `claude/saas-phase4-activity-feed`; delete it once you
+  are happy with the reconciliation.

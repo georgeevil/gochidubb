@@ -41,6 +41,11 @@ class UserConfig:
     the dataclass defaults, so adding new settings never breaks existing installs.
     """
 
+    # ── Deployment mode ───────────────────────────────────────────────
+    # "local" is today's experience: no auth, no billing surfaces.
+    # "hosted" reveals the Workspace UI group and enforces API-key scopes.
+    mode: str = "local"                  # "local" | "hosted"
+
     # ── Whisper ───────────────────────────────────────────────────────
     whisper_model: str = "large-v3"       # large-v3 | medium | small | tiny
     auto_denoise: bool = True             # FFT denoise before transcription
@@ -149,6 +154,7 @@ def _load_config() -> UserConfig:
 
     # Layer 1: environment variables (highest priority)
     env_map = {
+        "GOCHIDUBB_MODE": "mode",
         "HF_TOKEN": "hf_token",
         "VOXCPM_MODEL": "voxcpm_model",
         "VOXCPM_CFG": "voxcpm_cfg",
