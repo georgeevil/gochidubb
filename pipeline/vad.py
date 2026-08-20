@@ -95,12 +95,65 @@ def _get_duration_ffprobe(path: str) -> float:
         return 0.0
 
 
+def map_to_original(t: float, intervals) -> float:
+    """Map a timestamp from the VAD-filtered timeline back to the original.
+
+    ``apply_vad_filter`` does not merely trim silence — it concatenates the
+    speech regions, so the audio Whisper sees is *shorter* than the source and
+    every timestamp after the first removed gap is early by the amount of
+    silence cut before it. Without this inversion a 60s video whose speech
+    starts at 14s gets a dub that begins at 0s and ends 30s before the picture
+    does.
+
+    ``intervals`` is the list of (start, end) speech regions in the ORIGINAL
+    timeline, in order. ``None`` means no filtering happened, so the filtered
+    timeline *is* the original one and t passes through unchanged.
+    """
+    if not intervals:
+        return t
+    consumed = 0.0
+    for start, end in intervals:
+        span = end - start
+        if t <= consumed + span:
+            return start + (t - consumed)
+        consumed += span
+    # Past the end of the last speech region — clamp to it rather than
+    # extrapolating into silence we know nothing about.
+    return intervals[-1][1]
+
+
+def remap_segments(segments, intervals):
+    """Return segments with start/end (and any word times) on the original
+    timeline. Mutates nothing; safe to call when intervals is None."""
+    if not intervals:
+        return segments
+    for seg in segments:
+        if seg.get("start") is not None:
+            seg["start"] = map_to_original(seg["start"], intervals)
+        if seg.get("end") is not None:
+            seg["end"] = map_to_original(seg["end"], intervals)
+        for w in seg.get("words") or []:
+            if w.get("start") is not None:
+                w["start"] = map_to_original(w["start"], intervals)
+            if w.get("end") is not None:
+                w["end"] = map_to_original(w["end"], intervals)
+    return segments
+
+
 def apply_vad_filter(audio_path: str, output_path: str,
-                     threshold: float = 0.5) -> tuple[str, float]:
+                     threshold: float = 0.5) -> tuple[str, float, list | None]:
     """Extract only speech regions from audio_path into output_path.
 
-    Returns (output_path, speech_ratio) where speech_ratio is the fraction
-    of the original audio that contains detected speech (0.0-1.0).
+    Returns (output_path, speech_ratio, intervals):
+      - speech_ratio is the fraction of the original audio that contains
+        detected speech (0.0-1.0).
+      - intervals is the list of (start, end) speech regions in the ORIGINAL
+        timeline when filtering happened, or None when the audio was passed
+        through untouched.
+
+    **The caller must map timestamps back** with ``remap_segments`` when
+    intervals is not None. The filter concatenates speech regions, so
+    everything downstream of it is on a compressed timeline.
 
     If silero-vad isn't installed or VAD finds no segments, copies the
     original audio unchanged and returns speech_ratio=1.0 (conservative).
@@ -114,13 +167,13 @@ def apply_vad_filter(audio_path: str, output_path: str,
     if total_dur <= 0:
         import shutil
         shutil.copy2(audio_path, output_path)
-        return output_path, 1.0
+        return output_path, 1.0, None
 
     timestamps = get_speech_timestamps(audio_path, threshold=threshold)
     if not timestamps:
         import shutil
         shutil.copy2(audio_path, output_path)
-        return output_path, 1.0
+        return output_path, 1.0, None
 
     # Add padding and clamp to audio bounds
     padded = []
@@ -153,7 +206,7 @@ def apply_vad_filter(audio_path: str, output_path: str,
         )
         import shutil
         shutil.copy2(audio_path, output_path)
-        return output_path, speech_ratio
+        return output_path, speech_ratio, None
 
     # Build ffmpeg filter: select speech intervals + concatenate
     # atrim=start=X:end=Y, then concat all pieces
@@ -179,9 +232,9 @@ def apply_vad_filter(audio_path: str, output_path: str,
             f"VAD: filtered {total_dur:.0f}s → {speech_seconds:.0f}s "
             f"({speech_ratio*100:.0f}% speech, {n} segments)"
         )
-        return output_path, speech_ratio
+        return output_path, speech_ratio, [tuple(m) for m in merged]
     except Exception as e:
         log.warning(f"VAD ffmpeg filter failed ({e}) — using full audio")
         import shutil
         shutil.copy2(audio_path, output_path)
-        return output_path, 1.0
+        return output_path, 1.0, None
