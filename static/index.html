@@ -3525,6 +3525,200 @@ function LogsTab() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// VOICE & TTS SETTINGS — the only editor for VoxCPM's knobs. Everything
+// here maps 1:1 onto UserConfig fields; the server validates the same
+// bounds shown in the hints (app/config.py FIELD_SPECS), so the UI never
+// has to be the only thing standing between a typo and the model.
+// ═══════════════════════════════════════════════════════════════════
+function NumberKnob({ label, hint, value, onChange, min, max, step, disabled, sentinel }) {
+  const atSentinel = sentinel !== undefined && Number(value) === sentinel;
+  return (
+    <Field label={label} hint={hint}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <input type="range" min={min} max={max} step={step} disabled={disabled}
+               value={atSentinel ? min : value}
+               onChange={e => onChange(Number(e.target.value))}
+               style={{ flex: 1, accentColor: 'var(--accent)', minWidth: 0,
+                        opacity: atSentinel ? 0.45 : 1 }}/>
+        <span className="mono" style={{ width: 46, textAlign: 'right', flexShrink: 0,
+                                        color: atSentinel ? 'var(--ink-4)' : 'var(--accent)' }}>
+          {/* Match the readout's precision to the step, so a 0.1-step knob
+              reads "2.0" rather than jumping between "2" and "2.1". */}
+          {atSentinel ? 'auto'
+            : Number(value).toFixed((String(step).split('.')[1] || '').length)}
+        </span>
+        {sentinel !== undefined && (
+          <button className="btn btn-ghost" disabled={disabled}
+                  style={{ fontSize: 10, flexShrink: 0 }}
+                  onClick={() => onChange(atSentinel ? Number(min) : sentinel)}>
+            {atSentinel ? 'set' : 'auto'}
+          </button>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+function VoiceTtsTab({ system }) {
+  const [saved, setSaved] = useState(null);   // last known server state
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json())
+      .then(d => { setSaved(d); setDraft(d); })
+      .catch(e => setErr('Could not load settings: ' + (e.message || e)));
+  }, []);
+
+  const voxOk = system?.voxcpm?.ok !== false;
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  // Only changed keys are sent, so a save never rewrites fields this tab
+  // doesn't own (and never resends a masked secret).
+  const changed = draft && saved
+    ? Object.keys(draft).filter(k => draft[k] !== saved[k]) : [];
+
+  const save = async () => {
+    if (!changed.length) return;
+    setBusy(true); setErr(''); setNote('');
+    try {
+      const body = {};
+      changed.forEach(k => { body[k] = draft[k]; });
+      const fd = new FormData();
+      fd.append('body', JSON.stringify(body));
+      const r = await fetch('/api/config', { method: 'PATCH', body: fd });
+      const d = await r.json();
+      if (!r.ok || d.error) { setErr(d.error || `Save failed (${r.status})`); return; }
+      setSaved(d.config); setDraft(d.config);
+      setNote(d.tts_rebuild_pending
+        ? (d.tts_reloaded
+            ? 'Saved — the voice model was released; the next job loads it with these settings.'
+            : 'Saved — the next job loads the model with these settings.')
+        : 'Saved — applies to the next job.');
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!draft) {
+    return <div className="mono" style={{ color: 'var(--ink-3)' }}>
+      {err || 'Loading settings…'}
+    </div>;
+  }
+
+  const engine = draft.tts_engine;
+  const voxDisabled = engine !== 'voxcpm' && engine !== 'auto';
+  const group = { padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-lg)', display: 'flex', flexDirection: 'column',
+                  gap: 14, marginBottom: 16 };
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      {!voxOk && (
+        <div style={{ padding: '10px 13px', borderRadius: 'var(--r-md)', marginBottom: 16,
+                      background: 'var(--bg-2)', border: '1px solid var(--warn)',
+                      color: 'var(--warn)', fontSize: 11.5 }}>
+          VoxCPM2 isn't importable in this environment, so its settings are saved
+          but inert — the pipeline falls back to F5-TTS or edge-tts. See Setup.
+        </div>
+      )}
+
+      <div style={group}>
+        <div className="caps">Engine</div>
+        <Field label="TTS engine"
+               hint="Which tier to use. Higher tiers fall back automatically when unavailable.">
+          <Select value={engine} onChange={v => set('tts_engine', v)}>
+            {['voxcpm', 'f5tts', 'edge-tts'].map(o => (
+              <option key={o} value={o} style={{ background: '#14141a' }}>
+                {o === 'voxcpm' ? 'VoxCPM2 · best cloning, 8+ GB'
+                 : o === 'f5tts' ? 'F5-TTS · good cloning, 3+ GB'
+                 : 'edge-tts · no cloning, no GPU'}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="VoxCPM model"
+               hint="HuggingFace repo id or a local path. Changing this downloads new weights on the next job.">
+          <input className="field" value={draft.voxcpm_model} disabled={voxDisabled}
+                 onChange={e => set('voxcpm_model', e.target.value)}/>
+        </Field>
+      </div>
+
+      <div style={group}>
+        <div className="caps">Quality</div>
+        <NumberKnob label="Guidance (cfg)" min={1} max={3} step={0.1}
+                    value={draft.voxcpm_cfg} disabled={voxDisabled}
+                    onChange={v => set('voxcpm_cfg', Math.round(v * 10) / 10)}
+                    hint="1.0–3.0. Higher sticks closer to the text; too high sounds clipped and robotic."/>
+        <NumberKnob label="Inference steps" min={4} max={24} step={1} sentinel={0}
+                    value={draft.voxcpm_steps} disabled={voxDisabled}
+                    onChange={v => set('voxcpm_steps', v)}
+                    hint="auto follows the per-job speed tier (fast 6 · balanced 8 · quality 10). Set 4–24 to override it for every job."/>
+        <Toggle value={!!draft.voxcpm_denoise_refs} disabled={voxDisabled}
+                onChange={v => set('voxcpm_denoise_refs', v)}
+                label="Denoise reference clips with VoxCPM"
+                hint="Off by default — the pipeline already denoises, normalizes and trims references. Turn on for unusually noisy source audio."/>
+      </div>
+
+      <div style={group}>
+        <div className="caps">Cross-lingual</div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: -4 }}>
+          Applied only when the target language differs from the source, where
+          the voice otherwise drifts toward source-language phonetics. These are
+          floors: a higher value above still wins.
+        </div>
+        <NumberKnob label="Cross-lingual guidance" min={1} max={3} step={0.1}
+                    value={draft.voxcpm_xling_cfg} disabled={voxDisabled}
+                    onChange={v => set('voxcpm_xling_cfg', Math.round(v * 10) / 10)}
+                    hint="Default 2.5."/>
+        <NumberKnob label="Cross-lingual steps" min={4} max={24} step={1}
+                    value={draft.voxcpm_xling_steps} disabled={voxDisabled}
+                    onChange={v => set('voxcpm_xling_steps', v)}
+                    hint="Default 14. Costs ~60% more inference time per segment, but avoids retries."/>
+      </div>
+
+      <div style={group}>
+        <div className="caps">Output</div>
+        <Toggle value={!!draft.qa_same_language}
+                onChange={v => set('qa_same_language', v)}
+                label="Run QA on same-language dubs"
+                hint="Whisper-roundtrips every segment to catch gibberish. Always on for cross-lingual jobs; rarely needed otherwise."/>
+        <NumberKnob label="Max time-compression" min={1} max={2} step={0.05}
+                    value={draft.tts_max_stretch}
+                    onChange={v => set('tts_max_stretch', Math.round(v * 20) / 20)}
+                    hint="1.0–2.0. How hard the assembler may speed up a segment to keep sync. Above ~1.15 becomes audible; lower it if dubs sound rushed."/>
+      </div>
+
+      {err && (
+        <div style={{ padding: '9px 12px', borderRadius: 'var(--r-md)', marginBottom: 12,
+                      background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)',
+                      color: 'var(--err)', fontSize: 11.5 }}>{err}</div>
+      )}
+      {note && !err && (
+        <div style={{ padding: '9px 12px', borderRadius: 'var(--r-md)', marginBottom: 12,
+                      background: 'var(--accent-dim)', border: '1px solid var(--line-2)',
+                      fontSize: 11.5 }}>{note}</div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button className="btn btn-primary" onClick={save} disabled={busy || !changed.length}>
+          {busy ? 'Saving…' : changed.length ? `Save ${changed.length} change${changed.length > 1 ? 's' : ''}` : 'Saved'}
+        </button>
+        {changed.length > 0 && (
+          <button className="btn btn-ghost" onClick={() => { setDraft(saved); setErr(''); setNote(''); }}>
+            Discard
+          </button>
+        )}
+        <div style={{ flex: 1 }}/>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>
+          config-user.json
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function SystemView({ system, onRefreshSystem }) {
   const [tab, setTab] = useState(_lsGet('system_tab', 'overview'));
   const pick = (t) => { setTab(t); _lsSet('system_tab', t); };
@@ -3544,13 +3738,14 @@ function SystemView({ system, onRefreshSystem }) {
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 22 }}>
-        {[['overview', 'Overview'], ['setup', 'Setup'], ['logs', 'Logs']].map(([id, label]) => (
+        {[['overview', 'Overview'], ['voice', 'Voice & TTS'], ['setup', 'Setup'], ['logs', 'Logs']].map(([id, label]) => (
           <button key={id} className={'tab' + (tab === id ? ' active' : '')} onClick={() => pick(id)}>
             {label}{id === 'setup' && issues.length > 0 ? ` · ${issues.length}` : ''}
           </button>
         ))}
       </div>
 
+      {tab === 'voice' && <VoiceTtsTab system={system}/>}
       {tab === 'setup' && <SetupTab system={system} onRefreshSystem={onRefreshSystem}/>}
       {tab === 'logs' && <LogsTab/>}
       {tab === 'overview' && (

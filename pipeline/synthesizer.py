@@ -178,11 +178,14 @@ class VoxCPMSynthesizer(BaseTTSEngine):
     default_sample_rate = 48000
 
     def __init__(self, model_id="openbmb/VoxCPM2", load_denoiser=False,
-                 cfg_value=2.0, inference_timesteps=10):
+                 cfg_value=2.0, inference_timesteps=0):
         super().__init__()
         self.model_id = model_id
         self.load_denoiser = load_denoiser
         self.cfg_value = cfg_value
+        # 0 = "no explicit override, follow the tts_speed tier". Read it
+        # through effective_timesteps() rather than directly, so the sentinel
+        # never reaches VoxCPM (which needs a real step count).
         self.inference_timesteps = inference_timesteps
         self._model = None
         # Persistent worker subprocess — spawned on first synthesize call,
@@ -302,6 +305,15 @@ class VoxCPMSynthesizer(BaseTTSEngine):
             raise RuntimeError("empty audio")
         return wav
 
+    def effective_timesteps(self, tts_speed: str = "balanced") -> int:
+        """Inference steps to actually use.
+
+        cfg.voxcpm_steps (Settings → Voice & TTS) is an explicit override;
+        0 means "follow the speed tier", which is the default and matches
+        what installs got before this value reached synthesis.
+        """
+        return self.inference_timesteps or SPEED_TIMESTEPS.get(tts_speed, 8)
+
     def synthesize_segment(self, text, output_path,
                           reference_wav_path=None, prompt_wav_path=None, prompt_text=None,
                           voice_seed: Optional[int] = None):
@@ -318,7 +330,7 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         base_kwargs = {
             "text": text,
             "cfg_value": self.cfg_value,
-            "inference_timesteps": self.inference_timesteps,
+            "inference_timesteps": self.effective_timesteps(),
             "retry_badcase": True,
             "retry_badcase_max_times": 2,
         }
@@ -500,7 +512,11 @@ class VoxCPMSynthesizer(BaseTTSEngine):
 
         # Speed-dependent inference steps: VoxCPM default is 10, but 6 is
         # ~40% faster with minimal quality loss for short text.
-        base_timesteps = SPEED_TIMESTEPS.get(tts_speed, 8)
+        #
+        # cfg.voxcpm_steps (surfaced in Settings → Voice & TTS) overrides the
+        # tier when set; 0 means "follow the tier", which is the default and
+        # what every install got before this value reached synthesis at all.
+        base_timesteps = self.effective_timesteps(tts_speed)
         base_cfg = self.cfg_value
 
         # Cross-lingual dubbing (e.g. English video → Russian audio) needs
@@ -511,8 +527,15 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         # which is a net win because bad segments trigger retry_badcase
         # anyway (another full retry = same cost as just doing it right).
         if is_cross_lingual:
-            base_cfg = max(base_cfg, 2.5)
-            base_timesteps = max(base_timesteps, 14)
+            xling_cfg, xling_steps = 2.5, 14
+            try:
+                from app.config import cfg as _user_cfg
+                xling_cfg = float(getattr(_user_cfg, "voxcpm_xling_cfg", xling_cfg))
+                xling_steps = int(getattr(_user_cfg, "voxcpm_xling_steps", xling_steps))
+            except Exception:
+                pass  # keep the defaults if config is unavailable (bare worker)
+            base_cfg = max(base_cfg, xling_cfg)
+            base_timesteps = max(base_timesteps, xling_steps)
             log.info(
                 f"Cross-lingual mode: cfg={base_cfg}, timesteps={base_timesteps}"
             )

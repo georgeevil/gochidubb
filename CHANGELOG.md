@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`voxcpm` is now pinned to `>=2.0.3`, and the Python range is 3.10–3.14.**
+  The old `>=2.0.0` floor allowed a build where reference clips are trimmed
+  twice (voxcpm removed its own auto-trim in 2.0.1; the pipeline already trims
+  in `_REF_FILTER`), and missed 2.0.3's fixes for MPS audio quality, CUDA graph
+  issues and file-descriptor leaks — the last of which a long-running server
+  hits. The Python range was described in four places as a "VoxCPM2 constraint"
+  capped at 3.12; VoxCPM declares no upper bound, the real ceiling is `spaces`
+  at `<3.15`, and 3.13 resolves the identical dependency set as 3.12 with
+  wheels available through 3.14. The installers now accept 3.10–3.14, warning
+  rather than blocking above 3.12, and the macOS/MPS recommendation says what
+  is actually known rather than repeating a pre-2.0.3 claim.
 - **The Studio UI is redesigned around an agent-first workflow** (concept 1a,
   `docs/saas-redesign-plan.md`). The Agent feed — a chronological stream of
   runs, tool calls and system events — is the new home screen; the rail groups
@@ -19,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior exactly: no auth, no billing surfaces.
 
 ### Fixed
+- **`voxcpm_steps` now actually affects synthesis.** It defaulted to `10` but was
+  ignored on the batch path, which always recomputed the step count from the
+  per-job speed tier — so the setting had no effect on any normal dub. It is now
+  an explicit override, with `0` meaning "follow the speed tier" (the new
+  default, and exactly what installs experienced before). Existing
+  `config-user.json` files carrying the dead `10` are migrated to `0` once on
+  startup, so upgrading does not silently change how your dubs are rendered.
+
 - **Long videos no longer die at the final render with `timed out after 600
   seconds`.** The ffmpeg timeout in the merge/extract stages is now *soft*
   (`pipeline/ffmpeg_run.py`): ffmpeg runs with `-progress pipe:1`, and as long
@@ -29,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config (env: `GOCHIDUBB_FFMPEG_TIMEOUT`, `GOCHIDUBB_FFMPEG_STALL_TIMEOUT`).
 
 ### Added
+- **VoxCPM2 settings are editable in the product** — a new **Settings → Voice &
+  TTS** tab. Engine tier (`voxcpm` / `f5tts` / `edge-tts`), model id, guidance
+  (`cfg`), inference steps, reference denoising, the cross-lingual guidance
+  floors, same-language QA and the assembler's time-compression ceiling were all
+  previously reachable only by hand-editing `config-user.json` and restarting.
+  Saving now releases the loaded voice model so the next job picks the settings
+  up — and is refused with a clear message while a job is mid-flight, rather
+  than pulling the model out from under it.
+- Settings are validated before they are stored (`FIELD_SPECS` in
+  `app/config.py`): values are coerced from form strings, out-of-range numbers
+  and unknown choices are rejected with a message naming what was wrong, and a
+  batch save applies all-or-nothing instead of leaving half of it written. The
+  same bounds now apply to the `VOXCPM_*` environment variables.
+
 - **Develop surfaces for driving GoChiDUBB from agents and scripts**: scoped
   API keys (stored hashed, shown once, revocable), webhooks for
   `job.completed` / `job.failed` / `job.awaiting_review` with a delivery log,

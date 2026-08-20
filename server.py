@@ -289,6 +289,15 @@ class _WindowsConnResetFilter(logging.Filter):
 logging.getLogger("asyncio").addFilter(_WindowsConnResetFilter())
 
 jobs: dict = {}
+
+# Statuses that mean a job is mid-flight. Used to mark jobs stale after a
+# restart, and to refuse settings changes that would swap the TTS model out
+# from under a running synthesis.
+ACTIVE_STATUSES = frozenset({
+    "queued", "running", "downloading", "extracting",
+    "transcribing", "translating", "synthesizing",
+    "assembling", "merging",
+})
 _tts_engine = None
 
 
@@ -798,14 +807,9 @@ def load_jobs_from_disk():
     # History tab shows them as permanently "transcribing..." / "queued".
     # The user can still click Resume (if a checkpoint exists) to pick
     # up where the pipeline left off.
-    _active_statuses = {
-        "queued", "running", "downloading", "extracting",
-        "transcribing", "translating", "synthesizing",
-        "assembling", "merging",
-    }
     stale_count = 0
     for jid, job in jobs.items():
-        if job.get("status") in _active_statuses:
+        if job.get("status") in ACTIVE_STATUSES:
             job["status"] = "error"
             job["error"] = (
                 job.get("error")
@@ -979,6 +983,37 @@ def _tts_engine_for_lang(tts, target_lang: str):
     return tts
 
 
+# Settings that are baked into the TTS engine at construction time, so a
+# change only takes effect once the cached engine is dropped and rebuilt.
+# Everything else (cross-lingual values, QA, stretch) is read per synthesis.
+TTS_REBUILD_KEYS = frozenset({
+    "tts_engine", "voxcpm_model", "voxcpm_cfg", "voxcpm_steps",
+    "voxcpm_denoise_refs",
+})
+
+
+def reset_tts_engine() -> bool:
+    """Drop the cached TTS engine so the next job rebuilds it from config.
+
+    Returns True if an engine was actually unloaded. Callers must ensure no
+    job is mid-synthesis — see ACTIVE_STATUSES — because unloading frees the
+    model a running job is using.
+    """
+    global _tts_engine
+    if _tts_engine is None:
+        return False
+    try:
+        unload = getattr(_tts_engine, "unload", None)
+        if callable(unload):
+            unload()
+    except Exception as e:
+        log.warning(f"[tts] unload during settings change failed: {e}")
+    _tts_engine = None
+    _free_gpu_memory()
+    log.info("[tts] engine released — next job rebuilds it from current settings")
+    return True
+
+
 def get_tts_engine():
     """TTS engine factory. Priority: VoxCPM2 → F5-TTS → Edge-TTS.
 
@@ -998,7 +1033,7 @@ def get_tts_engine():
             import voxcpm  # noqa
             _tts_engine = VoxCPMSynthesizer(
                 model_id=cfg.voxcpm_model,
-                load_denoiser=False,
+                load_denoiser=cfg.voxcpm_denoise_refs,
                 cfg_value=cfg.voxcpm_cfg,
                 inference_timesteps=cfg.voxcpm_steps,
             )
@@ -7574,14 +7609,36 @@ async def patch_config(body: str = Form(...)):
         v = updates.get(k)
         if isinstance(v, str) and v.endswith("…"):
             updates.pop(k)
+    # Changing an engine-level setting means dropping the loaded model. Doing
+    # that under a running job would pull the model out from under it, so the
+    # write is refused outright rather than half-applied.
+    needs_rebuild = bool(TTS_REBUILD_KEYS & set(updates))
+    if needs_rebuild:
+        busy = [j.get("id") for j in jobs.values()
+                if j.get("status") in ACTIVE_STATUSES]
+        if busy:
+            return JSONResponse({
+                "error": "A job is running — voice settings that reload the "
+                         "model can't be applied right now. Wait for it to "
+                         "finish, or cancel it, then save again.",
+                "busy_jobs": busy[:5],
+            }, 409)
     try:
         cfg.update(**updates)
+    except ValueError as e:
+        # Failed FIELD_SPECS validation — nothing was written.
+        return JSONResponse({"error": str(e)}, 400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+    try:
         if "hf_token" in updates:
             # diarizer reads the env first; keep the two in step so a token
             # saved here takes effect without a restart.
             os.environ["HF_TOKEN"] = cfg.hf_token or ""
             diag.clear_runtime(list(diag.REVALIDATES["hf"]))
-        return {"ok": True, "config": _redacted_config()}
+        reloaded = reset_tts_engine() if needs_rebuild else False
+        return {"ok": True, "config": _redacted_config(),
+                "tts_reloaded": reloaded, "tts_rebuild_pending": needs_rebuild}
     except Exception as e:
         return JSONResponse({"error": str(e)}, 500)
 
