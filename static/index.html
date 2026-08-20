@@ -897,7 +897,7 @@ function TopBar({ view, runningJob, awaitingReviewCount, notices, mode = 'local'
             if (cmdRef.current) cmdRef.current.value = '';
           }}>
           <label
-            title="Describe a dub — a URL, target languages, and optionally showcase or quick test. It fills in New dub; you press Start."
+            title="Describe a dub — a URL, target languages, and optionally a showcase reel. It fills in New dub; you press Start."
             style={{ display: 'flex', alignItems: 'center', gap: 8,
                      width: 'min(440px, 100%)', padding: '5px 10px', cursor: 'text',
                      background: 'var(--bg-1)', border: '1px solid var(--line)',
@@ -978,6 +978,9 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
 
   const [srcLang, setSrcLang] = useState(() => _lsGet('srcLang', 'auto'));
   const [tgtLang, setTgtLang] = useState(() => _lsGet('tgtLang', 'ru'));
+  // Multi-language runs dub the whole video by default now; trimming is the
+  // opt-in "audition it first" path rather than the only behaviour.
+  const [qtTrimOn, setQtTrimOn] = useState(() => _lsGet('qtTrimOn', false));
   const [model, setModel] = useState(() => _lsGet('model', ''));
   const [whisperModel, setWhisperModel] = useState(() => _lsGet('whisperModel', 'base'));
   const [speakerMode, setSpeakerMode] = useState(() => _lsGet('speakerMode', 'main'));
@@ -1087,6 +1090,7 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
   // ── Persist preferences ──
   useEffect(() => { _lsSet('srcLang', srcLang); }, [srcLang]);
   useEffect(() => { _lsSet('tgtLang', tgtLang); }, [tgtLang]);
+  useEffect(() => { _lsSet('qtTrimOn', qtTrimOn); }, [qtTrimOn]);
   useEffect(() => { _lsSet('model', model); }, [model]);
   useEffect(() => { _lsSet('whisperModel', whisperModel); }, [whisperModel]);
   useEffect(() => { _lsSet('speakerMode', speakerMode); }, [speakerMode]);
@@ -1181,7 +1185,7 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     if (mode === 'file' && videoFile) fd.append('video', videoFile);
     else if (mode === 'url' && ytUrl) fd.append('source', ytUrl);
     if (refFile) fd.append('reference', refFile);
-    fd.append('trim_seconds', String(qtTrimSeconds));
+    fd.append('trim_seconds', String(qtTrimOn ? qtTrimSeconds : 0));
     fd.append('target_langs', qtLangs.join(','));
     fd.append('source_lang', srcLang);
     fd.append('model', model);
@@ -1193,11 +1197,13 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     fd.append('keep_bg', keepBg);
     fd.append('auto_denoise', autoDenoise);
     fd.append('context_hint', contextHint);
+    fd.append('wizard_mode', wizardReview ? 'review_translation' : 'auto');
+    fd.append('lip_sync', lipSync);
     try {
       const r = await fetch('/api/quick_test', { method: 'POST', body: fd });
       const d = await r.json();
       if (d.batch_id || d.job_ids) onJobSubmitted(null);
-      else setError(d.error || d.detail || 'Quick-test submit failed');
+      else setError(d.error || d.detail || 'Multi-language submit failed');
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -1319,7 +1325,7 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
         <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
           <ModeBtn active={!batchMode && !quickTestMode && !showcaseMode} onClick={() => switchTo('single')} label="Single video"/>
           <ModeBtn active={batchMode}     onClick={() => switchTo('batch')}    label="Batch — many videos"/>
-          <ModeBtn active={quickTestMode} onClick={() => switchTo('quick')}    label="Quick test · multi-lang"/>
+          <ModeBtn active={quickTestMode} onClick={() => switchTo('quick')}    label="Multi-language"/>
           <ModeBtn active={showcaseMode}  onClick={() => switchTo('showcase')} label="Showcase · stitched reel"/>
         </div>
 
@@ -1333,9 +1339,11 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
             voicePreset={voicePreset}
             ttsSpeed={ttsSpeed}
             trimSeconds={qtTrimSeconds} setTrimSeconds={setQtTrimSeconds}
+            trimOn={true} setTrimOn={() => {}}
             langs={qtLangs} setLangs={setQtLangs}
             onSubmit={submitShowcase}
             submitting={submitting}
+            limits={system?.limits}
             error={error}/>
         )}
 
@@ -1348,22 +1356,28 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
             voicePreset={voicePreset}
             ttsSpeed={ttsSpeed}
             trimSeconds={qtTrimSeconds} setTrimSeconds={setQtTrimSeconds}
+            trimOn={qtTrimOn} setTrimOn={setQtTrimOn}
             langs={qtLangs} setLangs={setQtLangs}
             onSubmit={submitQuickTest}
             submitting={submitting}
+            limits={system?.limits}
             error={error}
           />
         )}
 
-        {!quickTestMode && !showcaseMode && (<>
-        {!batchMode && (
+        {/* Multi-language shares sections 2-4 with a single dub — it is a
+            primary workflow, not a smoke test, so it gets the same controls.
+            Only the source picker and the single-target select stay
+            exclusive, because QuickTestForm above already owns those. */}
+        {!showcaseMode && (<>
+        {!batchMode && !quickTestMode && (
           <SingleSource
             mode={mode} setMode={setMode}
             videoFile={videoFile} setVideoFile={setVideoFile}
             ytUrl={ytUrl} setYtUrl={setYtUrl}
           />
         )}
-        {batchMode && (
+        {batchMode && !quickTestMode && (
           <BatchSource
             files={batchFiles} setFiles={setBatchFiles}
             urls={batchUrls} setUrls={setBatchUrls}
@@ -1377,11 +1391,13 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
               {LANGS.map(l => <option key={l.c} value={l.c} style={{ background: '#16161c' }}>{l.n}</option>)}
             </Select>
           </Field>
+          {!quickTestMode && (
           <Field label="Target language">
             <Select value={tgtLang} onChange={setTgtLang}>
               {LANGS.filter(l => l.c !== 'auto').map(l => <option key={l.c} value={l.c} style={{ background: '#16161c' }}>{l.n}</option>)}
             </Select>
           </Field>
+          )}
           <Field label="Translation model" hint={
             loadingModels ? 'Loading models from LM Studio…' :
             translationBackend === 'lm_studio' ? `LM Studio · ${availableModels.length} models available` :
@@ -1660,29 +1676,33 @@ function QuickTestForm({
   kind = 'quick',
   mode, setMode, videoFile, setVideoFile, ytUrl, setYtUrl,
   refFile, voicePreset, ttsSpeed,
-  trimSeconds, setTrimSeconds, langs, setLangs,
-  onSubmit, submitting, error,
+  trimSeconds, setTrimSeconds, trimOn, setTrimOn, langs, setLangs,
+  onSubmit, submitting, error, limits,
 }) {
   const isShowcase = kind === 'showcase';
   const TRIM_STOPS = [30, 60, 90, 120];
   const pickableLangs = LANGS.filter(l => l.c !== 'auto');
+  // Bounds come from /api/system so the picker and the API can't disagree;
+  // the literals are only a pre-first-poll fallback.
+  const minLangs = limits?.min_target_langs ?? 2;
+  const maxLangs = limits?.max_target_langs ?? 12;
 
   const toggleLang = (code) => {
     if (langs.includes(code)) {
-      if (langs.length > 2) setLangs(langs.filter(c => c !== code));
+      if (langs.length > minLangs) setLangs(langs.filter(c => c !== code));
     } else {
-      if (langs.length < 6) setLangs([...langs, code]);
+      if (langs.length < maxLangs) setLangs([...langs, code]);
     }
   };
 
   const sourceReady = (mode === 'file' && videoFile) || (mode === 'url' && ytUrl.trim());
-  const langsOk = langs.length >= 2 && langs.length <= 6;
+  const langsOk = langs.length >= minLangs && langs.length <= maxLangs;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       <div>
         <div className="caps" style={{ marginBottom: 8 }}>
-          {isShowcase ? 'Source · multilingual showcase reel' : 'Source · short clip'}
+          {isShowcase ? 'Source · multilingual showcase reel' : 'Source · multi-language dub'}
         </div>
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           <button className={'btn ' + (mode === 'file' ? 'btn-primary' : '')}
@@ -1701,27 +1721,39 @@ function QuickTestForm({
       </div>
 
       <div>
-        <div className="caps" style={{ marginBottom: 8 }}>Trim duration</div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {TRIM_STOPS.map(s => (
-            <button key={s}
-              onClick={() => setTrimSeconds(s)}
-              className={'btn ' + (trimSeconds === s ? 'btn-primary' : '')}
-              style={{ flex: 1 }}>
-              {s}s
-            </button>
-          ))}
-        </div>
+        {/* A showcase reel is by definition made of clips, so it always
+            trims. A multi-language dub is a real deliverable — it dubs the
+            whole video unless you deliberately ask to audition a clip. */}
+        {!isShowcase && (
+          <Toggle value={!!trimOn} onChange={setTrimOn}
+                  label="Trim to a short clip first"
+                  hint="Off = dub the whole video. On = audition languages and voices on a clip before committing the GPU time."/>
+        )}
+        {(isShowcase || trimOn) && (
+          <>
+            <div className="caps" style={{ margin: '10px 0 8px' }}>Clip length</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {TRIM_STOPS.map(s => (
+                <button key={s}
+                  onClick={() => setTrimSeconds(s)}
+                  className={'btn ' + (trimSeconds === s ? 'btn-primary' : '')}
+                  style={{ flex: 1 }}>
+                  {s}s
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
-          <div className="caps">Target languages · {langs.length} of 2–6</div>
+          <div className="caps">Target languages · {langs.length} of {minLangs}–{maxLangs}</div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {pickableLangs.map(l => {
             const on = langs.includes(l.c);
-            const disabled = !on && langs.length >= 6;
+            const disabled = !on && langs.length >= maxLangs;
             return (
               <button key={l.c}
                 onClick={() => toggleLang(l.c)}
@@ -1743,8 +1775,10 @@ function QuickTestForm({
 
       <div style={{ padding: 12, background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
         <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-          {isShowcase ? `${langs.length} languages · ${trimSeconds}s clip · stitched into one video` :
-           `${langs.length} jobs × ${trimSeconds}s clip · sequential on the GPU queue`}
+          {isShowcase
+            ? `${langs.length} languages · ${trimSeconds}s clip · stitched into one video`
+            : `${langs.length} jobs × ${trimOn ? trimSeconds + 's clip' : 'full video'}`
+              + ' · sequential on the GPU queue'}
         </div>
       </div>
 
@@ -1752,7 +1786,7 @@ function QuickTestForm({
 
       <button className="btn btn-primary" disabled={submitting || !sourceReady || !langsOk} onClick={onSubmit}
               style={{ width: '100%', justifyContent: 'center', padding: '12px 16px' }}>
-        {submitting ? 'Submitting…' : (isShowcase ? `Build showcase reel ▸ ${langs.length} langs` : `Start quick test ▸ ${langs.length} langs`)}
+        {submitting ? 'Submitting…' : (isShowcase ? `Build showcase reel ▸ ${langs.length} langs` : `Start ${langs.length}-language dub`)}
       </button>
     </div>
   );
@@ -3180,6 +3214,162 @@ function ReviewView({ jobs, selectedJobId, voicePresets, onContinued, onCancel, 
 // ═══════════════════════════════════════════════════════════════════
 // RESULT VIEW (placeholder)
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// METADATA PANEL — the source's title/description/chapters alongside their
+// translation, shaped for copy-paste into a re-upload form.
+// ═══════════════════════════════════════════════════════════════════
+function CopyButton({ text, label = 'Copy' }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      // clipboard API needs a secure context; on plain http:// over a LAN
+      // it throws, so fall back to the old selection trick.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    setDone(true);
+    setTimeout(() => setDone(false), 1400);
+  };
+  return (
+    <button className="btn btn-ghost" onClick={copy} disabled={!text}
+            style={{ fontSize: 10, padding: '3px 8px',
+                     color: done ? 'var(--accent)' : 'var(--ink-3)' }}>
+      {done ? '✓ copied' : label}
+    </button>
+  );
+}
+
+function MetaField({ label, value, mono, minHeight }) {
+  if (!value) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="caps">{label}</div>
+        <div style={{ flex: 1 }}/>
+        <CopyButton text={value}/>
+      </div>
+      <div className={'wrap-any' + (mono ? ' mono' : '')}
+           style={{ padding: '8px 10px', background: 'var(--bg-2)',
+                    border: '1px solid var(--line)', borderRadius: 'var(--r-md)',
+                    fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+                    maxHeight: 260, overflowY: 'auto', minHeight: minHeight || 0 }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function MetadataPanel({ jobId, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [side, setSide] = useState('translated');
+
+  useEffect(() => {
+    if (!open || data) return;
+    fetch(`/api/dub/${jobId}/metadata`)
+      .then(r => r.json())
+      .then(d => { if (d.error) setErr(d.error); else setData(d); })
+      .catch(e => setErr(String(e.message || e)));
+  }, [open, jobId]);
+
+  // Chapters are "0:00 Title" lines — the format YouTube parses back into
+  // real chapter marks when pasted into a description.
+  const fmtChapters = (chs) => (chs || []).map(c => {
+    const t = Math.max(0, Math.round(c.start || 0));
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+    const stamp = h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+      : `${m}:${String(sec).padStart(2, '0')}`;
+    return `${stamp} ${c.title}`;
+  }).join('\n');
+
+  const hasTranslation = !!(data && data.translated);
+  const shown = side === 'translated' && hasTranslation ? data.translated : data?.source;
+  const chapterText = fmtChapters(shown?.chapters);
+  // What you'd actually paste into the description box: body then chapters.
+  const fullBlock = [shown?.description, chapterText].filter(Boolean).join('\n\n');
+
+  return (
+    <div className="panel" style={{ width: '100%', padding: 0, overflow: 'hidden' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+        padding: '12px 16px', textAlign: 'left',
+      }}>
+        <span style={{ color: 'var(--ink-3)' }}>{I.glossary}</span>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>Video metadata</span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>
+          title · description · chapters
+        </span>
+        <div style={{ flex: 1 }}/>
+        <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>{open ? '▾' : '▸'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 16px 16px', display: 'flex',
+                      flexDirection: 'column', gap: 14 }}>
+          {err && <div style={{ color: 'var(--err)', fontSize: 11.5 }}>{err}</div>}
+          {!data && !err && (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>Loading…</div>
+          )}
+          {data && !data.source.title && !data.source.description && (
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>
+              No metadata for this source — it was a local file, or the yt-dlp
+              probe could not reach the page.
+            </div>
+          )}
+          {data && (data.source.title || data.source.description) && (
+            <>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {['translated', 'source'].map(sd => (
+                  <button key={sd} onClick={() => setSide(sd)}
+                          disabled={sd === 'translated' && !hasTranslation}
+                          className={'btn' + (side === sd ? ' btn-primary' : '')}
+                          style={{ fontSize: 11, padding: '4px 10px' }}>
+                    {sd === 'translated'
+                      ? (data.target_lang ? data.target_lang.toUpperCase() : 'Translated')
+                      : 'Original'}
+                  </button>
+                ))}
+                <div style={{ flex: 1 }}/>
+                {fullBlock && (
+                  <CopyButton text={fullBlock} label="Copy description + chapters"/>
+                )}
+              </div>
+
+              {!hasTranslation && (
+                <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+                  No translation stored — same-language dub, or the source had
+                  no title to translate.
+                </div>
+              )}
+
+              <MetaField label="Title" value={shown?.title}/>
+              <MetaField label="Description" value={shown?.description} minHeight={80}/>
+              <MetaField label="Chapters" value={chapterText} mono/>
+              {side === 'source' && (
+                <>
+                  <MetaField label="Thumbnail URL" value={data.source.thumbnail} mono/>
+                  <MetaField label="Source URL" value={data.source.webpage_url} mono/>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPickJob, onSwitchToHome, onSwitchToHistory }) {
   const completedJobs = jobs.filter(j => j.status === 'complete').sort((a, b) => (b.completed_at || b.created || 0) - (a.completed_at || a.created || 0));
   const job = selectedJobId ? jobs.find(j => j.id === selectedJobId) : completedJobs[0];
@@ -3210,6 +3400,9 @@ function ResultView({ jobs, selectedJobId, voicePresets, system, onRefresh, onPi
             stage controls that fix whatever quality flagged. */}
         {job.status === 'complete' && (
           <QualityPanel jobId={job.id} defaultOpen={false}/>
+        )}
+        {job.status === 'complete' && (
+          <MetadataPanel jobId={job.id} defaultOpen={false}/>
         )}
         {job.status === 'complete' && (
           <PublishPanel jobId={job.id} defaultOpen={true}/>

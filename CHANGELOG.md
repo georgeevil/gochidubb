@@ -215,6 +215,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `scrollWidth == viewport` and zero overflowing elements at every width.
 
 ### Changed
+- **Quick Test is now "Multi-language" — a primary workflow, not a smoke
+  test.** It takes the same options as a single dub (source language,
+  translation and Whisper models, speaker mode, voice, context hint,
+  background separation, denoise, review pause, lip sync, scheduling), and
+  **dubs the whole video by default**. Trimming to a clip is now an opt-in
+  toggle for auditioning languages and voices before committing GPU time.
+- **Up to 12 target languages** per multi-language or showcase run, raised
+  from 6. The bound is served from `GET /api/system` so the picker and the
+  API can no longer disagree.
 - **The server binds `127.0.0.1` instead of `0.0.0.0`.** It has no
   authentication of any kind, so the old default offered job control, every
   transcript, `/api/logs` and `/api/config` to every device on the network —
@@ -380,6 +389,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `start.sh` to delegate to the server manager
 
 ### Fixed
+- **yt-dlp 403 errors now fall back to the `web_embedded` player client.**
+  YouTube serves 403 to the default client for videos that download fine
+  through `--extractor-args "youtube:player_client=web_embedded"`; both the
+  download and the metadata probe now retry that way when — and only when —
+  they see a 403. The download keeps its preferred 1080p format on the retry
+  rather than degrading, since a 403 is an access problem, not a format one.
+- **Multi-language runs now capture source metadata at all.** The fan-out
+  never probed the URL, so its jobs carried no title or description and had
+  nothing to translate.
 - **Voice consistency in cross-lingual cloning** — QA retries were mutating the seed
   per retry attempt in cloning mode, producing audibly different timbres for
   segments that failed-then-retried. Cloning mode now sets `MAX_QA_RETRIES = 0`
@@ -390,6 +408,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] — initial public release
 
 ### Added
+- **Video metadata is translated and copyable.** A new **Video metadata**
+  panel on a finished result shows the source title, full description and
+  chapter marks alongside their translation into that job's target language,
+  each with a copy button — plus a one-click "description + chapters" block
+  in the format YouTube parses back into real chapters. Chapters and the full
+  description are new: descriptions were previously truncated at 2000 chars
+  and only the first 500 were ever translated. Served on demand from
+  `GET /api/dub/{id}/metadata` so the 2-second job poll stays small.
 - One-click installers for Windows (`install.bat`) and Linux/macOS (`install.sh`)
 - FastAPI server + React UI
 - yt-dlp → faster-whisper → pyannote → Ollama → VoxCPM2 → ffmpeg pipeline

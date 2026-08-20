@@ -2223,6 +2223,73 @@ async def _stage_translate(job, work, ctx, update, perf):
         )
 
 
+def _split_for_translation(text: str, limit: int = 1500) -> list:
+    """Split a long text into translation-sized chunks on paragraph breaks.
+
+    Descriptions can run to several thousand characters; sending one giant
+    string back risks a truncated or summarised reply. Paragraphs are kept
+    whole where possible, and an oversized paragraph is split on line breaks
+    before being hard-cut as a last resort.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    chunks, current = [], ""
+    for para in text.split("\n\n"):
+        if len(para) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            line_buf = ""
+            for line in para.split("\n"):
+                if len(line) > limit:
+                    # A long line of ordinary prose must not be cut
+                    # mid-word: a chunk ending "…descripti" translates to
+                    # nonsense, and the seam is visible in the output. Break
+                    # on whitespace, and only slice blindly when a single
+                    # token really is longer than the limit.
+                    if line_buf:
+                        chunks.append(line_buf)
+                        line_buf = ""
+                    for word in line.split(" "):
+                        while len(word) > limit:
+                            if line_buf:
+                                chunks.append(line_buf)
+                                line_buf = ""
+                            chunks.append(word[:limit])
+                            word = word[limit:]
+                        if not word:
+                            continue
+                        if len(line_buf) + len(word) + 1 > limit:
+                            if line_buf:
+                                chunks.append(line_buf)
+                            line_buf = word
+                        else:
+                            line_buf = f"{line_buf} {word}" if line_buf else word
+                    continue
+                if len(line_buf) + len(line) + 1 > limit:
+                    if line_buf:
+                        chunks.append(line_buf)
+                    line_buf = line
+                else:
+                    line_buf = f"{line_buf}\n{line}" if line_buf else line
+            if line_buf:
+                current = line_buf
+            continue
+        if len(current) + len(para) + 2 > limit:
+            if current:
+                chunks.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def _maybe_translate_meta(job, ctx) -> None:
     """Translate the source title + description head into the target language.
 
@@ -2240,22 +2307,37 @@ async def _maybe_translate_meta(job, ctx) -> None:
            or meta.get("language") or "").strip().lower()
     if not target or target.split("-")[0] == src.split("-")[0]:
         return  # same language (or unknown target) — nothing to translate
-    desc = (meta.get("description") or "")[:500].strip()
+    desc = (meta.get("description") or "").strip()
+    chapters = meta.get("chapters") or []
+    # One request per chunk, so a long description doesn't overflow the
+    # model's context and come back truncated. Splitting on blank lines keeps
+    # paragraphs intact; the fallback split is only for a wall of text.
+    desc_chunks = _split_for_translation(desc) if desc else []
+    chapter_titles = [c.get("title", "") for c in chapters if c.get("title")]
     try:
         from pipeline.translator import translate_texts
-        texts = [title] + ([desc] if desc else [])
+        texts = [title] + desc_chunks + chapter_titles
         out = await translate_texts(
             texts, target,
             model=ctx.get("model") or cfg.translation_model,
             context_hint=ctx.get("context_hint") or None,
         )
+        n_desc = len(desc_chunks)
+        translated_titles = out[1 + n_desc:]
         job["meta_translated"] = {
             "title": out[0],
-            "description": out[1] if desc else "",
+            "description": "\n\n".join(out[1:1 + n_desc]) if n_desc else "",
+            # Timings are unchanged by translation — only the labels move.
+            "chapters": [
+                {"start": c.get("start"), "title": t}
+                for c, t in zip(
+                    [c for c in chapters if c.get("title")], translated_titles)
+            ],
         }
         save_job(job)
-        log.info(f"[translate] meta title translated for {job['id']}: "
-                 f"{out[0][:80]!r}")
+        log.info(f"[translate] meta translated for {job['id']}: "
+                 f"{out[0][:80]!r} (+{n_desc} description chunk(s), "
+                 f"{len(translated_titles)} chapter(s))")
     except Exception as e:
         log.warning(f"[translate] meta title/description translation failed "
                     f"(non-fatal): {e}")
@@ -2874,6 +2956,12 @@ async def system_status():
     # Deployment mode ("local" | "hosted") — the UI gates the Workspace
     # group on this without needing a second round trip.
     status["mode"] = cfg.mode if cfg.mode in ("local", "hosted") else "local"
+    # Batch bounds, so the language picker enforces the same numbers the API
+    # validates against instead of keeping its own copy in sync by hand.
+    status["limits"] = {
+        "min_target_langs": MIN_TARGET_LANGS,
+        "max_target_langs": MAX_TARGET_LANGS,
+    }
 
     # Live resource snapshot — the same probes the per-stage sampler uses,
     # so the System panel and the stage metrics always agree on what's
@@ -4169,6 +4257,13 @@ def _trim_video(src: Path, dst: Path, seconds: int) -> Path:
 
 # Default language picks for the Quick-Test feature. Frontend allows
 # per-run override; this is just the pre-selection.
+# Bounds on a multi-language batch. Two is the floor because one language is
+# just a normal dub. The ceiling is a guard against a mis-click queueing a
+# very long run, not a technical limit — each language is an independent job
+# and the runner processes them serially, so the only cost of more is time.
+MIN_TARGET_LANGS = 2
+MAX_TARGET_LANGS = 12
+
 _QUICK_TEST_DEFAULT_LANGS = ("es", "fr", "de", "ja", "pt")
 # Validation set for Quick-Test / Showcase / Redub target codes. Derived from
 # the edge-tts VOICE_MAP — the canonical language registry that GET
@@ -4183,7 +4278,7 @@ async def start_quick_test(
     video: Optional[UploadFile] = File(None),
     source: str = Form(""),                # YouTube/direct URL
     reference: Optional[UploadFile] = File(None),
-    trim_seconds: int = Form(60),
+    trim_seconds: int = Form(0),           # 0 = dub the whole video
     target_langs: str = Form(""),          # comma-separated e.g. "es,fr,de,ja,pt"
     source_lang: str = Form("auto"),
     model: str = Form("aya-expanse:8b"),
@@ -4196,10 +4291,17 @@ async def start_quick_test(
     auto_denoise: bool = Form(False),
     context_hint: str = Form(""),
     batch_label: str = Form(""),
+    wizard_mode: str = Form("auto"),       # "auto" | "review_translation" | …
+    lip_sync: bool = Form(False),
+    scheduled_at: float = Form(0.0),
 ):
-    """Quick-test: trim a short clip and fan out into N normal dub jobs
-    (one per target language) sharing a batch_id. The user gets a side-by-
-    side comparison in the Batch view.
+    """Multi-language dub: fan one source out into N dub jobs, one per target
+    language, sharing a batch_id so the UI can show them together.
+
+    This is a primary workflow, not a smoke test — it takes the same options
+    as a single dub. `trim_seconds=0` (the default) dubs the whole video;
+    a non-zero value trims a clip first, which is the cheap way to audition
+    voices and languages before committing GPU time to the full thing.
     """
     # ── Validate inputs ───────────────────────────────────────────────
     if not video and not source.strip():
@@ -4207,16 +4309,20 @@ async def start_quick_test(
     if video and source.strip():
         return JSONResponse({"error": "Provide only one of video or url"}, 400)
 
-    if trim_seconds < 15 or trim_seconds > 120:
+    # 0 means "no trim". Any other value is a real clip length, and the 15s
+    # floor stops a clip so short that whisper has nothing to work with.
+    if trim_seconds and (trim_seconds < 15 or trim_seconds > 120):
         return JSONResponse(
-            {"error": f"trim_seconds must be between 15 and 120 (got {trim_seconds})"},
+            {"error": f"trim_seconds must be 0 (full video) or between 15 "
+                      f"and 120 (got {trim_seconds})"},
             400,
         )
 
     langs = [c.strip() for c in target_langs.split(",") if c.strip()]
-    if not (2 <= len(langs) <= 6):
+    if not (MIN_TARGET_LANGS <= len(langs) <= MAX_TARGET_LANGS):
         return JSONResponse(
-            {"error": f"Pick 2-6 target languages (got {len(langs)})"}, 400)
+            {"error": f"Pick {MIN_TARGET_LANGS}-{MAX_TARGET_LANGS} target "
+                      f"languages (got {len(langs)})"}, 400)
     unknown = [c for c in langs if c not in _QUICK_TEST_KNOWN_LANGS]
     if unknown:
         return JSONResponse(
@@ -4232,12 +4338,16 @@ async def start_quick_test(
                       "llama3.2:3b", "qwen3:14b", "gemma4:e4b", "gemma4:e2b"]
         _fallback = next((m for m in _preferred if m in _installed), None)
         if _fallback:
-            log.warning(f"[quick_test] '{model}' not installed; using '{_fallback}'")
+            log.warning(f"[multidub] '{model}' not installed; using '{_fallback}'")
             model = _fallback
         else:
             return JSONResponse({
                 "error": "No translation model installed. Run: ollama pull aya-expanse:8b"
             }, 400)
+
+    # Populated from the yt-dlp probe below for URL sources; stays empty for
+    # local uploads, which have no page to read metadata from.
+    src_meta: dict = {}
 
     # ── Save shared reference (one upload, reused by all jobs) ────────
     ref_path = ""
@@ -4246,7 +4356,7 @@ async def start_quick_test(
         ref_path = str(UPLOAD_DIR / f"qt_{uuid.uuid4().hex[:8]}_ref{ref_ext}")
         with open(ref_path, "wb") as f:
             shutil.copyfileobj(reference.file, f)
-        log.info(f"[quick_test] Saved shared reference: {ref_path}")
+        log.info(f"[multidub] Saved shared reference: {ref_path}")
 
     # ── Materialize the source file locally ───────────────────────────
     # File uploads write straight to uploads/. URLs go through yt-dlp first
@@ -4263,6 +4373,18 @@ async def start_quick_test(
         from pipeline.downloader import download_video
         url = source.strip()
         src_label = url[:60] + ("..." if len(url) > 60 else "")
+        # Probe before downloading, exactly as the single-dub route does.
+        # Without this the fan-out jobs carried no meta at all, so there was
+        # nothing for the translate stage to render into the target language
+        # and the Results metadata panel came up empty.
+        try:
+            source_info = await asyncio.to_thread(probe_metadata, url)
+            if source_info:
+                src_meta = curate_metadata(source_info)
+                if src_meta.get("title"):
+                    src_label = src_meta["title"][:60]
+        except Exception as e:
+            log.warning(f"[multidub] metadata probe failed (non-fatal): {e}")
         try:
             dl_dir = UPLOAD_DIR / f"qt_{uuid.uuid4().hex[:8]}"
             dl_dir.mkdir(parents=True, exist_ok=True)
@@ -4271,21 +4393,25 @@ async def start_quick_test(
             return JSONResponse(
                 {"error": f"Could not download URL: {e}"}, 400)
 
-    # ── Trim ──────────────────────────────────────────────────────────
-    trimmed_path = src_path.parent / f"{src_path.stem}_qt{trim_seconds}s.mp4"
-    try:
-        _trim_video(src_path, trimmed_path, trim_seconds)
-    except Exception as e:
-        err_msg = ""
-        if hasattr(e, "stderr") and getattr(e, "stderr", None):
-            err_msg = e.stderr.decode("utf-8", errors="replace")[-300:]
-        log.warning(f"[quick_test] trim failed: {e} :: {err_msg}")
-        return JSONResponse(
-            {"error": "Could not trim video", "detail": err_msg or str(e)}, 500)
+    # ── Trim (optional) ───────────────────────────────────────────────
+    if trim_seconds:
+        trimmed_path = src_path.parent / f"{src_path.stem}_qt{trim_seconds}s.mp4"
+        try:
+            _trim_video(src_path, trimmed_path, trim_seconds)
+        except Exception as e:
+            err_msg = ""
+            if hasattr(e, "stderr") and getattr(e, "stderr", None):
+                err_msg = e.stderr.decode("utf-8", errors="replace")[-300:]
+            log.warning(f"[multidub] trim failed: {e} :: {err_msg}")
+            return JSONResponse(
+                {"error": "Could not trim video", "detail": err_msg or str(e)}, 500)
+    else:
+        trimmed_path = src_path
 
     # ── Fan out: one job per language, all sharing one batch_id ───────
     batch_id = f"qt_{uuid.uuid4().hex[:8]}"
-    label_final = batch_label or f"Quick test · {trim_seconds}s · {len(langs)} langs"
+    _scope = f"{trim_seconds}s clip" if trim_seconds else "full video"
+    label_final = batch_label or f"{len(langs)} languages · {_scope}"
     job_ids: list = []
 
     for idx, lang in enumerate(langs):
@@ -4308,15 +4434,24 @@ async def start_quick_test(
             "tts_speed": tts_speed,
             "whisper_model": whisper_model,
             "keep_bg": keep_bg,
-            "wizard_mode": "auto",     # never pause in quick-test mode
+            "wizard_mode": wizard_mode,
+            "lip_sync": lip_sync,
             "auto_denoise": auto_denoise,
+            # Every sibling shares the source's metadata; the translate stage
+            # then renders its own meta_translated per target language.
+            "meta": dict(src_meta) if src_meta else {},
+            "title": src_meta.get("title") or "",
+            "trim_seconds": trim_seconds,
             "batch_id": batch_id,
             "batch_label": label_final,
+            # Stored value kept as "quick_test" so batches created before
+            # this became a first-class multi-language mode keep rendering
+            # and rebuilding correctly; the UI maps it to a display label.
             "batch_kind": "quick_test",
             "batch_position": idx,
             "batch_total": len(langs),
             "created": time.time(),
-            "scheduled_at": 0,
+            "scheduled_at": scheduled_at,
             "_pending_args": None,
         }
         save_job(jobs[jid])
@@ -4333,13 +4468,14 @@ async def start_quick_test(
             "voice_style": voice_style,
             "voice_preset": voice_preset,
             "tts_speed": tts_speed,
-            "wizard_mode": "auto",
+            "wizard_mode": wizard_mode,
+            "lip_sync": lip_sync,
             "auto_denoise": auto_denoise,
         })
         job_ids.append(jid)
 
-    log.info(f"[quick_test] {batch_id}: enqueued {len(job_ids)} jobs "
-             f"({trim_seconds}s, langs={langs})")
+    log.info(f"[multidub] {batch_id}: enqueued {len(job_ids)} jobs "
+             f"({_scope}, langs={langs})")
 
     return {
         "ok": True,
@@ -4852,8 +4988,9 @@ async def start_showcase(
             {"error": f"trim_seconds must be between 15 and 120 (got {trim_seconds})"}, 400)
 
     langs = [c.strip() for c in target_langs.split(",") if c.strip()]
-    if not (2 <= len(langs) <= 6):
-        return JSONResponse({"error": f"Pick 2-6 target languages (got {len(langs)})"}, 400)
+    if not (MIN_TARGET_LANGS <= len(langs) <= MAX_TARGET_LANGS):
+        return JSONResponse({"error": f"Pick {MIN_TARGET_LANGS}-{MAX_TARGET_LANGS} "
+                                      f"target languages (got {len(langs)})"}, 400)
     unknown = [c for c in langs if c not in _QUICK_TEST_KNOWN_LANGS]
     if unknown:
         return JSONResponse({"error": f"Unknown language code(s): {unknown}"}, 400)
@@ -5074,8 +5211,10 @@ async def redub_job(
         return JSONResponse({"error": "Specify at least one target_lang"}, 400)
     if mode == "single" and len(langs) != 1:
         return JSONResponse({"error": "mode=single requires exactly 1 language"}, 400)
-    if mode in ("compare", "showcase") and not (2 <= len(langs) <= 6):
-        return JSONResponse({"error": f"mode={mode} needs 2-6 langs (got {len(langs)})"}, 400)
+    if mode in ("compare", "showcase") and not (
+            MIN_TARGET_LANGS <= len(langs) <= MAX_TARGET_LANGS):
+        return JSONResponse({"error": f"mode={mode} needs {MIN_TARGET_LANGS}-"
+                                      f"{MAX_TARGET_LANGS} langs (got {len(langs)})"}, 400)
     unknown = [c for c in langs if c not in _QUICK_TEST_KNOWN_LANGS]
     if unknown:
         return JSONResponse({"error": f"Unknown language codes: {unknown}"}, 400)
@@ -6382,6 +6521,44 @@ def _quality_inputs(job_id: str):
     loudnorm = (((load_metrics(work).get("stages") or {}).get("assemble") or {})
                 .get("detail") or {}).get("loudnorm")
     return segments, seg_stage, placements, loudnorm
+
+
+@app.get("/api/dub/{job_id}/metadata")
+async def get_job_metadata(job_id: str):
+    """Source metadata plus its translation into this job's target language.
+
+    Served on demand rather than on the job object: descriptions run to
+    thousands of characters, and /api/jobs is polled every couple of seconds
+    while a job runs — carrying them there would bloat every poll for text
+    almost nobody is looking at.
+
+    Shaped for copy-paste into a re-upload form: `source` is what yt-dlp
+    found, `translated` is the same fields in the target language (absent
+    when the dub is same-language, or when translation was skipped).
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    job = jobs[job_id]
+    meta = job.get("meta") or {}
+    mt = job.get("meta_translated") or {}
+    return {
+        "job_id": job_id,
+        "target_lang": job.get("target_lang"),
+        "source": {
+            "title": meta.get("title") or "",
+            "description": meta.get("description") or "",
+            "chapters": meta.get("chapters") or [],
+            "thumbnail": meta.get("thumbnail") or "",
+            "channel": meta.get("channel") or "",
+            "webpage_url": meta.get("webpage_url") or "",
+            "duration": meta.get("duration"),
+        },
+        "translated": {
+            "title": mt.get("title") or "",
+            "description": mt.get("description") or "",
+            "chapters": mt.get("chapters") or [],
+        } if mt else None,
+    }
 
 
 @app.get("/api/dub/{job_id}/quality")
