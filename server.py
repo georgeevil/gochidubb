@@ -6669,14 +6669,7 @@ async def edit_speaker_ref(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Lip-sync (Wav2Lip) — placeholder endpoint
-# ═══════════════════════════════════════════════════════════════════════
-# Lip-sync is an optional post-processing step that recomputes mouth
-# movements in the video to match the dubbed audio. This makes the
-# output look much less like an obvious dub job.
-#
-# This endpoint currently returns an install-instructions error. When
-# Wav2Lip is installed, replace the raise with actual model invocation.
+#  Transcript export
 # ═══════════════════════════════════════════════════════════════════════
 
 @app.get("/api/dub/{job_id}/transcripts.txt")
@@ -6747,6 +6740,14 @@ async def download_transcripts_txt(job_id: str):
 # standard entry point).
 # ═══════════════════════════════════════════════════════════════════════
 
+# The upstream README points at a Google Drive link that needs a browser and
+# has rotted more than once. This mirror serves the same file — verified
+# byte-identical (xet hash 40dfad7c…) against two other public mirrors.
+WAV2LIP_CHECKPOINT_URL = (
+    "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip_gan.pth"
+)
+
+
 def _find_wav2lip_setup():
     """Scan common paths for Wav2Lip repo + checkpoint. Returns dict with
     'repo_dir', 'checkpoint', 'python' — all strings, or None if missing.
@@ -6783,7 +6784,14 @@ def _find_wav2lip_setup():
         return {
             "repo_dir": str(d),
             "checkpoint": str(ckpt),
-            "python": sys.executable,  # reuse current venv — adjust via GOCHIDUBB_WAV2LIP_PYTHON
+            # Wav2Lip's own requirements (librosa 0.7, numpy 1.17, numba 0.48)
+            # are from 2020 and cannot coexist with the ones VoxCPM and
+            # faster-whisper need — nor do they install at all on Python 3.11.
+            # So it gets its own interpreter when one is configured, and only
+            # falls back to ours for the rare case where the deps happen to
+            # line up. tools/setup_wav2lip.py builds that venv and prints the
+            # line to paste into .env.
+            "python": os.getenv("GOCHIDUBB_WAV2LIP_PYTHON") or sys.executable,
             "checkpoint_name": ckpt.name,
         }
     return None
@@ -6791,29 +6799,49 @@ def _find_wav2lip_setup():
 
 def _wav2lip_install_guide() -> dict:
     """Install guide returned when Wav2Lip isn't found. Structured so UI
-    can render a copy-paste block + link to checkpoint download."""
+    can render a copy-paste block + link to checkpoint download.
+
+    The steps deliberately do *not* install anything into our own venv. The
+    upstream repo pins librosa 0.7 / numpy 1.17 / numba 0.48; those cannot
+    coexist with what VoxCPM and faster-whisper need, and numpy 1.17 does not
+    even build on Python 3.11. tools/setup_wav2lip.py creates a separate venv
+    and applies the small patches modern librosa and Apple Silicon need.
+    """
+    repo = BASE / "Wav2Lip"
+    ckpt = repo / "checkpoints" / "wav2lip_gan.pth"
     return {
         "error": "wav2lip_not_installed",
         "message": "Lip-sync requires Wav2Lip. It's optional — install it only if you "
                    "want mouth movements to match the dubbed audio. Works best on "
                    "talking-head footage; useless for action / wide shots.",
         "install_steps": [
-            {"label": "1. Clone the Wav2Lip repo",
-             "cmd": f"cd {BASE} && git clone https://github.com/Rudrabha/Wav2Lip.git"},
-            {"label": "2. Install Wav2Lip's deps into your GoChiDUBB Studio venv",
-             "cmd": "pip install librosa==0.7.0 numba==0.48 opencv-contrib-python "
-                    "face-detection tqdm"},
-            {"label": "3. Download the GAN checkpoint (~400 MB)",
-             "cmd": "Open https://github.com/Rudrabha/Wav2Lip in browser, "
-                    "follow README link to wav2lip_gan.pth, "
-                    f"save it at {BASE}\\Wav2Lip\\checkpoints\\wav2lip_gan.pth"},
-            {"label": "4. Restart GoChiDUBB Studio server. The button will light up automatically."},
+            {"label": "1. Clone, build an isolated venv, and patch (one command)",
+             "cmd": f"{sys.executable} tools/setup_wav2lip.py"},
+            {"label": "2. Download the GAN checkpoint (~400 MB) — not automatic, "
+                      "it is a large download you should opt into",
+             "cmd": f"curl -L -o {ckpt} {WAV2LIP_CHECKPOINT_URL}"},
+            {"label": "3. Add the two lines setup_wav2lip.py prints to your .env, "
+                      "then restart the server. The toggle lights up on its own."},
+        ],
+        "manual_equivalent": [
+            f"git clone https://github.com/Rudrabha/Wav2Lip.git {repo}",
+            "python3 -m venv <repo>/venv-w2l",
+            "<repo>/venv-w2l/bin/pip install torch numpy scipy opencv-python "
+            "librosa tqdm",
+            "patch inference.py for MPS and audio.py for librosa>=0.10 "
+            "(see tools/setup_wav2lip.py --show-patches)",
         ],
         "note": "Wav2Lip is picky about input — only helps when faces are clear "
                 "and roughly front-facing. It fails on fast cuts, extreme angles, "
-                "and low-res video. Expect 2-5x the video duration to process.",
-        "env_override": "If Wav2Lip is already cloned elsewhere, set "
-                        "GOCHIDUBB_WAV2LIP_DIR=<path> in .env",
+                "and low-res video. Expect 2-5x the video duration to process, "
+                "and considerably more on CPU.",
+        "macos": "Upstream Wav2Lip only knows CUDA and CPU, so on Apple Silicon it "
+                 "runs on the CPU unless patched. setup_wav2lip.py adds the MPS "
+                 "branch; PYTORCH_ENABLE_MPS_FALLBACK=1 (already in .env.example) "
+                 "covers the ops MPS is missing.",
+        "env_override": "GOCHIDUBB_WAV2LIP_DIR=<path> if the repo lives elsewhere; "
+                        "GOCHIDUBB_WAV2LIP_PYTHON=<path> to point at its venv "
+                        "interpreter instead of ours.",
     }
 
 
@@ -6824,10 +6852,21 @@ async def lip_sync_status():
     setup = _find_wav2lip_setup()
     if not setup:
         return {"installed": False, "guide": _wav2lip_install_guide()}
+    # Which interpreter runs it matters enough to surface: falling back to our
+    # own venv is the single most likely reason a "ready" install then dies at
+    # `import librosa`, and there is no other way to see which one was picked.
+    isolated = bool(os.getenv("GOCHIDUBB_WAV2LIP_PYTHON"))
     return {
         "installed": True,
         "checkpoint": setup["checkpoint_name"],
         "repo_dir": setup["repo_dir"],
+        "python": setup["python"],
+        "isolated_venv": isolated,
+        "warning": None if isolated else
+        "Running Wav2Lip with the GoChiDUBB interpreter. Upstream needs "
+        "librosa 0.7 / numpy 1.17, which conflict with ours — set "
+        "GOCHIDUBB_WAV2LIP_PYTHON to its own venv "
+        "(see tools/setup_wav2lip.py).",
     }
 
 
