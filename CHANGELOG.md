@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Delete jobs from the UI, one or many.** History rows gain a checkbox and a
+  per-row Delete; the toolbar offers select-all and a count, and shift-clicking
+  a checkbox selects the range between it and the last one clicked. Deletion is
+  one `POST /api/jobs/bulk_delete` rather than N round trips, so a selection of
+  thirty is one answer rather than thirty chances to half-finish, and it reports
+  what it freed. Jobs still writing to their own output directory are refused
+  and the reason is shown before you confirm — rmtree-ing a live job's directory
+  fails it in a way that looks like a pipeline bug. The per-row button routes
+  through the same confirmation as the bulk one, so there is a single delete
+  path rather than two that can drift apart.
+
 ### Fixed
 - **Lip-sync could never actually run.** The Wav2Lip wiring has been complete
   for a while — discovery, subprocess call, remux, an auto-hook in the queue
