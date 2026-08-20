@@ -2153,6 +2153,10 @@ async def _stage_translate(job, work, ctx, update, perf):
         todo, target_lang, model,
         context_hint=context_hint,
         progress_callback=_translate_progress,
+        # Naming the source lets the prompt guard closely-related pairs
+        # (uk->bg, ru->uk) where an untranslated word still looks like an
+        # answer. ctx carries whatever whisper actually detected.
+        source_lang=ctx.get("effective_src") or ctx.get("source_lang_detected") or "",
     )
     log.info(
         f"[perf] · translate {total_todo} segment(s) in {time.time()-t0:.1f}s "
@@ -5944,6 +5948,7 @@ async def _run_translate_stage(
     translated = await translate_segments(
         segments, target_lang, model,
         context_hint=context_hint,
+        source_lang=effective_src or "",
     )
     # See comment on unload in main pipeline — free VRAM for VoxCPM
     try:
@@ -7503,6 +7508,7 @@ async def _retranslate_stage(job_id: str, cp: dict, model: str,
         segments = await translate_segments(
             cp["segments"], target_lang, model,
             context_hint=context_hint,
+            source_lang=effective_src or "",
         )
         _save_checkpoint(job_id, work, stage="translation_done", data={
             **cp,
