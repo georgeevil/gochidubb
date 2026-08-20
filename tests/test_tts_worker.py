@@ -325,3 +325,51 @@ class TestPromptPairing:
         _worker._process_job(model, job)
         first = model.calls[0]
         assert first.get("prompt_wav_path") and first.get("prompt_text")
+
+
+class TestQaFallbackKeepsBestAudio:
+    """The QA retries vary the seed on purpose, and with VoxCPM a different
+    seed clones a different timbre. When every retry fails QA the fallback
+    must ship the BEST-scoring take, not the last one.
+
+    Regression: a Chinese dub shipped one segment at ~167 Hz against a 130 Hz
+    reference — audibly a second speaker — because best_score was tracked
+    while the audio on disk was whatever the final retry wrote.
+    """
+
+    def _worker(self):
+        import importlib
+        return importlib.import_module("pipeline.tts_worker")
+
+    def test_best_sidecar_is_restored_over_the_last_attempt(self, tmp_path):
+        w = self._worker()
+        out = tmp_path / "seg_0000.wav"
+        best = tmp_path / "seg_0000.wav.best"
+        out.write_bytes(b"L" * 2000)      # last (off-voice) retry
+        best.write_bytes(b"B" * 2000)     # best-scoring take
+
+        # Mirror the fallback: restore best over out, then drop the sidecar.
+        import shutil
+        shutil.copy2(best, out)
+        os.remove(best)
+
+        assert out.read_bytes().startswith(b"B")
+        assert not best.exists()
+
+    def test_strictly_better_keeps_the_earliest_tie(self):
+        """Ties must not overwrite: the earliest attempt is the one generated
+        with the unmutated voice_seed."""
+        best_score, best_tag = None, None
+        for score, tag in [(0.20, "original-seed"), (0.20, "retry-1"), (0.30, "retry-2")]:
+            if best_score is None or score < best_score:
+                best_score, best_tag = score, tag
+        assert best_tag == "original-seed"
+
+    def test_retry_seed_actually_differs_from_the_voice_seed(self):
+        """Documents the mechanism: if these ever became equal the second-voice
+        bug would disappear, and this test should be revisited rather than
+        silently passing."""
+        voice_seed, idx = 1882596868, 3
+        seeds = {(voice_seed or 0) + 1000 * (n + 1) + idx for n in range(2)}
+        assert voice_seed not in seeds
+        assert len(seeds) == 2

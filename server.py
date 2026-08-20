@@ -184,7 +184,7 @@ from pipeline.models import (
     get_system_status, MODEL_CATALOG, USE_LM_STUDIO,
     LM_STUDIO_MODELS_ENDPOINT,
 )
-from pipeline.vad import apply_vad_filter
+from pipeline.vad import apply_vad_filter, remap_segments as vad_remap_segments
 from pipeline.metrics import (
     stage_timer, load_metrics, gpu_backend, gpu_snapshot,
 )
@@ -1796,10 +1796,15 @@ async def _stage_extract(job, work, ctx, update, perf):
             vad_start = time.time()
             vad_out = str(work / "audio_16k_vad.wav")
             update(progress=16, step_detail="Filtering non-speech regions...")
-            audio_16k, speech_ratio = await _blocking(
+            audio_16k, speech_ratio, vad_intervals = await _blocking(
                 apply_vad_filter, audio_16k, vad_out,
                 threshold=cfg.vad_threshold,
             )
+            # The filter concatenates speech regions, so whisper's timestamps
+            # come back on a compressed timeline. Keep the intervals so
+            # _stage_transcribe can map them back onto the video's timeline —
+            # without this the dub ends as early as the silence removed.
+            ctx["vad_intervals"] = vad_intervals
             perf["speech_ratio"] = round(speech_ratio, 3)
             log.info(
                 f"[perf] · vad took {time.time()-vad_start:.1f}s "
@@ -1863,6 +1868,18 @@ async def _stage_transcribe(job, work, ctx, update, perf):
 
     effective_src = detected_lang if source_lang == "auto" else source_lang
     ctx["segments"] = _serialize_segments(segments)
+    # Undo the VAD timeline compression before anything downstream sees these
+    # times. Diarization, TTS placement and the SRT all assume the video's own
+    # timeline; skipping this shifts every segment earlier by the silence cut
+    # before it, so a dub of a 60s clip whose speech starts at 14s finishes
+    # around the 30s mark and drifts out of sync the whole way.
+    vad_intervals = ctx.get("vad_intervals")
+    if vad_intervals:
+        vad_remap_segments(ctx["segments"], vad_intervals)
+        log.info(
+            f"[vad] remapped {len(ctx['segments'])} segments onto the original "
+            f"timeline (last end {ctx['segments'][-1]['end']:.1f}s)"
+        )
     ctx["effective_src"] = effective_src
     ctx["source_lang_detected"] = detected_lang
     ctx["whisper_model"] = whisper_model

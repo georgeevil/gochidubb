@@ -44,6 +44,7 @@ display progress:
 import json
 import os
 import random as _random
+import shutil
 import sys
 import time
 import traceback
@@ -276,6 +277,7 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     best_score = None       # best REAL (measured) score seen so far
     best_transcript = ""
     best_diag = None
+    best_path = out_path + ".best"   # audio behind best_score, see _run_qa
     attempts = 0            # QA-checked generate attempts for this segment
 
     def _run_qa(check_fn):
@@ -285,10 +287,22 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
         )
         attempts += 1
         measured = bool(diag.get("measured", score is not None))
+        # Strictly-better keeps the EARLIEST attempt on a tie, which is the
+        # one generated with the unmutated voice_seed — the retries below
+        # deliberately change the seed, and with VoxCPM a different seed is a
+        # different timbre.
         if measured and (best_score is None or score < best_score):
             best_score = score
             best_transcript = transcript
             best_diag = diag
+            # Keep the audio too, not just the score. Every attempt overwrites
+            # out_path, so without this the fallback ships the LAST retry while
+            # reporting the BEST retry's score — and the last retry is the one
+            # furthest from the original voice.
+            try:
+                shutil.copy2(out_path, best_path)
+            except Exception as e:
+                _log_event(event="best_copy_failed", idx=seg["idx"], error=str(e))
         _log_event(event="qa_check", idx=seg["idx"], tier=_current_tier,
                    score=round(score, 3) if score is not None else None,
                    measured=measured,
@@ -356,13 +370,37 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
 
     # All tiers + retries exhausted; if we produced *something*, accept it
     # with a warning. The alternative would be silence which is worse.
+    #
+    # Ship the BEST attempt, not the last one. The QA retries above vary the
+    # seed on purpose, and with VoxCPM a different seed clones a noticeably
+    # different voice — so accepting the final retry means a segment that both
+    # failed QA *and* speaks in a stranger's voice, in the middle of an
+    # otherwise consistent dub. best_path holds the audio that earned
+    # best_score; restoring it keeps the reported score and the shipped audio
+    # describing the same thing.
+    restored = False
+    if os.path.exists(best_path) and os.path.getsize(best_path) > 1000:
+        try:
+            shutil.copy2(best_path, out_path)
+            restored = True
+        except Exception as e:
+            _log_event(event="best_restore_failed", idx=seg["idx"], error=str(e))
+    try:
+        if os.path.exists(best_path):
+            os.remove(best_path)
+    except Exception:
+        pass
+
     if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
         _record_qa(seg, best_score, best_transcript,
                    best_diag or {"measured": best_score is not None},
                    attempts, 0)
         _log_event(event="qa_fallback", idx=seg["idx"],
                    score=round(best_score, 3) if best_score is not None else None,
-                   msg="all retries failed QA, using last output")
+                   restored_best=restored,
+                   msg="all retries failed QA, using best-scoring output"
+                       if restored else
+                       "all retries failed QA, using last output (no best kept)")
         # Use the tier from the final attempt; log as tier 0 to mark "degraded"
         return (True, 0, None)
 
@@ -426,6 +464,15 @@ def _process_job(model, job):
                 target_lang=target_lang,
                 enable_qa=enable_qa,
             )
+            # _synth_one keeps the best-scoring take beside the output while
+            # it retries; drop it here so it is cleaned up on every path,
+            # including the ones that raise.
+            try:
+                _best = seg["output_path"] + ".best"
+                if os.path.exists(_best):
+                    os.remove(_best)
+            except Exception:
+                pass
             if success:
                 ok += 1
                 tier_stats[tier] = tier_stats.get(tier, 0) + 1
