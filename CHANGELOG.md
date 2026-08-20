@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Lip-sync could never actually run.** The Wav2Lip wiring has been complete
+  for a while — discovery, subprocess call, remux, an auto-hook in the queue
+  worker, a UI toggle — but three things stopped any install from working.
+  `_find_wav2lip_setup()` hard-coded `sys.executable` behind a comment
+  promising a `GOCHIDUBB_WAV2LIP_PYTHON` override that was never read, so
+  Wav2Lip could only ever run under our interpreter; the install guide told
+  you to `pip install librosa==0.7.0 numba==0.48` into that same venv, which
+  would break VoxCPM and faster-whisper and cannot be installed on Python 3.11
+  regardless (numpy 1.17 fails to build); and the guide emitted Windows
+  backslash paths plus the wrong `face-detection` PyPI package — Wav2Lip
+  vendors its own. The override is now honoured, `GET /api/lip_sync/status`
+  reports which interpreter was chosen and warns when it fell back to ours,
+  and the guide points at the new setup script.
+
+### Added
+- **`tools/setup_wav2lip.py`** — clones Wav2Lip, builds it an isolated venv on
+  current dependencies rather than the 2020 pins, and applies the two patches
+  that need applying: upstream `inference.py` chooses between CUDA and CPU
+  only, which silently means CPU on Apple Silicon, and `audio.py` calls
+  `librosa.filters.mel` positionally, which librosa made keyword-only in 0.10.
+  Both are idempotent and refuse to apply if upstream has moved. The ~400 MB
+  generator checkpoint stays opt-in (`--download-checkpoint`); the s3fd face
+  weights fetch themselves on first run.
+
 ### Changed
 - **`voxcpm` is now pinned to `>=2.0.3`, and the Python range is 3.10–3.14.**
   The old `>=2.0.0` floor allowed a build where reference clips are trimmed
