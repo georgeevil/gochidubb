@@ -20,9 +20,16 @@ echo -e "${N}"
 step "Checking Python"
 PY_V=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
 PY_MAJ=${PY_V%.*}; PY_MIN=${PY_V#*.}
-if [[ "$PY_MAJ" != "3" || "$PY_MIN" -lt 10 || "$PY_MIN" -gt 12 ]]; then
-    err "Python $PY_V — need 3.10-3.12 (VoxCPM2 constraint)"
+# 3.10 is a real floor (voxcpm and torch both declare >=3.10). The ceiling is
+# 3.14, and it comes from `spaces` (<3.15), not from VoxCPM — which declares no
+# upper bound at all. 3.13+ resolves the same dependency set as 3.12, but has
+# had less real-world use here, so it warns rather than blocks.
+if [[ "$PY_MAJ" != "3" || "$PY_MIN" -lt 10 || "$PY_MIN" -gt 14 ]]; then
+    err "Python $PY_V — need 3.10-3.14"
     exit 1
+fi
+if [[ "$PY_MIN" -gt 12 ]]; then
+    warn "Python $PY_V works but is less tested here — 3.11 or 3.12 if you hit trouble"
 fi
 ok "Python $PY_V"
 
@@ -91,8 +98,12 @@ pip install -q transformers==4.36.0 2>/dev/null || warn "transformers install fa
 # ── VoxCPM2 ──
 step "VoxCPM2 (voice cloning)"
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    warn "macOS detected — VoxCPM2 may be unstable. Recommend F5-TTS instead."
-    read -p "$(echo -e ${Y}'Install F5-TTS instead? (more stable on macOS) [Y/n]: '${N})" -n 1 -r; echo ""
+    # voxcpm 2.0.3 fixed the MPS audio-quality problems this recommendation was
+    # written for, but that has not been re-confirmed on Apple Silicon here, so
+    # the safer option stays the default. See CLD-188.
+    warn "macOS detected — VoxCPM2's MPS issues were fixed in voxcpm 2.0.3, but"
+    warn "that is unconfirmed on Apple Silicon. F5-TTS remains the safe default."
+    read -p "$(echo -e ${Y}'Install F5-TTS instead? (the tested path on macOS) [Y/n]: '${N})" -n 1 -r; echo ""
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         pip install -q f5-tts 2>/dev/null && ok "F5-TTS installed" || warn "F5-TTS install failed"
     else

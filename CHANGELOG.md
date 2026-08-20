@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`voxcpm` is now pinned to `>=2.0.3`, and the Python range is 3.10–3.14.**
+  The old `>=2.0.0` floor allowed a build where reference clips are trimmed
+  twice (voxcpm removed its own auto-trim in 2.0.1; the pipeline already trims
+  in `_REF_FILTER`), and missed 2.0.3's fixes for MPS audio quality, CUDA graph
+  issues and file-descriptor leaks — the last of which a long-running server
+  hits. The Python range was described in four places as a "VoxCPM2 constraint"
+  capped at 3.12; VoxCPM declares no upper bound, the real ceiling is `spaces`
+  at `<3.15`, and 3.13 resolves the identical dependency set as 3.12 with
+  wheels available through 3.14. The installers now accept 3.10–3.14, warning
+  rather than blocking above 3.12, and the macOS/MPS recommendation says what
+  is actually known rather than repeating a pre-2.0.3 claim.
 - **The Studio UI is redesigned around an agent-first workflow** (concept 1a,
   `docs/saas-redesign-plan.md`). The Agent feed — a chronological stream of
   runs, tool calls and system events — is the new home screen; the rail groups

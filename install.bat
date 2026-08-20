@@ -44,7 +44,7 @@ if "%PY_CMD%"=="" (
 if "%PY_CMD%"=="" (
     echo.
     echo  [!] Python not found (or Microsoft Store stub detected).
-    echo      Please install Python 3.10, 3.11, or 3.12 from:
+    echo      Please install Python 3.10 - 3.14 from:
     echo      https://www.python.org/downloads/
     echo.
     echo      [IMPORTANT] During install, check:
@@ -61,20 +61,25 @@ if "%PY_CMD%"=="" (
 for /f "tokens=2" %%v in ('%PY_CMD% --version 2^>^&1') do set PYVER=%%v
 echo      Python !PYVER! found  (using: %PY_CMD%)
 
-:: Validate Python version (3.10-3.12)
+:: Validate Python version (3.10-3.14). The ceiling is `spaces` (<3.15), not
+:: VoxCPM, which declares no upper bound. 3.13+ resolves the same dependency
+:: set as 3.12 but is less worn here, so it warns instead of blocking.
 for /f "tokens=1,2 delims=." %%a in ("!PYVER!") do (
     set PYMAJ=%%a
     set PYMIN=%%b
 )
 if !PYMAJ! NEQ 3 goto bad_python
 if !PYMIN! LSS 10 goto bad_python
-if !PYMIN! GTR 12 goto bad_python
+if !PYMIN! GTR 14 goto bad_python
+if !PYMIN! GTR 12 (
+    echo  [!] Python !PYVER! works but is less tested here.
+    echo      Use 3.11 or 3.12 if you hit trouble.
+)
 goto python_ok
 
 :bad_python
 echo.
-echo  [!] Python !PYVER! is not supported. Need 3.10, 3.11, or 3.12.
-echo      VoxCPM2 requires Python 3.10 - 3.12.
+echo  [!] Python !PYVER! is not supported. Need Python 3.10 - 3.14.
 echo.
 echo      Download compatible version: https://www.python.org/downloads/release/python-3120/
 pause

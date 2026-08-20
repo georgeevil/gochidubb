@@ -218,11 +218,19 @@ async def get_model_catalog() -> Dict[str, List[Dict]]:
 def check_python():
     major, minor = sys.version_info.major, sys.version_info.minor
     version = f"{major}.{minor}.{sys.version_info.micro}"
-    ok = major == 3 and 10 <= minor <= 12
+    # The 3.14 ceiling is `spaces` (<3.15), not VoxCPM — which declares only
+    # >=3.10. 3.13+ resolves the same dependency set as 3.12 but is newer here,
+    # so it reports ok with a caveat rather than failing the check.
+    ok = major == 3 and 10 <= minor <= 14
+    note = ""
+    if not ok:
+        note = "Python 3.10-3.14 required"
+    elif minor > 12:
+        note = f"Python {major}.{minor} works but is less tested — 3.11/3.12 are the well-worn path"
     return {
         "ok": ok,
         "version": version,
-        "note": "" if ok else "VoxCPM2 requires Python 3.10-3.12",
+        "note": note,
     }
 
 
