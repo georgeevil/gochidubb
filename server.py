@@ -4521,6 +4521,67 @@ def _find_drawtext_font() -> str:
     return ""
 
 
+_FILTER_CACHE: dict = {}
+
+
+def _ffmpeg_has_filter(name: str) -> bool:
+    """Whether this ffmpeg build ships a given filter.
+
+    `drawtext` needs libfreetype, and plenty of builds skip it — Homebrew's
+    ffmpeg 8.x on macOS is one, which turns the showcase stitch into
+    "No such filter: 'drawtext'" after every dub has already been rendered.
+    Checked once and cached; `ffmpeg -filters` costs ~50ms.
+    """
+    if name in _FILTER_CACHE:
+        return _FILTER_CACHE[name]
+    import subprocess as _sp   # module-level import is not available here
+    ok = False
+    try:
+        r = _sp.run(["ffmpeg", "-hide_banner", "-filters"],
+                    capture_output=True, text=True, timeout=20)
+        # Lines look like " ..C drawtext V->V  Draw text on top of video."
+        ok = any(ln.split()[1:2] == [name]
+                 for ln in r.stdout.splitlines() if len(ln.split()) > 1)
+    except Exception as e:
+        log.warning(f"[showcase] could not probe ffmpeg filters: {e}")
+    _FILTER_CACHE[name] = ok
+    return ok
+
+
+def _render_label_png(text: str, dest: Path, font_path: str = "") -> bool:
+    """Draw the showcase language label to an RGBA PNG.
+
+    The fallback for builds without `drawtext`. Pillow does the text
+    rendering, so ffmpeg only has to `overlay` a bitmap — a filter every
+    build has. Deliberately mirrors the drawtext styling (22px white on a
+    black box at 55%, 8px padding) so the two paths look the same.
+
+    Pillow is not a declared dependency — it arrives via matplotlib — so a
+    missing import is an expected outcome, not an error.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+    try:
+        size, pad = 22, 8
+        try:
+            font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default(size)
+        except Exception:
+            font = ImageFont.load_default(size)
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        box = probe.textbbox((0, 0), text, font=font)
+        w, h = box[2] - box[0], box[3] - box[1]
+        img = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 140))
+        ImageDraw.Draw(img).text((pad - box[0], pad - box[1]), text,
+                                 font=font, fill=(255, 255, 255, 255))
+        img.save(dest)
+        return True
+    except Exception as e:
+        log.warning(f"[showcase] label render failed: {e}")
+        return False
+
+
 def _snap_boundaries_to_sentences(segments: list, total_dur: float, n_parts: int) -> list:
     """Compute n_parts contiguous slices that together cover [0, total_dur].
 
@@ -4858,6 +4919,26 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
     # ffmpeg filter syntax requires escaped colons on Windows paths
     font_arg = font_path.replace("\\", "/").replace(":", r"\:") if font_path else ""
 
+    # Which labelling path this build can support. drawtext needs libfreetype;
+    # when it is absent we render the same label with Pillow and overlay it,
+    # which needs no special ffmpeg build. Losing the labels entirely is the
+    # last resort — a stitched reel without captions still beats an error
+    # after every dub has already been rendered.
+    use_drawtext = _ffmpeg_has_filter("drawtext")
+    label_pngs: dict = {}
+    if not use_drawtext:
+        for idx, (job, _s, _e) in enumerate(per_dub_ranges):
+            code = (job.get("target_lang") or "").upper()
+            png = showcase_dir / f"_label_{idx}_{code or 'x'}.png"
+            if _render_label_png(f"· {code} ·", png, font_path):
+                label_pngs[idx] = png
+        if label_pngs:
+            log.info(f"[showcase] ffmpeg has no drawtext filter — overlaying "
+                     f"{len(label_pngs)} rendered label(s) instead")
+        else:
+            log.warning("[showcase] no drawtext filter and no Pillow — "
+                        "stitching without language labels")
+
     filter_parts = []
     inputs = []
     for idx, (job, start, end) in enumerate(per_dub_ranges):
@@ -4870,18 +4951,22 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
         # Escape single quotes and special chars for drawtext text= field
         text_safe = label.replace("'", r"\'")
 
-        drawtext = (
-            f"drawtext="
-            + (f"fontfile='{font_arg}':" if font_arg else "")
-            + f"text='{text_safe}':"
-            "fontsize=22:fontcolor=white:"
-            "box=1:boxcolor=black@0.55:boxborderw=8:"
-            "x=w-tw-24:y=24"
-        )
+        if use_drawtext:
+            drawtext = (
+                f"drawtext="
+                + (f"fontfile='{font_arg}':" if font_arg else "")
+                + f"text='{text_safe}':"
+                "fontsize=22:fontcolor=white:"
+                "box=1:boxcolor=black@0.55:boxborderw=8:"
+                "x=w-tw-24:y=24"
+            )
+            label_step = f",{drawtext}"
+        else:
+            label_step = ""   # overlay is wired up after all inputs are known
 
         filter_parts.append(
             f"[{idx}:v]trim=start={start:.3f}:end={end:.3f},"
-            f"setpts=PTS-STARTPTS,{drawtext}[v{idx}]"
+            f"setpts=PTS-STARTPTS{label_step}[v{idx}]"
         )
         # apad+atrim guarantees the audio is EXACTLY seg_dur long: if the
         # dub's audio stream ends before `end` (TTS finished early) apad
@@ -4895,8 +4980,22 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
             f"atrim=duration={seg_dur:.3f}[a{idx}]"
         )
 
+    # Overlay path: the PNGs are appended after every video input, so their
+    # stream indices start at n. Each label is composited onto its own
+    # trimmed segment at the same top-right position drawtext would use.
+    if label_pngs:
+        png_order = sorted(label_pngs)
+        for slot, idx in enumerate(png_order):
+            inputs.extend(["-i", str(label_pngs[idx])])
+            filter_parts.append(
+                f"[v{idx}][{n + slot}:v]overlay=x=W-w-24:y=24:"
+                f"format=auto[v{idx}L]"
+            )
     # Concat all trimmed pieces
-    concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(n))
+    concat_inputs = "".join(
+        f"[v{i}L][a{i}]" if i in label_pngs else f"[v{i}][a{i}]"
+        for i in range(n)
+    )
     filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=1[vout][aout]")
     filter_complex = ";".join(filter_parts)
 
@@ -4923,6 +5022,13 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
         except Exception:
             pass
         return
+    finally:
+        # The rendered label bitmaps were only ever ffmpeg inputs.
+        for _png in label_pngs.values():
+            try:
+                _png.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # Write a manifest for the UI
     try:
