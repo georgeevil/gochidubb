@@ -341,20 +341,44 @@ class TestQaFallbackKeepsBestAudio:
         import importlib
         return importlib.import_module("pipeline.tts_worker")
 
-    def test_best_sidecar_is_restored_over_the_last_attempt(self, tmp_path):
-        w = self._worker()
+    def test_first_attempt_wins_over_best_and_last(self, tmp_path):
+        """QA scores CER and language, never timbre — so the best-scoring take
+        can still be the wrong voice. Measured: a degraded Chinese segment
+        shipped at 225 Hz against a 133 Hz reference while being the better
+        scoring of its two takes. Only the first attempt is guaranteed to use
+        the unmutated voice_seed, so it is the one that matches the rest of
+        the dub."""
+        import shutil
         out = tmp_path / "seg_0000.wav"
+        first = tmp_path / "seg_0000.wav.first"
         best = tmp_path / "seg_0000.wav.best"
-        out.write_bytes(b"L" * 2000)      # last (off-voice) retry
+        out.write_bytes(b"L" * 2000)      # last retry
+        first.write_bytes(b"F" * 2000)    # original-seed take
         best.write_bytes(b"B" * 2000)     # best-scoring take
 
-        # Mirror the fallback: restore best over out, then drop the sidecar.
-        import shutil
-        shutil.copy2(best, out)
-        os.remove(best)
+        # Mirror the fallback preference order: first, then best.
+        for path in (first, best):
+            if path.exists():
+                shutil.copy2(path, out)
+                break
+        for path in (first, best):
+            if path.exists():
+                os.remove(path)
 
+        assert out.read_bytes().startswith(b"F"), "first attempt must win"
+        assert not first.exists() and not best.exists()
+
+    def test_best_is_used_when_the_first_take_is_missing(self, tmp_path):
+        import shutil
+        out = tmp_path / "seg_0000.wav"
+        best = tmp_path / "seg_0000.wav.best"
+        out.write_bytes(b"L" * 2000)
+        best.write_bytes(b"B" * 2000)
+        for path in (tmp_path / "seg_0000.wav.first", best):
+            if path.exists():
+                shutil.copy2(path, out)
+                break
         assert out.read_bytes().startswith(b"B")
-        assert not best.exists()
 
     def test_strictly_better_keeps_the_earliest_tie(self):
         """Ties must not overwrite: the earliest attempt is the one generated
