@@ -7,8 +7,10 @@ from app.config import cfg
 from pipeline.downloader import (
     _cookie_args,
     _find_ytdlp,
+    _is_403,
     _parse_probe_json,
     curate_metadata,
+    download_video,
     probe_metadata,
 )
 
@@ -99,7 +101,10 @@ class TestCurateMetadata:
         assert len(m["tags"]) == 20                   # capped at 20
         assert m["language"] == "en"
         assert m["webpage_url"].endswith("dQw4w9WgXcQ")
-        assert len(m["description"]) == 2000          # capped at 2000 chars
+        # Kept whole: the description is what a user copies into a re-upload,
+        # and the old 2000-char cap silently truncated it. The 10k bound is
+        # only a runaway guard, well above YouTube's own 5000-char limit.
+        assert len(m["description"]) == 3000
         assert m["is_music"] is False
 
     def test_uploader_fallback_for_channel(self):
@@ -218,3 +223,163 @@ class TestProbeMetadataNonUrl:
 
     def test_none_source(self):
         assert probe_metadata(None) is None
+
+
+# ── HTTP 403 fallback ────────────────────────────────────────────────
+#
+# YouTube serves 403 to yt-dlp's default player client for videos that
+# download fine through `web_embedded`. These pin down when we reach for that
+# escape hatch, and — just as importantly — when we don't.
+
+class TestIs403:
+    @pytest.mark.parametrize("text", [
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        "ERROR: fragment 1 not found, unable to continue (403 Forbidden)",
+        "HTTP Error 403",
+    ])
+    def test_recognises_a_real_403(self, text):
+        assert _is_403(text) is True
+
+    @pytest.mark.parametrize("text", [
+        "ERROR: Video unavailable",
+        "ERROR: HTTP Error 404: Not Found",
+        "",
+    ])
+    def test_ignores_other_failures(self, text):
+        assert _is_403(text) is False
+
+    def test_does_not_fire_on_an_unrelated_403(self):
+        # A byte count or fragment index containing "403" is not an error.
+        assert _is_403("Downloaded 403 fragments successfully") is False
+
+    def test_reads_stdout_as_well_as_stderr(self):
+        assert _is_403("", "HTTP Error 403: Forbidden") is True
+
+
+class _Result:
+    def __init__(self, returncode, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+class TestDownload403Fallback:
+    """download_video() retries through web_embedded — but only for a 403,
+    and without giving up the preferred format to do it."""
+
+    HQ = ("bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
+          "best[height<=1080][ext=mp4]/best")
+
+    def _run(self, tmp_path, responder):
+        """Drive download_video with a fake subprocess; return the commands."""
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            # The success path checks the file exists afterwards.
+            (tmp_path / "source_video.mp4").write_bytes(b"x")
+            return responder(len(calls), cmd)
+
+        with patch("pipeline.downloader.subprocess.run", side_effect=fake_run):
+            download_video("https://youtu.be/abc", str(tmp_path))
+        return calls
+
+    def test_no_retry_when_the_first_attempt_works(self, tmp_path):
+        calls = self._run(tmp_path, lambda n, cmd: _Result(0))
+        assert len(calls) == 1
+        assert "web_embedded" not in " ".join(calls[0])
+
+    def test_403_retries_with_web_embedded(self, tmp_path):
+        calls = self._run(tmp_path, lambda n, cmd: (
+            _Result(0) if "web_embedded" in " ".join(cmd)
+            else _Result(1, "HTTP Error 403: Forbidden")))
+        assert len(calls) == 2
+        assert "youtube:player_client=web_embedded" in calls[1]
+
+    def test_403_retry_keeps_the_preferred_format(self, tmp_path):
+        # A 403 is an access problem, not a format problem — degrading to
+        # best[ext=mp4] would hand back a worse rendition of a 1080p video.
+        calls = self._run(tmp_path, lambda n, cmd: (
+            _Result(0) if "web_embedded" in " ".join(cmd)
+            else _Result(1, "HTTP Error 403: Forbidden")))
+        assert self.HQ in calls[1]
+
+    def test_non_403_failure_degrades_format_without_web_embedded(self, tmp_path):
+        calls = self._run(tmp_path, lambda n, cmd: (
+            _Result(0) if n == 2 else _Result(1, "ERROR: format not available")))
+        assert len(calls) == 2
+        assert "web_embedded" not in " ".join(calls[1])
+        assert self.HQ not in calls[1]          # fell back to the simple format
+
+
+class TestProbe403Fallback:
+    """probe_metadata() had no fallback at all, so a 403 left the job with no
+    title or description."""
+
+    def test_403_retries_with_web_embedded(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "web_embedded" in " ".join(cmd):
+                r = _Result(0)
+                r.stdout = '{"id": "abc", "title": "Recovered"}'
+                return r
+            return _Result(1, "ERROR: HTTP Error 403: Forbidden")
+
+        with patch("pipeline.downloader.subprocess.run", side_effect=fake_run):
+            info = probe_metadata("https://youtu.be/abc")
+
+        assert len(calls) == 2
+        assert "youtube:player_client=web_embedded" in calls[1]
+        assert info["title"] == "Recovered"
+
+    def test_no_retry_on_a_non_403_failure(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return _Result(1, "ERROR: Video unavailable")
+
+        with patch("pipeline.downloader.subprocess.run", side_effect=fake_run):
+            assert probe_metadata("https://youtu.be/abc") is None
+        assert len(calls) == 1
+
+
+class TestChapterCapture:
+    """curate_metadata() carries chapter marks so a dub can reproduce the
+    source's structure in its own language."""
+
+    def test_chapters_are_captured_with_start_and_title(self):
+        out = curate_metadata({
+            "id": "x", "title": "T",
+            "chapters": [
+                {"start_time": 0, "end_time": 60, "title": "Intro"},
+                {"start_time": 60, "end_time": 90, "title": "Main"},
+            ],
+        })
+        assert out["chapters"] == [
+            {"start": 0, "title": "Intro"},
+            {"start": 60, "title": "Main"},
+        ]
+
+    def test_untitled_and_malformed_chapters_are_dropped(self):
+        out = curate_metadata({
+            "id": "x", "title": "T",
+            "chapters": [
+                {"start_time": 0, "title": "   "},   # blank title
+                "not-a-dict",
+                {"start_time": 30, "title": "Real"},
+            ],
+        })
+        assert out["chapters"] == [{"start": 30, "title": "Real"}]
+
+    def test_missing_chapters_is_an_empty_list_not_none(self):
+        assert curate_metadata({"id": "x", "title": "T"})["chapters"] == []
+
+    def test_description_is_no_longer_clipped_at_2000(self):
+        # The description is what a user copies into the re-upload, so a
+        # 3000-char one has to survive whole.
+        long_desc = "d" * 3000
+        out = curate_metadata({"id": "x", "title": "T", "description": long_desc})
+        assert len(out["description"]) == 3000

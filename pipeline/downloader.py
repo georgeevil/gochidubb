@@ -64,6 +64,24 @@ def _cookie_args() -> list:
     return args
 
 
+# YouTube periodically serves HTTP 403 to yt-dlp's default player client for
+# videos that are perfectly downloadable through another one. The `web_embedded`
+# client is the reliable escape hatch — it is what a manual
+#     yt-dlp --extractor-args "youtube:player_client=web_embedded"
+# does, and it costs nothing to retry with because we only reach for it after a
+# 403 has already been seen.
+_PLAYER_CLIENT_FALLBACK = ["--extractor-args", "youtube:player_client=web_embedded"]
+
+
+def _is_403(*outputs: str) -> bool:
+    """True when yt-dlp output looks like an HTTP 403 from the extractor."""
+    blob = " ".join(o or "" for o in outputs).lower()
+    return (
+        "403" in blob
+        and ("forbidden" in blob or "http error 403" in blob or "status code 403" in blob)
+    ) or "http error 403" in blob
+
+
 def _parse_probe_json(stdout: str):
     """Parse `--dump-single-json` output. Returns dict or None — never raises."""
     try:
@@ -84,16 +102,26 @@ def probe_metadata(source: str):
     ):
         return None
 
-    cmd = _base_cmd() + [
+    probe_flags = [
         "--dump-single-json",
         "--skip-download",
         "--no-playlist",
         "--no-warnings",
         "--no-check-certificates",
-    ] + _cookie_args() + [source]
+    ]
+
+    def _run(extra):
+        cmd = _base_cmd() + probe_flags + extra + _cookie_args() + [source]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = _run([])
+        # A 403 here is why metadata silently went missing on some videos —
+        # the probe had no fallback at all, so the job ran with no title.
+        if result.returncode != 0 and _is_403(result.stderr, result.stdout):
+            log.info(f"[probe] 403 for {source} — retrying with "
+                     f"player_client=web_embedded")
+            result = _run(_PLAYER_CLIENT_FALLBACK)
     except subprocess.TimeoutExpired:
         log.warning(f"[probe] Metadata probe timed out (60s): {source}")
         return None
@@ -131,6 +159,17 @@ def curate_metadata(info: dict) -> dict:
         or "official music video" in title_low
     )
     description = info.get("description") or ""
+    # Chapter marks, so a dub can carry the same structure as the source.
+    # yt-dlp gives {start_time, end_time, title}; only start + title survive
+    # here because that is all a description block needs.
+    chapters = []
+    for ch in (info.get("chapters") or []):
+        if not isinstance(ch, dict):
+            continue
+        title_ch = (ch.get("title") or "").strip()
+        if not title_ch:
+            continue
+        chapters.append({"start": ch.get("start_time"), "title": title_ch})
     return {
         "video_id": info.get("id"),
         "title": info.get("title"),
@@ -145,7 +184,11 @@ def curate_metadata(info: dict) -> dict:
         "tags": tags[:20],
         "language": info.get("language"),
         "webpage_url": info.get("webpage_url"),
-        "description": description[:2000],
+        # Kept whole (bounded well above YouTube's 5000-char limit) because
+        # this is the text a user copies into the re-upload, and a truncated
+        # description is worse than none.
+        "description": description[:10000],
+        "chapters": chapters,
         "is_music": is_music,
     }
 
@@ -182,30 +225,44 @@ def download_video(source: str, output_dir: str, info: dict | None = None) -> st
     base_cmd = _base_cmd()
     cookie_args = _cookie_args()
 
-    cmd = base_cmd + [
-        "--no-playlist",
+    preferred_fmt = [
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
         "--merge-output-format", "mp4",
+    ]
+    simple_fmt = ["-f", "best[ext=mp4]/best"]
+    common = [
+        "--no-playlist",
         "-o", output_path,
         "--no-check-certificates",
         "--retries", "3",
         "--socket-timeout", "30",
         "--no-warnings",
-    ] + cookie_args + [source]
+    ]
+
+    def _run(fmt, extra=()):
+        cmd = base_cmd + common + fmt + list(extra) + cookie_args + [source]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
 
     log.info(f"Downloading: {source}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+    result = _run(preferred_fmt)
+
+    # A 403 is an access problem, not a format problem, so retry the *preferred*
+    # format through the web_embedded player client before degrading quality.
+    # Dropping to `best[ext=mp4]` first would either fail the same way or hand
+    # back a worse rendition for a video we could have had at 1080p.
+    if result.returncode != 0 and _is_403(result.stderr, result.stdout):
+        log.warning(f"[download] 403 for {source} — retrying with "
+                    f"player_client=web_embedded")
+        result = _run(preferred_fmt, _PLAYER_CLIENT_FALLBACK)
 
     if result.returncode != 0:
         log.warning(f"First attempt failed: {result.stderr[:200]}")
-        # Fallback with simpler format
-        cmd_fallback = base_cmd + [
-            "--no-playlist",
-            "-f", "best[ext=mp4]/best",
-            "-o", output_path,
-            "--no-check-certificates",
-        ] + cookie_args + [source]
-        result = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=1200)
+        result = _run(simple_fmt)
+        # The simpler format can hit the same 403; give it the same escape.
+        if result.returncode != 0 and _is_403(result.stderr, result.stdout):
+            log.warning("[download] 403 on the fallback format too — "
+                        "retrying it with player_client=web_embedded")
+            result = _run(simple_fmt, _PLAYER_CLIENT_FALLBACK)
         if result.returncode != 0:
             raise RuntimeError(f"YouTube download failed: {result.stderr[:300]}")
 
