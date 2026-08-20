@@ -3430,6 +3430,90 @@ function HistoryView({ jobs, system, voicePresets, publishPending = [],
   const [publishOnly, setPublishOnly] = useState(false);
   const pendingIds = useMemo(() => new Set(publishPending.map(p => p.job_id)), [publishPending]);
   const shown = publishOnly ? jobs.filter(j => pendingIds.has(j.id)) : jobs;
+
+  // ── Selection & delete ──────────────────────────────────────────
+  // `visible` is computed once and reused by both the render and the
+  // shift-range maths, so a row's index always means the same thing in
+  // both places.
+  const visible = shown.slice(0, 20);
+  const [selected, setSelected] = useState(() => new Set());
+  const [anchor, setAnchor] = useState(null);   // index of the last plain click
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  // Jobs still writing to their own output directory can't be deleted —
+  // the server refuses, and saying so up front beats a per-row error after.
+  const LIVE = ['running', 'processing', 'queued', 'downloading'];
+  const isLive = (j) => LIVE.includes(j.status);
+
+  const selectedList = visible.filter(j => selected.has(j.id));
+  const liveSelected = selectedList.filter(isLive).length;
+
+  // Drop ids that have scrolled out of view or been deleted elsewhere, so
+  // the counter never claims more than the list can act on.
+  useEffect(() => {
+    setSelected(prev => {
+      const ids = new Set(visible.map(j => j.id));
+      const next = new Set([...prev].filter(id => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [jobs, publishOnly]);
+
+  const toggle = (idx, id, shiftKey) => {
+    const extending = shiftKey && anchor !== null;
+    // The anchor only moves on a plain click, and it is set here rather than
+    // inside the setSelected updater — React may run an updater more than
+    // once, and a state setter is not a safe thing to do in one.
+    if (!extending) setAnchor(idx);
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (extending) {
+        // Shift extends from the anchor and applies the value the clicked row
+        // is about to take, which is how file managers behave — a range drag
+        // can deselect as well as select.
+        const [lo, hi] = anchor < idx ? [anchor, idx] : [idx, anchor];
+        const turningOn = !prev.has(id);
+        for (let i = lo; i <= hi; i++) {
+          if (!visible[i]) continue;
+          if (turningOn) next.add(visible[i].id); else next.delete(visible[i].id);
+        }
+      } else if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+    setConfirming(false);
+  };
+
+  const allSelected = visible.length > 0 && selected.size === visible.length;
+  const selectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(visible.map(j => j.id)));
+    setAnchor(null); setConfirming(false);
+  };
+
+  const doDelete = async () => {
+    setBusy(true); setNote('');
+    try {
+      const fd = new FormData();
+      fd.append('job_ids', [...selected].join(','));
+      const r = await fetch('/api/jobs/bulk_delete', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.error) { setNote(d.error); return; }
+      const parts = [`Deleted ${d.deleted.length} job${d.deleted.length === 1 ? '' : 's'}`];
+      if (d.freed_mb) parts.push(`freed ${d.freed_mb} MB`);
+      if (d.skipped?.length) parts.push(`${d.skipped.length} skipped (${d.skipped[0].reason})`);
+      setNote(parts.join(' · '));
+      setSelected(new Set()); setAnchor(null);
+      onRefresh && onRefresh();
+    } catch (e) {
+      setNote(String(e.message || e));
+    } finally {
+      setBusy(false); setConfirming(false);
+    }
+  };
   return (
     <div className="scroll" style={{ flex: 1, padding: 'var(--pad)', background: 'var(--bg)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -3449,10 +3533,74 @@ function HistoryView({ jobs, system, voicePresets, publishPending = [],
           Pending publishes exist but their jobs are not in the visible list.
         </div>
       )}
+      {/* Selection toolbar. Always present so "Select all" is discoverable
+          without first hunting for a checkbox. */}
+      {visible.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10,
+                      flexWrap: 'wrap', fontSize: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                          color: 'var(--ink-2)' }}>
+            <input type="checkbox" checked={allSelected} onChange={selectAll}
+                   style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}/>
+            {allSelected ? 'Clear selection' : `Select all ${visible.length} shown`}
+          </label>
+          {selected.size > 0 && (
+            <>
+              <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 11 }}>
+                {selected.size} selected
+              </span>
+              {!confirming ? (
+                <button className="btn" onClick={() => setConfirming(true)} disabled={busy}
+                        style={{ color: 'var(--err)', borderColor: 'oklch(0.7 0.2 25 / 0.35)' }}>
+                  Delete {selected.size}
+                </button>
+              ) : (
+                <>
+                  <span style={{ color: 'var(--err)' }}>
+                    Delete {selected.size} job{selected.size === 1 ? '' : 's'} and their files? This cannot be undone.
+                  </span>
+                  <button className="btn" onClick={doDelete} disabled={busy}
+                          style={{ background: 'oklch(0.7 0.2 25 / 0.15)', color: 'var(--err)',
+                                   borderColor: 'oklch(0.7 0.2 25 / 0.35)' }}>
+                    {busy ? 'Deleting…' : 'Yes, delete'}
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setConfirming(false)} disabled={busy}>
+                    Cancel
+                  </button>
+                </>
+              )}
+              {liveSelected > 0 && (
+                <span style={{ color: 'var(--warn)', fontSize: 11 }}>
+                  {liveSelected} still running — {liveSelected === 1 ? 'it' : 'they'} will be skipped
+                </span>
+              )}
+            </>
+          )}
+          <div style={{ flex: 1 }}/>
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-4)' }}>
+            shift-click a checkbox to select a range
+          </span>
+        </div>
+      )}
+      {note && (
+        <div style={{ padding: '8px 11px', borderRadius: 'var(--r-md)', marginBottom: 10,
+                      background: 'var(--accent-dim)', border: '1px solid var(--line-2)',
+                      fontSize: 11.5 }}>{note}</div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {shown.slice(0, 20).map(j => (
-          <div key={j.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6 }}>
+        {visible.map((j, idx) => (
+          <div key={j.id} style={{
+            background: selected.has(j.id) ? 'var(--bg-2)' : 'var(--bg-1)',
+            border: '1px solid ' + (selected.has(j.id) ? 'var(--accent-dim)' : 'var(--line)'),
+            borderRadius: 6,
+          }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 10 }}>
+              <input type="checkbox" checked={selected.has(j.id)}
+                     onClick={e => toggle(idx, j.id, e.shiftKey)}
+                     onChange={() => {}}
+                     aria-label={`Select ${j.title || j.id}`}
+                     style={{ accentColor: 'var(--accent)', width: 14, height: 14,
+                              flexShrink: 0, cursor: 'pointer' }}/>
               <StatusBadge status={j.status}/>
               <div style={{ flex: 1 }}>{j.title || j.source_label || j.source || j.id}</div>
               {pendingIds.has(j.id) && (
@@ -3472,6 +3620,14 @@ function HistoryView({ jobs, system, voicePresets, publishPending = [],
                 {openId === j.id ? 'Hide stages' : 'Stages'}
               </button>
               {j.status === 'complete' && <button className="btn" onClick={() => onJumpResult(j.id)}>View</button>}
+              {/* Selects just this row and opens the shared confirm, so there
+                  is one delete path rather than two that can disagree. */}
+              <button className="btn btn-ghost" title="Delete this job and its files"
+                      disabled={busy || isLive(j)}
+                      onClick={() => { setSelected(new Set([j.id])); setAnchor(idx); setConfirming(true); }}
+                      style={{ padding: '4px 8px', fontSize: 11.5, color: 'var(--ink-3)' }}>
+                Delete
+              </button>
             </div>
             {openId === j.id && (
               <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>

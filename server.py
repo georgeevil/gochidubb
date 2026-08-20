@@ -8120,7 +8120,61 @@ async def delete_job(job_id: str):
         shutil.rmtree(work, ignore_errors=True)
     delete_job_db(job_id)
     jobs.pop(job_id, None)
+    app_audit.record("job.delete", target=job_id)
     return {"ok": True}
+
+
+# Statuses whose output directory is being written to right now. Deleting one
+# rmtree's the directory out from under a live ffmpeg or TTS worker, which
+# fails the job in a way that looks like a pipeline bug rather than a deletion.
+_UNDELETABLE_STATUSES = {"running", "processing", "queued", "downloading"}
+
+
+@app.post("/api/jobs/bulk_delete")
+async def bulk_delete_jobs(job_ids: str = Form(...)):
+    """Delete many jobs in one call.
+
+    The UI needs this to be one round trip rather than N: selecting thirty
+    jobs and firing thirty DELETEs means thirty chances to half-finish, and
+    no single answer to show afterwards.
+
+    Returns per-id outcomes rather than failing the whole batch on the first
+    problem — a selection that happens to include one running job should
+    delete the other twenty-nine and say so.
+    """
+    ids = [s.strip() for s in job_ids.split(",") if s.strip()]
+    if not ids:
+        return JSONResponse({"error": "No job_ids given"}, 400)
+    if len(ids) > 500:
+        return JSONResponse({"error": "Too many ids in one call (max 500)"}, 400)
+
+    deleted, skipped, freed = [], [], 0
+    for job_id in ids:
+        job = jobs.get(job_id)
+        if job is None:
+            skipped.append({"id": job_id, "reason": "not found"})
+            continue
+        if (job.get("status") or "") in _UNDELETABLE_STATUSES:
+            skipped.append({"id": job_id, "reason": f"job is {job['status']} — cancel it first"})
+            continue
+        work = OUTPUT_DIR / job_id
+        try:
+            if work.exists():
+                freed += _dir_size_bytes(work)
+                shutil.rmtree(work, ignore_errors=True)
+            delete_job_db(job_id)
+            jobs.pop(job_id, None)
+            deleted.append(job_id)
+        except Exception as e:
+            log.warning(f"[delete] {job_id} failed: {e}")
+            skipped.append({"id": job_id, "reason": str(e)[:120]})
+
+    if deleted:
+        app_audit.record("job.bulk_delete", target=f"{len(deleted)} jobs",
+                         detail=",".join(deleted[:20]) + ("…" if len(deleted) > 20 else ""))
+        log.info(f"[delete] removed {len(deleted)} job(s), freed {freed/1e6:.0f} MB")
+    return {"ok": True, "deleted": deleted, "skipped": skipped,
+            "freed_bytes": freed, "freed_mb": round(freed / 1e6, 1)}
 
 
 # ═══════════════════════════════════════════════════════════════════════
