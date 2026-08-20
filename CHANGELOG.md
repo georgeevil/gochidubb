@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Showcase stitching no longer dies on ffmpeg builds without `drawtext`.**
+  That filter needs libfreetype, which Homebrew's ffmpeg 8.x on macOS does not
+  ship, so the reel failed with `No such filter: 'drawtext'` *after* every dub
+  had already been rendered. The build is probed once, and when `drawtext` is
+  missing the same label is rendered with Pillow and composited with `overlay`
+  — a filter every build has — so the language captions survive rather than
+  being dropped. If Pillow is unavailable too, the reel is stitched without
+  labels and says so, because a reel without captions beats an error after an
+  hour of GPU time.
+
+### Fixed
 - **A degraded TTS segment no longer speaks in a different voice.** When every
   tier and QA retry fails, the fallback now ships the *first* take rather than
   the best-scoring one. QA scores transcription accuracy — CER and language
