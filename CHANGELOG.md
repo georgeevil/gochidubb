@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior exactly: no auth, no billing surfaces.
 
 ### Fixed
+- **`voxcpm_steps` now actually affects synthesis.** It defaulted to `10` but was
+  ignored on the batch path, which always recomputed the step count from the
+  per-job speed tier — so the setting had no effect on any normal dub. It is now
+  an explicit override, with `0` meaning "follow the speed tier" (the new
+  default, and exactly what installs experienced before). Existing
+  `config-user.json` files carrying the dead `10` are migrated to `0` once on
+  startup, so upgrading does not silently change how your dubs are rendered.
+
 - **Long videos no longer die at the final render with `timed out after 600
   seconds`.** The ffmpeg timeout in the merge/extract stages is now *soft*
   (`pipeline/ffmpeg_run.py`): ffmpeg runs with `-progress pipe:1`, and as long
@@ -29,6 +37,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config (env: `GOCHIDUBB_FFMPEG_TIMEOUT`, `GOCHIDUBB_FFMPEG_STALL_TIMEOUT`).
 
 ### Added
+- **VoxCPM2 settings are editable in the product** — a new **Settings → Voice &
+  TTS** tab. Engine tier (`voxcpm` / `f5tts` / `edge-tts`), model id, guidance
+  (`cfg`), inference steps, reference denoising, the cross-lingual guidance
+  floors, same-language QA and the assembler's time-compression ceiling were all
+  previously reachable only by hand-editing `config-user.json` and restarting.
+  Saving now releases the loaded voice model so the next job picks the settings
+  up — and is refused with a clear message while a job is mid-flight, rather
+  than pulling the model out from under it.
+- Settings are validated before they are stored (`FIELD_SPECS` in
+  `app/config.py`): values are coerced from form strings, out-of-range numbers
+  and unknown choices are rejected with a message naming what was wrong, and a
+  batch save applies all-or-nothing instead of leaving half of it written. The
+  same bounds now apply to the `VOXCPM_*` environment variables.
+
 - **Develop surfaces for driving GoChiDUBB from agents and scripts**: scoped
   API keys (stored hashed, shown once, revocable), webhooks for
   `job.completed` / `job.failed` / `job.awaiting_review` with a delivery log,

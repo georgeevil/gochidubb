@@ -32,6 +32,77 @@ CONFIG_FILE = BASE / "config-user.json"
 for _d in (UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, VOICE_PRESETS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
+# Bump when a setting's meaning changes and old files need fixing up; add the
+# corresponding step to _migrate().
+CONFIG_VERSION = 1
+
+# Validation table for the settings the product lets a user edit. set() and
+# update() both consult it, so every write path — the Settings UI,
+# PATCH /api/config, a direct cfg.set() — gets identical coercion and bounds
+# instead of each caller re-checking.
+#
+#   numeric: (type, low, high, *sentinels)   sentinels bypass the range check
+#   enum:    (str, (choice, ...))
+#   flag:    (bool,)
+#
+# Fields absent from this table are stored as-is, exactly as before.
+FIELD_SPECS: dict = {
+    "tts_engine":          (str, ("voxcpm", "f5tts", "edge-tts", "auto")),
+    "tts_speed":           (str, ("fast", "balanced", "quality")),
+    "tts_max_stretch":     (float, 1.0, 2.0),
+    "voxcpm_cfg":          (float, 1.0, 3.0),
+    # 0 is "follow the tts_speed tier"; a real override is 4–24.
+    "voxcpm_steps":        (int, 4, 24, 0),
+    "voxcpm_denoise_refs": (bool,),
+    "voxcpm_xling_cfg":    (float, 1.0, 3.0),
+    "voxcpm_xling_steps":  (int, 4, 24),
+    "qa_same_language":    (bool,),
+    "mode":                (str, ("local", "hosted")),
+}
+
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def coerce_field(key: str, value):
+    """Coerce and validate one setting against FIELD_SPECS.
+
+    Returns the cleaned value, or raises ValueError describing what was wrong.
+    Out-of-range numbers are rejected rather than silently clamped: a user who
+    typed 99 wants to know it was refused, not discover 3.0 later.
+    """
+    spec = FIELD_SPECS.get(key)
+    if spec is None:
+        return value
+    kind = spec[0]
+
+    if kind is bool:
+        if isinstance(value, str):
+            return value.strip().lower() in _TRUTHY
+        return bool(value)
+
+    if kind is str:
+        v = str(value).strip()
+        choices = spec[1] if len(spec) > 1 else None
+        if choices and v not in choices:
+            raise ValueError(
+                f"{key}: {v!r} is not one of {', '.join(choices)}"
+            )
+        return v
+
+    try:
+        v = kind(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key}: {value!r} is not a {kind.__name__}") from None
+    low, high, sentinels = spec[1], spec[2], spec[3:]
+    if v in sentinels:
+        return v
+    if not (low <= v <= high):
+        allowed = f"{low}–{high}"
+        if sentinels:
+            allowed += " (or " + ", ".join(str(x) for x in sentinels) + ")"
+        raise ValueError(f"{key}: {v} is outside {allowed}")
+    return v
+
 
 @dataclass
 class UserConfig:
@@ -64,8 +135,22 @@ class UserConfig:
 
     # ── VoxCPM ────────────────────────────────────────────────────────
     voxcpm_model: str = "openbmb/VoxCPM2"
-    voxcpm_cfg: float = 2.0              # 1.5–3.0
-    voxcpm_steps: int = 10              # 5–20
+    voxcpm_cfg: float = 2.0              # guidance strength, 1.0–3.0
+    # Inference timesteps. 0 = follow the tts_speed tier (SPEED_TIMESTEPS in
+    # pipeline/synthesizer.py); any other value is an explicit override that
+    # wins over the tier. This used to default to 10 and never reach batch
+    # synthesis at all — see _migrate() for what that means on upgrade.
+    voxcpm_steps: int = 0
+    # Run VoxCPM's own denoiser over reference clips. The pipeline already
+    # denoises, normalizes and trims refs itself (_REF_FILTER in
+    # pipeline/synthesizer.py), so this is off by default — turn it on only
+    # for unusually noisy references.
+    voxcpm_denoise_refs: bool = False
+    # Cross-lingual guidance. When source != target VoxCPM drifts toward
+    # source-language phonetics, so cfg and timesteps are raised for those
+    # jobs; these are the values it is raised *to* (a floor, not a delta).
+    voxcpm_xling_cfg: float = 2.5
+    voxcpm_xling_steps: int = 14
 
     # ── TTS ───────────────────────────────────────────────────────────
     tts_engine: str = "voxcpm"           # "voxcpm" | "f5tts" | "edge-tts"
@@ -116,25 +201,43 @@ class UserConfig:
     # is replaced with the original video URL (see pipeline/publisher.py).
     publish_description_template: str = "Original: {source_url}"
 
+    # ── Internal ──────────────────────────────────────────────────────
+    # Schema version of the persisted file, so a settings migration runs
+    # exactly once instead of re-firing on every startup. A config-user.json
+    # written before this existed has no key and is treated as version 0.
+    config_version: int = CONFIG_VERSION
+
     # ── UI behaviour ──────────────────────────────────────────────────
     open_browser: bool = True
     server_port: int = 8910
     hf_token: str = ""                   # HuggingFace token for pyannote
 
     def set(self, key: str, value) -> None:
-        """Set a config value and immediately persist to disk."""
+        """Set a config value and immediately persist to disk.
+
+        Raises KeyError for an unknown key, ValueError for one that fails
+        FIELD_SPECS validation. Nothing is written when either fires.
+        """
         if not hasattr(self, key):
             raise KeyError(f"Unknown config key: {key!r}")
-        setattr(self, key, value)
+        setattr(self, key, coerce_field(key, value))
         self._save()
 
     def update(self, **kwargs) -> None:
-        """Batch-update keys and persist once."""
+        """Batch-update keys and persist once.
+
+        Validation happens for every key *before* any is applied, so a bad
+        value in the middle of a Settings save cannot leave half of it
+        written. Unknown keys are ignored with a warning, as before.
+        """
+        clean = {}
         for k, v in kwargs.items():
             if hasattr(self, k):
-                setattr(self, k, v)
+                clean[k] = coerce_field(k, v)   # ValueError propagates
             else:
                 log.warning(f"[config] Unknown key ignored: {k!r}")
+        for k, v in clean.items():
+            setattr(self, k, v)
         self._save()
 
     def to_dict(self) -> dict:
@@ -148,6 +251,36 @@ class UserConfig:
             log.warning(f"[config] Could not save {CONFIG_FILE}: {e}")
 
 
+# The value voxcpm_steps defaulted to before it became a real override.
+_LEGACY_VOXCPM_STEPS = 10
+
+
+def _migrate(c: "UserConfig", from_version: int) -> None:
+    """Fix up a persisted config whose settings have changed meaning.
+
+    Mutates `c` in place and re-saves when anything changed, so each step
+    runs exactly once rather than re-firing on every startup.
+    """
+    if from_version >= CONFIG_VERSION:
+        return
+    changed = []
+
+    # v0 → v1: voxcpm_steps became an override that actually reaches
+    # synthesis. It previously defaulted to 10 and was ignored on the batch
+    # path (SPEED_TIMESTEPS won), so _save() has written 10 into most
+    # existing files. Leaving it would silently move "balanced" from 8 to 10
+    # steps on upgrade — so a value equal to that dead default becomes 0,
+    # "follow the tier", which is what these installs actually experienced.
+    if from_version < 1 and c.voxcpm_steps == _LEGACY_VOXCPM_STEPS:
+        c.voxcpm_steps = 0
+        changed.append("voxcpm_steps 10 -> 0 (follow tts_speed tier)")
+
+    c.config_version = CONFIG_VERSION
+    if changed:
+        log.info("[config] migrated to v%d: %s", CONFIG_VERSION, "; ".join(changed))
+    c._save()
+
+
 def _load_config() -> UserConfig:
     """Load UserConfig from disk, merging over dataclass defaults."""
     c = UserConfig()
@@ -159,6 +292,10 @@ def _load_config() -> UserConfig:
         "VOXCPM_MODEL": "voxcpm_model",
         "VOXCPM_CFG": "voxcpm_cfg",
         "VOXCPM_STEPS": "voxcpm_steps",
+        "VOXCPM_DENOISE_REFS": "voxcpm_denoise_refs",
+        "VOXCPM_XLING_CFG": "voxcpm_xling_cfg",
+        "VOXCPM_XLING_STEPS": "voxcpm_xling_steps",
+        "GOCHIDUBB_TTS_ENGINE": "tts_engine",
         "OLLAMA_URL": "ollama_url",
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
@@ -181,13 +318,16 @@ def _load_config() -> UserConfig:
         cur = getattr(c, field_k)
         try:
             if isinstance(cur, bool):
-                setattr(c, field_k, v.strip() in ("1", "true", "yes", "on"))
+                parsed = v.strip().lower() in _TRUTHY
             elif isinstance(cur, int):
-                setattr(c, field_k, int(v.strip()))
+                parsed = int(v.strip())
             elif isinstance(cur, float):
-                setattr(c, field_k, float(v.strip()))
+                parsed = float(v.strip())
             else:
-                setattr(c, field_k, v.strip())
+                parsed = v.strip()
+            # Same bounds the UI is held to — a bad env var falls back to the
+            # default with a warning rather than reaching a model.
+            setattr(c, field_k, coerce_field(field_k, parsed))
         except (ValueError, TypeError) as e:
             log.warning(f"[config] env {env_k}={v!r}: {e}")
 
@@ -204,6 +344,8 @@ def _load_config() -> UserConfig:
                     if env_key and os.getenv(env_key) is not None:
                         continue
                     setattr(c, k, v)
+            # A file written before config_version existed is version 0.
+            _migrate(c, int(data.get("config_version", 0) or 0))
         except Exception as e:
             log.warning(f"[config] Could not read {CONFIG_FILE}: {e}")
 
