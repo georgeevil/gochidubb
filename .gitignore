@@ -51,7 +51,10 @@ bin/yt-dlp*
 # Local scratch — notes, sample media, exploratory scripts
 product.txt
 selfware.toml
-test.webm
+# Downloaded source media lands at the repo root when a fetch is run by
+# hand rather than through a job. Glob rather than naming files: yt-dlp
+# names them after the video title, which is unpredictable.
+*.webm
 test_audio.wav
 # Exploratory scripts, not pytest tests (see CLAUDE.md)
 tests/manual_test_*.py
