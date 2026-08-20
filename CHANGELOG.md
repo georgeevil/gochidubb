@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A degraded TTS segment no longer speaks in a different voice.** When every
+  tier and QA retry fails, the fallback now ships the *first* take rather than
+  the best-scoring one. QA scores transcription accuracy — CER and language
+  match — and never scores timbre, so "best score" says nothing about whether
+  the voice still matches the speaker: a degraded Chinese segment shipped at
+  225 Hz against a 133 Hz reference while being the better-scoring of its two
+  takes. Only the first attempt uses the unmutated `voice_seed`, so it is the
+  one that matches every other segment. This is the trade `voice_design` mode
+  already makes.
+
 ### Added
 - **Delete jobs from the UI, one or many.** History rows gain a checkbox and a
   per-row Delete; the toolbar offers select-all and a count, and shift-clicking

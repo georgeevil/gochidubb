@@ -249,6 +249,12 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
         if wav is None or len(wav) == 0:
             raise RuntimeError("empty audio")
         sf.write(out_path, wav, model.tts_model.sample_rate)
+        if not first_saved[0]:
+            try:
+                shutil.copy2(out_path, first_path)
+                first_saved[0] = True
+            except Exception as e:
+                _log_event(event="first_copy_failed", idx=seg["idx"], error=str(e))
 
     # Max QA-retries: regenerate with fresh seed if quality score too high.
     # Fast mode: no QA (would be slower than just accepting output).
@@ -278,6 +284,11 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     best_transcript = ""
     best_diag = None
     best_path = out_path + ".best"   # audio behind best_score, see _run_qa
+    # The very first attempt is the only one guaranteed to use the unmutated
+    # voice_seed, and therefore the only one guaranteed to share a timbre with
+    # every other segment of this speaker. Kept aside for the degraded path.
+    first_path = out_path + ".first"
+    first_saved = [False]
     attempts = 0            # QA-checked generate attempts for this segment
 
     def _run_qa(check_fn):
@@ -378,18 +389,34 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
     # otherwise consistent dub. best_path holds the audio that earned
     # best_score; restoring it keeps the reported score and the shipped audio
     # describing the same thing.
-    restored = False
-    if os.path.exists(best_path) and os.path.getsize(best_path) > 1000:
+    # Prefer the FIRST take over the best-scoring one. QA scores transcription
+    # accuracy — CER and language match — and never scores timbre, so "best
+    # score" says nothing about whether the voice still matches the speaker.
+    # Measured: a degraded Chinese segment shipped at 225 Hz against a 133 Hz
+    # reference while being the better-scoring of its two takes.
+    #
+    # By the time we are here nothing passed QA, so choosing between failures
+    # on CER is splitting hairs — but exactly one of them was generated with
+    # the unmutated voice_seed and therefore matches every other segment of
+    # this speaker. A stranger's voice mid-sentence is more jarring than a
+    # slightly worse transcription of a line that was already going to be
+    # wrong. This is the same trade voice_design mode already makes.
+    restored = None
+    for label, path in (("first", first_path), ("best", best_path)):
+        if os.path.exists(path) and os.path.getsize(path) > 1000:
+            try:
+                shutil.copy2(path, out_path)
+                restored = label
+                break
+            except Exception as e:
+                _log_event(event="restore_failed", idx=seg["idx"],
+                           which=label, error=str(e))
+    for path in (first_path, best_path):
         try:
-            shutil.copy2(best_path, out_path)
-            restored = True
-        except Exception as e:
-            _log_event(event="best_restore_failed", idx=seg["idx"], error=str(e))
-    try:
-        if os.path.exists(best_path):
-            os.remove(best_path)
-    except Exception:
-        pass
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
 
     if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
         _record_qa(seg, best_score, best_transcript,
@@ -397,10 +424,10 @@ def _synth_one(model, seg, base_kwargs, voice_seed, tier_policy="balanced",
                    attempts, 0)
         _log_event(event="qa_fallback", idx=seg["idx"],
                    score=round(best_score, 3) if best_score is not None else None,
-                   restored_best=restored,
-                   msg="all retries failed QA, using best-scoring output"
+                   restored=restored,
+                   msg=f"all retries failed QA, using {restored}-attempt output"
                        if restored else
-                       "all retries failed QA, using last output (no best kept)")
+                       "all retries failed QA, using last output (nothing kept)")
         # Use the tier from the final attempt; log as tier 0 to mark "degraded"
         return (True, 0, None)
 
@@ -467,12 +494,13 @@ def _process_job(model, job):
             # _synth_one keeps the best-scoring take beside the output while
             # it retries; drop it here so it is cleaned up on every path,
             # including the ones that raise.
-            try:
-                _best = seg["output_path"] + ".best"
-                if os.path.exists(_best):
-                    os.remove(_best)
-            except Exception:
-                pass
+            for _suffix in (".best", ".first"):
+                try:
+                    _side = seg["output_path"] + _suffix
+                    if os.path.exists(_side):
+                        os.remove(_side)
+                except Exception:
+                    pass
             if success:
                 ok += 1
                 tier_stats[tier] = tier_stats.get(tier, 0) + 1
