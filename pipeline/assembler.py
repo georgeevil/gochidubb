@@ -431,12 +431,90 @@ def assemble_dubbed_audio(segments, total_duration, output_path,
     }
 
 
+def _probe_video_stream(path):
+    """(codec_name, pix_fmt) of the first video stream, or (None, None)."""
+    try:
+        import subprocess as _sp
+        r = _sp.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name,pix_fmt",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        parts = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    except Exception as e:
+        log.warning(f"[merge] could not probe video stream: {e}")
+    return None, None
+
+
+# QuickTime, WhatsApp, Finder preview and most of the Apple ecosystem decode
+# H.264 in 8-bit 4:2:0 and little else inside an .mp4. Anything wider — VP9,
+# AV1, 10-bit, 4:4:4 — produces a structurally valid file those players
+# silently refuse, while YouTube plays it because YouTube re-encodes on upload.
+_SAFE_CODECS = ("h264", "avc1")
+_SAFE_PIX_FMTS = ("yuv420p", "yuvj420p")
+
+
+def _video_codec_args(video_path, must_encode, codec_pref, preset, crf):
+    """ffmpeg video args: stream-copy when that is safe, otherwise re-encode.
+
+    `must_encode` is set when a filter is in play (the frame-hold path), where
+    copying is impossible regardless of the source.
+
+    Copying is the fast path and stays the default *when the source is already
+    playable*. A blanket re-encode would cost minutes on a long video for no
+    gain; copying blindly is what shipped a VP9 stream inside an .mp4.
+    """
+    encode = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+              "-pix_fmt", "yuv420p"]
+    if must_encode:
+        return encode
+    if codec_pref == "copy":
+        return ["-c:v", "copy"]        # explicit user choice; speed over reach
+    codec, pix_fmt = _probe_video_stream(video_path)
+    if codec is None:
+        # Probe failed — re-encode rather than gamble on the container.
+        log.info("[merge] video stream unreadable; re-encoding to H.264")
+        return encode
+    if codec in _SAFE_CODECS and pix_fmt in _SAFE_PIX_FMTS:
+        log.info(f"[merge] source is {codec}/{pix_fmt} — copying video stream")
+        return ["-c:v", "copy"]
+    log.info(f"[merge] source is {codec}/{pix_fmt}, which many players cannot "
+             f"decode inside .mp4 — re-encoding to H.264/yuv420p")
+    return encode
+
+
 def merge_audio_video(video_path, dubbed_audio_path, output_path,
-                     background_audio_path="", bg_volume=0.15):
+                     background_audio_path="", bg_volume=None,
+                     codec_pref=None, preset=None, crf=None,
+                     audio_bitrate=None):
     """Merge dubbed audio with video. If dubbed audio is longer than source
     video, freeze the last video frame to match (better than cutting off
     the end of the dub).
+
+    Encoding options default to the user's Output settings. The video stream
+    is copied when it is already H.264/yuv420p and re-encoded when it is not,
+    so the result plays in QuickTime and WhatsApp rather than only in players
+    that re-encode for you.
     """
+    try:
+        from app.config import cfg as _cfg
+        if bg_volume is None:
+            bg_volume = _cfg.background_volume
+        codec_pref = codec_pref or _cfg.output_video_codec
+        preset = preset or _cfg.output_preset
+        crf = _cfg.output_crf if crf is None else crf
+        audio_bitrate = audio_bitrate or _cfg.output_audio_bitrate
+    except Exception:
+        # Config unavailable (bare pipeline use) — fall back to what these
+        # values were hardcoded to before they became settings.
+        bg_volume = 0.15 if bg_volume is None else bg_volume
+        codec_pref = codec_pref or "h264"
+        preset = preset or "veryfast"
+        crf = 23 if crf is None else crf
+        audio_bitrate = audio_bitrate or "192k"
     # Check if audio is longer than video and we need to extend video
     try:
         import subprocess as _sp
@@ -463,6 +541,9 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
     else:
         tpad = None
 
+    vargs = _video_codec_args(video_path, bool(tpad), codec_pref, preset, crf)
+    aargs = ["-c:a", "aac", "-b:a", audio_bitrate]
+
     if background_audio_path and os.path.exists(background_audio_path):
         if tpad:
             _run([
@@ -475,8 +556,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 f"[1:a]volume=1.0[dub];[2:a]volume={bg_volume}[bg];"
                 f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]",
                 "-map", "[v]", "-map", "[out]",
-                "-c:v", "libx264", "-preset", "veryfast",
-                "-c:a", "aac", "-b:a", "192k",
+                *vargs, *aargs,
                 "-movflags", "+faststart",
                 output_path,
             ], "merge with bg + extend")
@@ -490,7 +570,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 f"[1:a]volume=1.0[dub];[2:a]volume={bg_volume}[bg];"
                 f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]",
                 "-map", "0:v", "-map", "[out]",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                *vargs, *aargs,
                 "-movflags", "+faststart",
                 output_path,
             ], "merge with bg")
@@ -501,8 +581,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-i", video_path, "-i", dubbed_audio_path,
                 "-filter_complex", f"[0:v]{tpad}[v]",
                 "-map", "[v]", "-map", "1:a",
-                "-c:v", "libx264", "-preset", "veryfast",
-                "-c:a", "aac", "-b:a", "192k",
+                *vargs, *aargs,
                 "-movflags", "+faststart",
                 output_path,
             ], "merge a+v + extend")
@@ -511,7 +590,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "ffmpeg", "-y",
                 "-i", video_path, "-i", dubbed_audio_path,
                 "-map", "0:v", "-map", "1:a",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                *vargs, *aargs,
                 "-movflags", "+faststart",
                 output_path,
             ], "merge a+v")

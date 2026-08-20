@@ -57,6 +57,14 @@ FIELD_SPECS: dict = {
     "voxcpm_xling_cfg":    (float, 1.0, 3.0),
     "voxcpm_xling_steps":  (int, 4, 24),
     "qa_same_language":    (bool,),
+    "output_video_codec":  (str, ("h264", "copy")),
+    "output_preset":       (str, ("ultrafast", "superfast", "veryfast", "faster",
+                                  "fast", "medium", "slow")),
+    "output_crf":          (int, 16, 32),
+    "output_audio_bitrate": (str, ("128k", "192k", "256k", "320k")),
+    # 0 = no cap (best available); otherwise a real frame height.
+    "output_max_height":   (int, 360, 2160, 0),
+    "background_volume":   (float, 0.0, 1.0),
     "mode":                (str, ("local", "hosted")),
 }
 
@@ -184,6 +192,22 @@ class UserConfig:
     reuse_tts_max_failed_qa: float = 0.25
     qa_same_language: bool = False       # whisper-roundtrip QA on same-language dubs too
 
+    # ── Output / render ───────────────────────────────────────────────
+    # How the finished video is encoded. Defaults reproduce the behaviour
+    # these values were hardcoded to, so upgrading changes nothing on its own.
+    #
+    # "h264" re-encodes whenever the source stream isn't already H.264/yuv420p.
+    # "copy" keeps the source video stream untouched — faster, but a VP9 or
+    # AV1 source then sits inside an .mp4 that QuickTime and WhatsApp refuse
+    # to play. See docs and the Output settings tab.
+    output_video_codec: str = "h264"     # "h264" | "copy"
+    output_preset: str = "veryfast"      # x264 speed/size trade-off
+    output_crf: int = 23                 # 18 (larger, better) … 28 (smaller)
+    output_audio_bitrate: str = "192k"
+    output_max_height: int = 1080        # source download cap, 0 = best available
+    # Background music/SFX level in the final mix, relative to the dub.
+    background_volume: float = 0.15
+
     # ── FFmpeg (extract / render) ─────────────────────────────────────
     # Soft timeout: while ffmpeg keeps reporting encode progress the deadline
     # is extended, so long videos can render past this. It only becomes a
@@ -296,6 +320,11 @@ def _load_config() -> UserConfig:
         "VOXCPM_XLING_CFG": "voxcpm_xling_cfg",
         "VOXCPM_XLING_STEPS": "voxcpm_xling_steps",
         "GOCHIDUBB_TTS_ENGINE": "tts_engine",
+        "GOCHIDUBB_OUTPUT_CODEC": "output_video_codec",
+        "GOCHIDUBB_OUTPUT_PRESET": "output_preset",
+        "GOCHIDUBB_OUTPUT_CRF": "output_crf",
+        "GOCHIDUBB_OUTPUT_MAX_HEIGHT": "output_max_height",
+        "GOCHIDUBB_BACKGROUND_VOLUME": "background_volume",
         "OLLAMA_URL": "ollama_url",
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",
