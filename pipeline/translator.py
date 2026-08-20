@@ -879,12 +879,47 @@ def _build_batch_prompt(
     context_hint: str = "",
     glossary: Optional[Dict] = None,
     prev_pairs: Optional[List[Tuple[str, Optional[str]]]] = None,
+    source_lang: str = "",
 ) -> str:
-    """Build a numbered multi-line translation prompt."""
+    """Build a numbered multi-line translation prompt.
+
+    `source_lang` matters more than it looks. Between distant languages a
+    model infers the source trivially and there is no surface overlap to copy
+    from. Between two closely-related languages in the same script — uk→bg,
+    ru→uk, es→pt — an untranslated word still looks like an answer, so the
+    pair gets an explicit warning against passing source text through.
+    """
     numbered = "\n".join(f"{i + 1}. {t.strip()}" for i, t in enumerate(texts))
     n = len(texts)
     hint = f"\nThe material is about: {context_hint}\n" if context_hint else ""
-    return f"""Translate each numbered subtitle line below into {language_display_name(target_lang)}.
+    src_name = language_display_name(source_lang) if source_lang else ""
+    direction = (f"from {src_name} into {language_display_name(target_lang)}"
+                 if src_name else f"into {language_display_name(target_lang)}")
+
+    # Same script + different language = the model can "translate" by copying.
+    related = bool(
+        src_name
+        and _LANG_SCRIPT.get((source_lang or "").lower()[:2])
+        and _LANG_SCRIPT.get((source_lang or "").lower()[:2])
+        == _LANG_SCRIPT.get((target_lang or "").lower()[:2])
+        and (source_lang or "").lower()[:2] != (target_lang or "").lower()[:2]
+    )
+    related_rule = (
+        f"- {src_name} and {language_display_name(target_lang)} are written in the "
+        f"same script and share vocabulary. Every line must be rendered in natural "
+        f"{language_display_name(target_lang)} — never leave a {src_name} word, "
+        f"spelling or letter in the output, and never copy a line through unchanged.\n"
+        if related else ""
+    )
+    # Deliberately not "repeat the source text if you cannot translate it":
+    # that licensed exactly the pass-through this guards against, and on a
+    # related pair the copy is invisible to every downstream check.
+    fallback_rule = (
+        "- Every line must be translated. If one is unclear, give the closest "
+        f"natural {language_display_name(target_lang)} rendering rather than "
+        "leaving it in the source language.\n"
+    )
+    return f"""Translate each numbered subtitle line below {direction}.
 {hint}{_glossary_block(glossary)}{_context_block(prev_pairs)}
 Rules:
 - Output EXACTLY {n} lines, numbered 1 to {n}, in the same order.
@@ -895,8 +930,7 @@ Rules:
   tense, register and speaker voice consistent across them.
 - Keep each translation close in length to its source line — it has to be
   spoken in the same amount of time.
-- If a line cannot be translated, repeat its source text for that number.
-- No explanations, no notes, no commentary, no blank lines.
+{related_rule}{fallback_rule}- No explanations, no notes, no commentary, no blank lines.
 
 Lines to translate:
 {numbered}
@@ -1014,6 +1048,32 @@ _LANG_SCRIPT = {
 _MIN_LETTERS_FOR_SCRIPT_CHECK = 8
 _MIN_SCRIPT_RATIO = 0.3
 
+# Letters that exist in one Cyrillic alphabet but not another. The script
+# check above cannot see this: `ru`, `uk`, `bg` and `mk` all map to
+# "cyrillic", so Ukrainian handed back as Bulgarian passes it at 100%.
+#
+# Observed on a real uk→bg dub: "Кіронг" kept Ukrainian і — a letter Bulgarian
+# does not have — and "набагато" survived untranslated. Both looked like
+# Bulgarian to every guard in the pipeline.
+_ALPHABET_FOREIGN: Dict[str, str] = {
+    "bg": "іїєґыэё",   # Bulgarian has none of the Ukrainian or Russian extras
+    "ru": "іїєґ",      # Russian has no Ukrainian letters
+    "uk": "ыэёъ",      # Ukrainian has no Russian ones
+    "mk": "іїєґыэёщъ",
+}
+
+
+def foreign_letters(text: str, target_lang: str) -> str:
+    """Letters in `text` that the target language's alphabet does not contain.
+
+    Cheap, deterministic, and the only guard that can tell two Cyrillic
+    languages apart. Returns the distinct offending characters, or "".
+    """
+    foreign = _ALPHABET_FOREIGN.get((target_lang or "").strip().lower()[:2])
+    if not foreign:
+        return ""
+    return "".join(sorted({ch for ch in text.lower() if ch in foreign}))
+
 
 def _script_ratio(text: str, script: str) -> Tuple[float, int]:
     """(fraction of letters belonging to `script`, total letter count)."""
@@ -1058,6 +1118,15 @@ def _rejection_reason(src: str, tgt: str, target_lang: str = "") -> Optional[str
         if letters >= _MIN_LETTERS_FOR_SCRIPT_CHECK and ratio < _MIN_SCRIPT_RATIO:
             return (f"wrong script — only {ratio:.0%} of {letters} letters are "
                     f"{script} but the target is {target_lang}")
+    # Right script, wrong alphabet. Warn rather than reject: a proper noun may
+    # legitimately keep its spelling, and rejecting would retry the whole batch
+    # over one place name. The signal still reaches the log and the QA record.
+    foreign = foreign_letters(tgt, target_lang)
+    if foreign:
+        logger.warning(
+            f"[translate] {target_lang} line contains letters outside its "
+            f"alphabet ({foreign!r}) — likely source-language bleed: {tgt[:70]!r}"
+        )
     return None
 
 
@@ -1087,13 +1156,15 @@ async def _translate_batch(
     budget_multiplier: int = 1,
     concurrency: int = 1,
     timeout_stretch: int = 1,
+    source_lang: str = "",
 ) -> Optional[List[str]]:
     """One request for many lines. None means "reply didn't line up".
 
     Raises LMStudioBudgetError (retry bigger) or LMStudioTimeoutError
     (retry smaller) so the caller can tell those two apart.
     """
-    prompt = _build_batch_prompt(texts, target_lang, context_hint, glossary, prev_pairs)
+    prompt = _build_batch_prompt(texts, target_lang, context_hint, glossary,
+                                 prev_pairs, source_lang=source_lang)
     budget = min(_batch_output_budget(texts) * max(1, budget_multiplier),
                  _MAX_ABSOLUTE_BUDGET)
     try:
@@ -1291,6 +1362,7 @@ async def _translate_group(
     circuit: "_Circuit",
     tuner: "_BudgetTuner",
     concurrency: int = 1,
+    source_lang: str = "",
 ) -> List[str]:
     """Translate a group of lines, halving it on any alignment failure.
 
@@ -1330,6 +1402,7 @@ async def _translate_group(
                     budget_multiplier=tuner.multiplier,
                     concurrency=concurrency,
                     timeout_stretch=timeout_stretch,
+                    source_lang=source_lang,
                 )
             if result is not None:
                 circuit.record_success()
@@ -1388,11 +1461,13 @@ async def _translate_group(
     left = await _translate_group(
         texts[:mid], target_lang, model, context_hint, glossary,
         prev_fn, semaphore, on_done, circuit, tuner, concurrency,
+        source_lang=source_lang,
     )
     right = await _translate_group(
         texts[mid:], target_lang, model, context_hint, glossary,
         lambda: list(zip(texts[:mid], left))[-max(TRANSLATE_CONTEXT_LINES, 1):],
         semaphore, on_done, circuit, tuner, concurrency,
+        source_lang=source_lang,
     )
     return left + right
 
@@ -1405,8 +1480,14 @@ async def translate_segments(
     context_hint: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
     batch_size: int = 0,
+    source_lang: str = "",
 ) -> List[Dict]:
     """Translate segments in batches, with progress callback.
+
+    `source_lang` is optional and only shapes the prompt: it names the
+    direction, and when source and target share a script it adds an explicit
+    rule against passing source words through. Omitting it is safe, just
+    weaker on closely-related pairs.
 
     Each segment gets `translated_text`. A segment whose translation failed
     outright keeps its source text there, which server.py treats as
@@ -1539,6 +1620,7 @@ async def translate_segments(
             circuit,
             tuner,
             max_concurrent,
+            source_lang=source_lang,
         )
         for i, t in zip(idxs, out):
             results[i] = t

@@ -169,7 +169,7 @@ class TestPartialTranslateRetry:
             ]})
         seen = []
 
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             seen.append([s["idx"] for s in segs])
             return [dict(s, translated_text=f"{model}:{s['text']}") for s in segs]
 
@@ -198,7 +198,7 @@ class TestPartialTranslateRetry:
             ]})
         seen = []
 
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             seen.append([s["text"] for s in segs])
             return [dict(s, translated_text=f"new:{s['text']}") for s in segs]
 
@@ -218,7 +218,7 @@ class TestPartialTranslateRetry:
                           "translated_text": "один"}]})
         called = []
 
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             called.append(1)
             return segs
 
@@ -231,7 +231,7 @@ class TestPartialTranslateRetry:
         assert (job_env.work / "subtitles.srt").exists()
 
     def test_total_failure_raises_with_actionable_message(self, job_env, monkeypatch):
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             return [dict(s, translated_text=s["text"]) for s in segs]
 
         ctx = {"target_lang": "ru", "model": "broken",
@@ -242,7 +242,7 @@ class TestPartialTranslateRetry:
     def test_mostly_untranslated_is_a_failure_not_a_pass(self, job_env, monkeypatch):
         """A run that translated 16 of 182 lines was recorded status=ok and
         flowed into TTS, producing a "finished" dub that was 91% English."""
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             out = []
             for i, s in enumerate(segs):
                 # only the first line comes back translated
@@ -256,7 +256,7 @@ class TestPartialTranslateRetry:
             self._run(job_env, monkeypatch, ctx, translator)
 
     def test_a_mostly_successful_run_still_passes(self, job_env, monkeypatch):
-        async def translator(segs, tgt, model, context_hint=None, progress_callback=None):
+        async def translator(segs, tgt, model, context_hint=None, progress_callback=None, **kw):
             out = []
             for i, s in enumerate(segs):
                 out.append(dict(s, translated_text=s["text"] if i == 0 else "перевод"))

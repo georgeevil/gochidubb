@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Translations between closely-related languages no longer pass source words
+  through.** The batch prompt — the one actually used — never named the source
+  language, and one of its rules said "if a line cannot be translated, repeat
+  its source text". Between distant languages that is harmless; between two
+  Cyrillic Slavic languages it licensed exactly the failure seen on a uk→bg
+  dub, where `набагато` survived untranslated and `Кіронг` kept a Ukrainian
+  letter Bulgarian does not have. The prompt now names the direction, and when
+  source and target share a script it forbids passing text through. Added
+  `foreign_letters()`, which catches alphabet-level bleed the existing script
+  check structurally cannot — it maps `ru`, `uk`, `bg` and `mk` all to
+  "cyrillic", so Ukrainian handed back as Bulgarian scored 100%.
+
+### Fixed
 - **Showcase stitching no longer dies on ffmpeg builds without `drawtext`.**
   That filter needs libfreetype, which Homebrew's ffmpeg 8.x on macOS does not
   ship, so the reel failed with `No such filter: 'drawtext'` *after* every dub
