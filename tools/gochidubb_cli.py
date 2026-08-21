@@ -127,6 +127,7 @@ async def cmd_dub(c: GoChiDUBBClient, a) -> None:
         keep_bg=a.keep_bg, auto_denoise=a.auto_denoise,
         context_hint=a.context or "", wizard_mode=a.wizard_mode,
         mode=a.mode, scheduled_at=scheduled_at,
+        voxcpm_cfg=a.voxcpm_cfg, voxcpm_steps=a.voxcpm_steps,
     )
     job_id = res.get("job_id")
     _print_json(res)
@@ -154,6 +155,7 @@ async def cmd_compare(c: GoChiDUBBClient, a) -> None:
         voice_style=a.voice_style or "",
         tts_speed=a.tts_speed, keep_bg=a.keep_bg,
         auto_denoise=a.auto_denoise,
+        voxcpm_cfg=a.voxcpm_cfg, voxcpm_steps=a.voxcpm_steps,
     )
     _print_json(res)
     if a.wait and res.get("batch_id"):
@@ -172,6 +174,7 @@ async def cmd_showcase(c: GoChiDUBBClient, a) -> None:
         voice_style=a.voice_style or "",
         tts_speed=a.tts_speed, keep_bg=a.keep_bg,
         auto_denoise=a.auto_denoise,
+        voxcpm_cfg=a.voxcpm_cfg, voxcpm_steps=a.voxcpm_steps,
     )
     _print_json(res)
     if a.wait and res.get("batch_id"):
@@ -186,7 +189,8 @@ async def cmd_showcase(c: GoChiDUBBClient, a) -> None:
 
 
 async def cmd_redub(c: GoChiDUBBClient, a) -> None:
-    res = await c.redub(a.job_id, a.langs, mode=a.mode)
+    res = await c.redub(a.job_id, a.langs, mode=a.mode,
+                        voxcpm_cfg=a.voxcpm_cfg, voxcpm_steps=a.voxcpm_steps)
     _print_json(res)
     if a.wait:
         if res.get("batch_id"):
@@ -482,6 +486,12 @@ def _add_common_dub_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--keep-bg", action="store_true", help="Keep background music")
     p.add_argument("--auto-denoise", action="store_true",
                    help="Denoise the voice reference before cloning")
+    p.add_argument("--voxcpm-cfg", type=float, default=0.0,
+                   help="Per-job VoxCPM guidance, 1.0-3.0 "
+                        "(default 0 = use the server's global setting)")
+    p.add_argument("--voxcpm-steps", type=int, default=0,
+                   help="Per-job VoxCPM inference steps, 4-24 "
+                        "(default 0 = use the server's global setting)")
     p.add_argument("--wait", action="store_true", help="Block until job(s) finish")
     p.add_argument("--wait-timeout", type=float, default=1800.0,
                    help="Seconds before --wait gives up (default 1800)")
@@ -536,6 +546,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("job_id", help="Original job ID")
     s.add_argument("--langs", required=True, help="Comma-separated target languages")
     s.add_argument("--mode", default="compare", choices=["single", "compare", "showcase"])
+    s.add_argument("--voxcpm-cfg", type=float,
+                   help="Override VoxCPM guidance for the new dubs "
+                        "(omit = inherit from the original job, 0 = global)")
+    s.add_argument("--voxcpm-steps", type=int,
+                   help="Override VoxCPM inference steps for the new dubs "
+                        "(omit = inherit from the original job, 0 = global)")
     s.add_argument("--wait", action="store_true")
     s.add_argument("--wait-timeout", type=float, default=1800.0)
     s.set_defaults(handler=cmd_redub)
