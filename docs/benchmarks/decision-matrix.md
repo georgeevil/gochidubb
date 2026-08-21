@@ -63,6 +63,14 @@ Times are the slowest median across source languages, after the model is loaded.
 | `liquid/lfm2-24b-a2b` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 12/12 | 5/13 | 0.84x | 18.5s |
 | `google/gemma-4-e4b` | ❌ | ❌ | ❌ | ❌ | — | — | — | — | 0/12 +26⚑ | — | 1.00x | 16.6s |
 
+### `uk_nepal_border` — Ukrainian source
+
+| Model | → `es` | → `pt` | → `ru` | → `hi` | → `ar` | → `zh` | → `ja` | → `ko` | → `bg` | `bg` meaning | Length vs source | Est. drift |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-20b` | — | — | — | — | — | — | — | — | ⚠️ | 12/13 +1⚑ | 0.99x | 0.0s |
+| `qwen/qwen3-8b` | — | — | — | — | — | — | — | — | ⚠️ | 11/13 +2⚑ | 1.03x | 0.0s |
+| `aya-expanse-8b` | — | — | — | — | — | — | — | — | ⚠️ | 9/13 | 0.89x | 0.0s |
+
 **meaning** columns are hand-written semantic checklists — the count of things the source says that the translation actually got right, with `⚑` marking grammar penalties. These *do* decide verdicts, and they only exist for language pairs somebody has written a checklist for ([how to add one](../../tests/fixtures/benchmark/checklists/README.md)).
 
 
