@@ -267,8 +267,12 @@ class TestDownload403Fallback:
     """download_video() retries through web_embedded — but only for a 403,
     and without giving up the preferred format to do it."""
 
-    HQ = ("bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
-          "best[height<=1080][ext=mp4]/best")
+    SIMPLE = "best[ext=mp4]/best"
+
+    @staticmethod
+    def _fmt(cmd):
+        """The -f selector a command was invoked with."""
+        return cmd[cmd.index("-f") + 1]
 
     def _run(self, tmp_path, responder):
         """Drive download_video with a fake subprocess; return the commands."""
@@ -299,17 +303,21 @@ class TestDownload403Fallback:
     def test_403_retry_keeps_the_preferred_format(self, tmp_path):
         # A 403 is an access problem, not a format problem — degrading to
         # best[ext=mp4] would hand back a worse rendition of a 1080p video.
+        # Asserted as "same selector as attempt 1, and not the degraded one"
+        # rather than a literal string, so tuning the selector doesn't break
+        # this without changing what it is actually checking.
         calls = self._run(tmp_path, lambda n, cmd: (
             _Result(0) if "web_embedded" in " ".join(cmd)
             else _Result(1, "HTTP Error 403: Forbidden")))
-        assert self.HQ in calls[1]
+        assert self._fmt(calls[1]) == self._fmt(calls[0])
+        assert self._fmt(calls[1]) != self.SIMPLE
 
     def test_non_403_failure_degrades_format_without_web_embedded(self, tmp_path):
         calls = self._run(tmp_path, lambda n, cmd: (
             _Result(0) if n == 2 else _Result(1, "ERROR: format not available")))
         assert len(calls) == 2
         assert "web_embedded" not in " ".join(calls[1])
-        assert self.HQ not in calls[1]          # fell back to the simple format
+        assert self._fmt(calls[1]) == self.SIMPLE   # degraded, as intended
 
 
 class TestProbe403Fallback:

@@ -225,18 +225,33 @@ def download_video(source: str, output_dir: str, info: dict | None = None) -> st
     base_cmd = _base_cmd()
     cookie_args = _cookie_args()
 
+    # Prefer H.264 (avc1) + AAC explicitly: those are what QuickTime, WhatsApp
+    # and the rest of the Apple ecosystem can decode, so getting them here
+    # means the assembler can stream-copy instead of paying for a transcode.
+    # The later branches still accept VP9/AV1 rather than failing the download
+    # — the assembler re-encodes those (see _video_codec_args).
+    try:
+        from app.config import cfg as _cfg
+        _max_h = int(getattr(_cfg, "output_max_height", 1080) or 0)
+    except Exception:
+        _max_h = 1080
+    _h = f"[height<={_max_h}]" if _max_h else ""
     preferred_fmt = [
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+        "-f",
+        f"bestvideo{_h}[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+        f"bestvideo{_h}[ext=mp4]+bestaudio[ext=m4a]/"
+        f"best{_h}[ext=mp4]/best{_h}/best",
         "--merge-output-format", "mp4",
     ]
-    simple_fmt = ["-f", "best[ext=mp4]/best"]
+    # The fallback used to omit --merge-output-format entirely, which is how a
+    # webm could come out of a path that is supposed to produce .mp4.
+    simple_fmt = ["-f", "best[ext=mp4]/best", "--merge-output-format", "mp4"]
     common = [
         "--no-playlist",
         "-o", output_path,
         "--no-check-certificates",
         "--retries", "3",
         "--socket-timeout", "30",
-        "--no-warnings",
     ]
 
     def _run(fmt, extra=()):

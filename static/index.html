@@ -3909,6 +3909,146 @@ function NumberKnob({ label, hint, value, onChange, min, max, step, disabled, se
   );
 }
 
+function OutputTab({ system }) {
+  const [saved, setSaved] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json())
+      .then(d => { setSaved(d); setDraft(d); })
+      .catch(e => setErr('Could not load settings: ' + (e.message || e)));
+  }, []);
+
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const changed = draft && saved
+    ? Object.keys(draft).filter(k => draft[k] !== saved[k]) : [];
+
+  const save = async () => {
+    if (!changed.length) return;
+    setBusy(true); setErr(''); setNote('');
+    try {
+      const body = {};
+      changed.forEach(k => { body[k] = draft[k]; });
+      const fd = new FormData();
+      fd.append('body', JSON.stringify(body));
+      const r = await fetch('/api/config', { method: 'PATCH', body: fd });
+      const d = await r.json();
+      if (!r.ok || d.error) { setErr(d.error || `Save failed (${r.status})`); return; }
+      setSaved(d.config); setDraft(d.config);
+      setNote('Saved — applies to the next job.');
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!draft) {
+    return <div className="mono" style={{ color: 'var(--ink-3)' }}>
+      {err || 'Loading settings…'}
+    </div>;
+  }
+
+  const group = { padding: 16, background: 'var(--bg-1)', border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-lg)', display: 'flex', flexDirection: 'column',
+                  gap: 14, marginBottom: 16 };
+  const copyMode = draft.output_video_codec === 'copy';
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <div style={group}>
+        <div className="caps">Format &amp; compatibility</div>
+        <Field label="Video codec"
+               hint="Re-encode keeps the result playable in QuickTime, WhatsApp and Finder. Copy is faster but passes the source stream through untouched — a VP9 or AV1 source then produces an .mp4 those players refuse.">
+          <Select value={draft.output_video_codec} onChange={v => set('output_video_codec', v)}>
+            <option value="h264" style={{ background: '#14141a' }}>H.264 · re-encode when needed (most compatible)</option>
+            <option value="copy" style={{ background: '#14141a' }}>Copy source stream · fastest</option>
+          </Select>
+        </Field>
+        {copyMode && (
+          <div style={{ padding: '8px 11px', borderRadius: 'var(--r-md)',
+                        background: 'var(--bg-2)', border: '1px solid var(--warn)',
+                        color: 'var(--warn)', fontSize: 11.5 }}>
+            With Copy, a VP9 or AV1 source is placed in an .mp4 unchanged. The
+            file is valid but will not open in QuickTime or WhatsApp.
+          </div>
+        )}
+        <Field label="Max source resolution"
+               hint="Caps what is downloaded. Lower is faster to fetch and render.">
+          <Select value={String(draft.output_max_height)}
+                  onChange={v => set('output_max_height', Number(v))}>
+            <option value="720" style={{ background: '#14141a' }}>720p</option>
+            <option value="1080" style={{ background: '#14141a' }}>1080p</option>
+            <option value="1440" style={{ background: '#14141a' }}>1440p</option>
+            <option value="2160" style={{ background: '#14141a' }}>2160p · 4K</option>
+            <option value="0" style={{ background: '#14141a' }}>Best available</option>
+          </Select>
+        </Field>
+      </div>
+
+      <div style={group}>
+        <div className="caps">Quality vs speed</div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: -4 }}>
+          Only applies when the video is re-encoded — a copied stream keeps the
+          source's own quality.
+        </div>
+        <Field label="Encoder preset"
+               hint="Slower presets produce a smaller file at the same quality, and take longer to render.">
+          <Select value={draft.output_preset} onChange={v => set('output_preset', v)}>
+            {['ultrafast','superfast','veryfast','faster','fast','medium','slow'].map(o => (
+              <option key={o} value={o} style={{ background: '#14141a' }}>{o}</option>
+            ))}
+          </Select>
+        </Field>
+        <NumberKnob label="Quality (CRF)" min={16} max={32} step={1}
+                    value={draft.output_crf}
+                    onChange={v => set('output_crf', v)}
+                    hint="16–32. Lower is better quality and a bigger file; 23 is the default, 18 is near-transparent."/>
+        <Field label="Audio bitrate" hint="AAC. 192k is transparent for speech.">
+          <Select value={draft.output_audio_bitrate}
+                  onChange={v => set('output_audio_bitrate', v)}>
+            {['128k','192k','256k','320k'].map(o => (
+              <option key={o} value={o} style={{ background: '#14141a' }}>{o}</option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+
+      <div style={group}>
+        <div className="caps">Mix</div>
+        <NumberKnob label="Background volume" min={0} max={1} step={0.05}
+                    value={draft.background_volume}
+                    onChange={v => set('background_volume', Math.round(v * 20) / 20)}
+                    hint="Level of the separated music/SFX bed under the dub, when 'Keep background audio' is on. 0 mutes it."/>
+      </div>
+
+      {err && (
+        <div style={{ padding: '9px 12px', borderRadius: 'var(--r-md)', marginBottom: 12,
+                      background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)',
+                      color: 'var(--err)', fontSize: 11.5 }}>{err}</div>
+      )}
+      {note && !err && (
+        <div style={{ padding: '9px 12px', borderRadius: 'var(--r-md)', marginBottom: 12,
+                      background: 'var(--accent-dim)', border: '1px solid var(--line-2)',
+                      fontSize: 11.5 }}>{note}</div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button className="btn btn-primary" onClick={save} disabled={busy || !changed.length}>
+          {busy ? 'Saving…' : changed.length ? `Save ${changed.length} change${changed.length > 1 ? 's' : ''}` : 'Saved'}
+        </button>
+        {changed.length > 0 && (
+          <button className="btn btn-ghost" onClick={() => { setDraft(saved); setErr(''); setNote(''); }}>
+            Discard
+          </button>
+        )}
+        <div style={{ flex: 1 }}/>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>config-user.json</span>
+      </div>
+    </div>
+  );
+}
+
 function VoiceTtsTab({ system }) {
   const [saved, setSaved] = useState(null);   // last known server state
   const [draft, setDraft] = useState(null);
@@ -4087,7 +4227,7 @@ function SystemView({ system, onRefreshSystem }) {
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 22 }}>
-        {[['overview', 'Overview'], ['voice', 'Voice & TTS'], ['setup', 'Setup'], ['logs', 'Logs']].map(([id, label]) => (
+        {[['overview', 'Overview'], ['voice', 'Voice & TTS'], ['output', 'Output'], ['setup', 'Setup'], ['logs', 'Logs']].map(([id, label]) => (
           <button key={id} className={'tab' + (tab === id ? ' active' : '')} onClick={() => pick(id)}>
             {label}{id === 'setup' && issues.length > 0 ? ` · ${issues.length}` : ''}
           </button>
@@ -4095,6 +4235,7 @@ function SystemView({ system, onRefreshSystem }) {
       </div>
 
       {tab === 'voice' && <VoiceTtsTab system={system}/>}
+      {tab === 'output' && <OutputTab system={system}/>}
       {tab === 'setup' && <SetupTab system={system} onRefreshSystem={onRefreshSystem}/>}
       {tab === 'logs' && <LogsTab/>}
       {tab === 'overview' && (

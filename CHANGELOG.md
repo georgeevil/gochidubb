@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The dubbed MP4 now plays in QuickTime, WhatsApp and Finder.** The render
+  stream-copied the source video into an `.mp4` without inspecting it, so a
+  VP9 or AV1 source (routine for 1080p YouTube) produced a valid file that
+  Apple's decoders refuse — while YouTube played it fine, because YouTube
+  re-encodes on upload. The video is now copied only when it is already
+  H.264 in 8-bit 4:2:0, and re-encoded to that otherwise, so the fast path
+  stays fast and the broken case stops being produced. `-pix_fmt yuv420p` is
+  now set on every encode, covering 4:4:4 and 10-bit sources too.
+- **Downloads prefer H.264/AAC and always produce an MP4.** The format
+  selector asks for `avc1`+`mp4a` first, and `--merge-output-format mp4` is
+  applied to *every* attempt — the fallback command omitted it entirely,
+  which is how a webm could come out of a path meant to produce `.mp4`.
+  `--no-warnings` is gone from the download so format fallbacks are visible.
+- **Background volume is no longer stuck at 15%.** `merge_audio_video` took a
+  `bg_volume` parameter its only caller never passed, so "Keep background
+  audio" was a toggle with a fixed, unreachable mix level behind it.
 - **Lint CI now actually runs.** `.github/workflows/lint.yml` triggered on
   `main` while the default branch is `master`, so the job had never run once,
   on any PR — `ruff check .` reported 104 findings against a branch nobody was
@@ -99,6 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the guide points at the new setup script.
 
 ### Added
+- **Settings → Output** — video codec (re-encode for compatibility, or copy
+  for speed, with a warning about what copy costs), max source resolution,
+  encoder preset, CRF, audio bitrate and background mix level. All were
+  hardcoded in `pipeline/assembler.py` and `pipeline/downloader.py`.
+  Defaults reproduce the previous behaviour exactly.
 - **`tools/setup_wav2lip.py`** — clones Wav2Lip, builds it an isolated venv on
   current dependencies rather than the 2020 pins, and applies the two patches
   that need applying: upstream `inference.py` chooses between CUDA and CPU
