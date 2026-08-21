@@ -260,6 +260,24 @@ def measure(fixture, target, texts, elapsed):
     out_digits = sum(len(digit_re.findall(t)) for t in texts)
     digits_kept = (min(out_digits / src_digits, 1.0) if src_digits else None)
 
+    # Source bleed: untranslated source surviving into the output. Only
+    # meaningful for same-script pairs — across scripts a repeated token is
+    # almost always a name or a number that should carry over. This is the
+    # metric the matrix was missing: every source here used to be German,
+    # English or Spanish, none of which shares surface forms with a Cyrillic
+    # target, so translate-by-copying could not be exercised at all.
+    source_lang = fixture.get("source_lang") or ""
+    bleed = None
+    if source_lang:
+        try:
+            from pipeline.quality import _source_bleed
+            hits = [i for i, (src, t) in enumerate(zip(sources, texts))
+                    if _source_bleed(src, t, target, source_lang)]
+            bleed = {"count": len(hits), "indices": hits[:10],
+                     "pct": round(100.0 * len(hits) / n, 1)}
+        except Exception:
+            bleed = None
+
     checklist = load_checklist(fixture["id"], target)
     semantic = score_checklist(checklist, texts) if checklist else None
 
@@ -271,6 +289,7 @@ def measure(fixture, target, texts, elapsed):
         "meta_prose": meta,
         "script_ok": script_ok,
         "digits_kept": digits_kept,
+        "bleed": bleed,
         "semantic": semantic,
         "len_ratio": round(sum(ratios) / n, 3),
         "drift_sec": round(predict_drift(
@@ -288,6 +307,10 @@ async def run_one(model, fixture, target, timeout):
             T.translate_segments(
                 segs, target, model=model, max_concurrent=1,
                 context_hint=fixture.get("context_hint") or "",
+                # Without this the benchmark measures a prompt the pipeline no
+                # longer sends: naming the source is what triggers the
+                # anti-passthrough rule on same-script pairs like uk->bg.
+                source_lang=fixture.get("source_lang") or "",
             ),
             timeout=timeout,
         )
@@ -338,6 +361,12 @@ def grade(runs):
         worst = min(sem_runs, key=lambda s: (s["score"], -s["penalty_hits"]))
         sem = dict(worst)
 
+    # Source bleed: untranslated source surviving into the output. Worst run,
+    # like everything else here. Only produced for same-script pairs, so it is
+    # None for most of the corpus and must never be read as "clean".
+    bleed_runs = [r["bleed"] for r in ok if r.get("bleed") is not None]
+    bleed = max(bleed_runs, key=lambda b: b["count"]) if bleed_runs else None
+
     if len(ok) < len(runs) or fallback > segments * 0.2 or meta > 0:
         g = "unusable"
     # A model that gets less than two thirds of the checked meaning right is
@@ -347,8 +376,15 @@ def grade(runs):
         g = "unusable"
     # Spelling one number out as a word ("three years" → "три года") is a
     # legitimate choice, so only substantial loss counts against a model.
+    # A third of the lines carrying untranslated source is the same class of
+    # failure as answering in the wrong script — the viewer hears the source
+    # language — and the script check cannot see it on a same-script pair.
+    elif bleed is not None and bleed["pct"] >= 33.0:
+        g = "unusable"
     elif (fallback > 0 or (script is not None and script < 0.99)
           or (digits is not None and digits < 0.5)):
+        g = "risky"
+    elif bleed is not None and bleed["count"] > 0:
         g = "risky"
     elif sem and (sem["score"] < 1.0 or sem["penalty_hits"] > 0):
         g = "risky"
@@ -358,6 +394,7 @@ def grade(runs):
         "grade": g, "fallback": round(fallback, 2), "meta_prose": round(meta, 2),
         "script_ok": None if script is None else round(script, 3),
         "digits_kept": None if digits is None else round(digits, 3),
+        "bleed": bleed,
         "semantic": sem,
         "drift_sec": max(r["drift_sec"] for r in ok),
         "median_sec": elapsed[len(elapsed) // 2],

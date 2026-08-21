@@ -1,0 +1,62 @@
+{
+  "id": "uk_nepal_border",
+  "source_lang": "uk",
+  "origin": "real",
+  "note": "Verbatim from GoChiDUBB job 8e5a1562 — a round-the-world travel vlog, driving from China to Nepal. Transcribed by faster-whisper medium, diarized by pyannote. This is the clip that exposed CLD-224: translated into Bulgarian by openai/gpt-oss-20b it came back with Ukrainian still in it — 'набагато' untranslated, and 'Кіронг' keeping і, a letter Bulgarian does not have.",
+  "context_hint": "travel vlog: driving from China to Nepal",
+  "duration": 60.014,
+  "challenges": [
+    "closely-related-pair",
+    "same-script",
+    "source-bleed",
+    "place-names",
+    "altitude-numbers",
+    "colloquial-aside",
+    "elliptical-speech"
+  ],
+  "why_this_fixture": "Every other source here is German, English or Spanish — none of which shares surface forms with a Cyrillic target, so none can exercise translate-by-copying. A Slavic source into Bulgarian can, and that failure mode is invisible to the script check because ru, uk, bg and mk all map to 'cyrillic'.",
+  "segments": [
+    {
+      "start": 15.17,
+      "end": 22.53,
+      "speaker": "SPEAKER_00",
+      "text": "Навколосвітня подорож продовжується 864 дні. Остання моя ніч в Китаї."
+    },
+    {
+      "start": 23.57,
+      "end": 25.43,
+      "speaker": "SPEAKER_00",
+      "text": "Десь отам повинен бути і мій рюкзак."
+    },
+    {
+      "start": 28.31,
+      "end": 34.44,
+      "speaker": "SPEAKER_00",
+      "text": "Ми зараз за 25 км від китайсько-непальського кордону."
+    },
+    {
+      "start": 35.63,
+      "end": 39.12,
+      "speaker": "SPEAKER_00",
+      "text": "Тибетське-китайське місто Кіронг."
+    },
+    {
+      "start": 41.34,
+      "end": 48.55,
+      "speaker": "SPEAKER_00",
+      "text": "Спустилися ми із 5200 на скільки тут? 2800."
+    },
+    {
+      "start": 50.31,
+      "end": 52.11,
+      "speaker": "SPEAKER_00",
+      "text": "Набагато легше якось на голову."
+    },
+    {
+      "start": 58.0,
+      "end": 59.0,
+      "speaker": "SPEAKER_00",
+      "text": "Давай прокручуся вже."
+    }
+  ]
+}

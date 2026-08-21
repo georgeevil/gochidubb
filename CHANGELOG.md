@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The translation benchmark can finally speak to closely-related language
+  pairs.** Every source fixture was German, English or Spanish — none of which
+  shares surface forms with a Cyrillic target — so translate-by-copying could
+  not be exercised at all, and the matrix recommended `openai/gpt-oss-20b` for
+  Bulgarian on evidence that did not apply to Ukrainian→Bulgarian. Adds a
+  Ukrainian fixture (the real clip that exposed the failure), a hand-written
+  `→ bg` checklist, and a mechanical **source-bleed** metric that counts
+  verbatim source words and out-of-alphabet letters. Bleed now grades: a third
+  of lines carrying untranslated source is the same class of failure as
+  answering in the wrong script, and the script check cannot see it because
+  `ru`, `uk`, `bg` and `mk` all map to "cyrillic". The benchmark also now
+  passes `source_lang`, so it measures the prompt the pipeline actually sends.
+
 ### Changed
 - **The test suite is hermetic, and CI now runs it.** `pipeline/__init__.py`
   was an eager barrel importing all nine submodules, so `from

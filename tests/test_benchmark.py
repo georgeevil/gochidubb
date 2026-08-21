@@ -568,3 +568,117 @@ class TestReviewRegressions:
                                  "penalties": [], "penalty_hits": penalties}}
         sem = B.grade([run(3, 11), run(9, 12)])["semantic"]
         assert (sem["passed"], sem["penalty_hits"]) == (3, 11)
+
+
+class TestRelatedPairFixture:
+    """uk→bg is the first same-script pair in the corpus.
+
+    Every other source is German, English or Spanish — none of which shares
+    surface forms with a Cyrillic target, so none of them can exercise
+    translate-by-copying. That failure shipped (CLD-224) and the matrix could
+    not have predicted it.
+    """
+
+    # The output that actually shipped from job 8e5a1562, wrong.
+    SHIPPED = [
+        "Мировата обиколка продължава 864 дни. Последната ми нощ в Китай.",
+        "Где там трябва да е и моята раница.",
+        "Сега сме на 25 км от китайско-непалския граница.",
+        "Тибетско-китайски град Кіронг.",
+        "Спуснахме от 5200 до колко тук? 2800.",
+        "Набагато по-лесно, каквото и да е на главата.",
+        "Нека се движим сега.",
+    ]
+    CLEAN = [
+        "Околосветското пътешествие продължава 864 дни. Последната ми нощ в Китай.",
+        "Някъде там трябва да е и моята раница.",
+        "Сега сме на 25 км от китайско-непалската граница.",
+        "Тибетско-китайски град Киронг.",
+        "Спуснахме се от 5200 до колко тук? 2800.",
+        "Много по-лесно, някак на главата.",
+        "Нека се обърна вече.",
+    ]
+
+    def _fixture(self):
+        for f in B.load_fixtures():
+            if f["id"] == "uk_nepal_border":
+                return f
+        raise AssertionError("uk_nepal_border fixture is missing")
+
+    def test_the_fixture_is_a_same_script_pair(self):
+        """If this stops being true the fixture has lost its purpose."""
+        import pipeline.translator as T
+        f = self._fixture()
+        assert f["source_lang"] == "uk"
+        assert T._LANG_SCRIPT["uk"] == T._LANG_SCRIPT["bg"] == "cyrillic"
+
+    def test_its_checklist_exists_and_is_loadable(self):
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        assert cl is not None, "a fixture without a checklist decides nothing"
+        assert cl["checks"] and cl["penalties"]
+
+    def test_the_checklist_catches_the_output_that_shipped(self):
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        r = B.score_checklist(cl, self.SHIPPED)
+        assert r["passed"] < r["total"], "the known-bad output must not pass"
+        labels = {p["label"] for p in r["penalties"]}
+        assert "ukrainian-only letters" in labels, (
+            "the і in 'Кіронг' is the failure this pair exists to catch"
+        )
+
+    def test_it_ranks_a_clean_translation_above_the_shipped_one(self):
+        """A checklist that cannot tell better from worse decides nothing."""
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        bad = B.score_checklist(cl, self.SHIPPED)
+        good = B.score_checklist(cl, self.CLEAN)
+        assert good["passed"] > bad["passed"]
+        assert len(good["penalties"]) < len(bad["penalties"])
+
+    def test_a_clean_translation_trips_no_alphabet_penalty(self):
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        labels = {p["label"] for p in B.score_checklist(cl, self.CLEAN)["penalties"]}
+        assert "ukrainian-only letters" not in labels
+        assert "russian-only letters" not in labels
+
+    def test_every_check_targets_a_real_segment(self):
+        """A check pointing past the end of the fixture silently never runs."""
+        f = self._fixture()
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        for c in cl["checks"]:
+            assert 0 <= c["segment"] < len(f["segments"]), c["label"]
+
+    def test_every_check_and_penalty_explains_itself(self):
+        cl = B.load_checklist("uk_nepal_border", "bg")
+        for item in list(cl["checks"]) + list(cl["penalties"]):
+            assert item.get("why"), f"{item.get('label')} has no 'why'"
+
+
+class TestSourceBleedMetric:
+    """The mechanical half — no hand-written checklist required, so it works
+    for any same-script pair somebody adds later."""
+
+    def _fixture(self):
+        for f in B.load_fixtures():
+            if f["id"] == "uk_nepal_border":
+                return f
+        raise AssertionError("fixture missing")
+
+    def test_bleed_is_counted_for_a_same_script_pair(self):
+        m = B.measure(self._fixture(), "bg",
+                      TestRelatedPairFixture.SHIPPED, elapsed=1.0)
+        assert m["bleed"] is not None
+        assert m["bleed"]["count"] >= 1
+
+    def test_a_clean_translation_reports_no_bleed(self):
+        m = B.measure(self._fixture(), "bg",
+                      TestRelatedPairFixture.CLEAN, elapsed=1.0)
+        assert m["bleed"]["count"] == 0
+
+    def test_cross_script_pairs_are_not_flagged(self):
+        """A name carried from Spanish into Bulgarian is correct, not bleed."""
+        for f in B.load_fixtures():
+            if f["id"] == "es_mothers_day":
+                m = B.measure(f, "bg", ["Барселона"] * len(f["segments"]), 1.0)
+                assert m["bleed"]["count"] == 0
+                return
+        pytest.skip("es_mothers_day fixture not present")

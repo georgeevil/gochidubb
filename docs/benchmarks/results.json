@@ -2,7 +2,8 @@
   "fixtures": [
     "de_workshop_intro",
     "en_clinic_thanks",
-    "es_mothers_day"
+    "es_mothers_day",
+    "uk_nepal_border"
   ],
   "targets": [
     "es",
@@ -1489,6 +1490,84 @@
             }
           ]
         }
+      },
+      "uk_nepal_border": {
+        "bg": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "bleed": {
+              "count": 0,
+              "indices": [],
+              "pct": 0.0
+            },
+            "semantic": {
+              "passed": 12,
+              "total": 13,
+              "score": 0.923,
+              "failed": [
+                "рюкзак -> раница"
+              ],
+              "penalties": [
+                {
+                  "label": "missing reflexive on спуснахме",
+                  "hits": 1
+                }
+              ],
+              "penalty_hits": 1
+            },
+            "drift_sec": 0.0,
+            "median_sec": 22.0,
+            "spread_sec": 0.0,
+            "runs": 1,
+            "segments": 7,
+            "len_ratio": 0.992
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "bleed": {
+                "count": 0,
+                "indices": [],
+                "pct": 0.0
+              },
+              "semantic": {
+                "passed": 12,
+                "total": 13,
+                "score": 0.923,
+                "failed": [
+                  "рюкзак -> раница"
+                ],
+                "penalties": [
+                  {
+                    "label": "missing reflexive on спуснахме",
+                    "hits": 1
+                  }
+                ],
+                "penalty_hits": 1
+              },
+              "len_ratio": 0.992,
+              "drift_sec": 0.0,
+              "elapsed": 22.0,
+              "texts": [
+                "Мировото пътуване продължава 864 дни. Последната ми нощ в Китай.",
+                "Трябва да е там, където трябва моят ранец.",
+                "Сега сме на 25 км от китайско-непалската граница.",
+                "Тибетско-кинетски град Киронг.",
+                "Спуснахме от 5200, а колко е тук? 2800.",
+                "Много по-лесно, почти на главата.",
+                "Нека се разходим сега."
+              ]
+            }
+          ]
+        }
       }
     },
     "qwen/qwen3-8b": {
@@ -2930,6 +3009,100 @@
                 "Здравей, мамо. Благодаря ти за всичко, което направи и те обичам.",
                 "Здравей, мамо. Благодаря ти за всичко. Нека да знаеш, че те обичам много и те мисля много. До следващия път.",
                 "Здравей, мамо. Благодаря ти за всичко, което направи за мен и да прекараш приятен ден."
+              ]
+            }
+          ]
+        }
+      },
+      "uk_nepal_border": {
+        "bg": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "bleed": {
+              "count": 2,
+              "indices": [
+                0,
+                6
+              ],
+              "pct": 28.6
+            },
+            "semantic": {
+              "passed": 11,
+              "total": 13,
+              "score": 0.846,
+              "failed": [
+                "рюкзак -> раница",
+                "набагато -> много (the headline failure)"
+              ],
+              "penalties": [
+                {
+                  "label": "ukrainian-only letters",
+                  "hits": 1
+                },
+                {
+                  "label": "feminine gender agreement on граница",
+                  "hits": 1
+                }
+              ],
+              "penalty_hits": 2
+            },
+            "drift_sec": 0.0,
+            "median_sec": 10.8,
+            "spread_sec": 0.0,
+            "runs": 1,
+            "segments": 7,
+            "len_ratio": 1.029
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "bleed": {
+                "count": 2,
+                "indices": [
+                  0,
+                  6
+                ],
+                "pct": 28.6
+              },
+              "semantic": {
+                "passed": 11,
+                "total": 13,
+                "score": 0.846,
+                "failed": [
+                  "рюкзак -> раница",
+                  "набагато -> много (the headline failure)"
+                ],
+                "penalties": [
+                  {
+                    "label": "ukrainian-only letters",
+                    "hits": 1
+                  },
+                  {
+                    "label": "feminine gender agreement on граница",
+                    "hits": 1
+                  }
+                ],
+                "penalty_hits": 2
+              },
+              "len_ratio": 1.029,
+              "drift_sec": 0.0,
+              "elapsed": 10.8,
+              "texts": [
+                "Навсякіди пътуването продължава 864 дни. Най-последната ми нощ в Китай.",
+                "Там трябва да е и моето ръчно куфарче.",
+                "Сега сме на 25 км от китайско-непалския граница.",
+                "Тибетско-китайското градче Киронг.",
+                "Слезли сме от 5200 на колко е тук? 2800.",
+                "Набързо по-леко някак на главата.",
+                "Давай се прокатувам вече."
               ]
             }
           ]
@@ -4406,6 +4579,80 @@
                 "Здравей, мамо. Спаси за рождението ми и обичам те.",
                 "Здравей, мамо. Спаси за всичко. Знай, че обичам те много и скучам по тебе много. До слагание.",
                 "Здравей, мамо. Спаси за всичко, което сделала за мен и наслаждай се от денят."
+              ]
+            }
+          ]
+        }
+      },
+      "uk_nepal_border": {
+        "bg": {
+          "verdict": {
+            "grade": "risky",
+            "fallback": 0.0,
+            "meta_prose": 0.0,
+            "script_ok": 1.0,
+            "digits_kept": 1.0,
+            "bleed": {
+              "count": 0,
+              "indices": [],
+              "pct": 0.0
+            },
+            "semantic": {
+              "passed": 9,
+              "total": 13,
+              "score": 0.692,
+              "failed": [
+                "навколосвітня подорож -> околосветско пътешествие",
+                "рюкзак -> раница",
+                "somewhere over there",
+                "набагато -> много (the headline failure)"
+              ],
+              "penalties": [],
+              "penalty_hits": 0
+            },
+            "drift_sec": 0.0,
+            "median_sec": 12.0,
+            "spread_sec": 0.0,
+            "runs": 1,
+            "segments": 7,
+            "len_ratio": 0.886
+          },
+          "runs": [
+            {
+              "fallback": 0,
+              "segments": 7,
+              "meta_prose": 0,
+              "script_ok": 1.0,
+              "digits_kept": 1.0,
+              "bleed": {
+                "count": 0,
+                "indices": [],
+                "pct": 0.0
+              },
+              "semantic": {
+                "passed": 9,
+                "total": 13,
+                "score": 0.692,
+                "failed": [
+                  "навколосвітня подорож -> околосветско пътешествие",
+                  "рюкзак -> раница",
+                  "somewhere over there",
+                  "набагато -> много (the headline failure)"
+                ],
+                "penalties": [],
+                "penalty_hits": 0
+              },
+              "len_ratio": 0.886,
+              "drift_sec": 0.0,
+              "elapsed": 12.0,
+              "texts": [
+                "Свия глобална путешествие продължава се 864 деня. Това е моя последна нощ в Китай.",
+                "Нека тук е и мойтия мина.",
+                "Съм близок на 25 км от китайско-непальския граница.",
+                "Тибетско-китайското град Киронг.",
+                "Спусна от 5200 до 2800 метра.",
+                "Е по-лесно за главата.",
+                "Дайте да се прокрути."
               ]
             }
           ]

@@ -1,0 +1,111 @@
+{
+  "fixture": "uk_nepal_border",
+  "target_lang": "bg",
+  "author_note": "Checked by hand against the Ukrainian source. Every `reject` here is a wrong answer actually produced by openai/gpt-oss-20b on job 8e5a1562 — not a hypothetical. The point of this pair is that Ukrainian and Bulgarian share a script and a lot of vocabulary, so a model can 'translate' by copying and every mechanical check still passes.",
+  "checks": [
+    {
+      "segment": 0,
+      "label": "навколосвітня подорож -> околосветско пътешествие",
+      "expect": "(околосветск|обиколк|пътешеств|пътуван)",
+      "why": "A round-the-world journey. Bulgarian has околосветско пътешествие; пътуване/обиколка are acceptable variants."
+    },
+    {
+      "segment": 0,
+      "label": "864 days survives",
+      "expect": "864",
+      "why": "A number carries a fact; losing it is a translation error a machine can see."
+    },
+    {
+      "segment": 0,
+      "label": "last night in China",
+      "expect": "кита",
+      "why": "Китай must appear. Dropping the country loses the whole point of the line."
+    },
+    {
+      "segment": 1,
+      "label": "рюкзак -> раница",
+      "expect": "(раниц|раница|багаж)",
+      "why": "Bulgarian for a backpack is раница. рюкзак is the Russian/Ukrainian form and does not belong."
+    },
+    {
+      "segment": 1,
+      "label": "somewhere over there",
+      "expect": "(там|някъде)",
+      "reject": "\\bгде\\b",
+      "why": "Где is Russian; Bulgarian is къде. Observed: the model wrote 'Где там трябва да е...'."
+    },
+    {
+      "segment": 2,
+      "label": "25 km survives",
+      "expect": "25",
+      "why": "Distance is the fact of the sentence."
+    },
+    {
+      "segment": 2,
+      "label": "the China-Nepal border",
+      "expect": "(границ|непал)",
+      "why": "Both halves matter — which border, and that it is a border."
+    },
+    {
+      "segment": 3,
+      "label": "Kyirong keeps a Bulgarian spelling",
+      "expect": "(кирон|кайрон|кирун|киронг)",
+      "reject": "і",
+      "why": "The place name may be transliterated several ways, but never with і — that letter is not in the Bulgarian alphabet. Observed: 'Кіронг' passed straight through."
+    },
+    {
+      "segment": 4,
+      "label": "both altitudes survive",
+      "expect": "5200",
+      "why": "Descending from 5200 to 2800 is the content of the line; either number missing breaks it."
+    },
+    {
+      "segment": 4,
+      "label": "second altitude survives",
+      "expect": "2800",
+      "why": "As above — the pair is the point."
+    },
+    {
+      "segment": 5,
+      "label": "набагато -> много (the headline failure)",
+      "expect": "(много|доста|далеч)",
+      "reject": "набагато",
+      "why": "набагато is Ukrainian for 'much/far more'. Bulgarian is много. Observed verbatim in the shipped dub: 'Набагато по-лесно'. This single check is why the fixture exists."
+    },
+    {
+      "segment": 5,
+      "label": "easier",
+      "expect": "(лесн|леко|олекна)",
+      "why": "The line is about it being easier on the head at lower altitude."
+    },
+    {
+      "segment": 6,
+      "label": "a colloquial aside is rendered, not copied",
+      "expect": "[а-яА-Я]",
+      "reject": "(прокручуся|давай\\s+прокруч)",
+      "why": "Elliptical speech is where a model is most tempted to pass the source through. Any Bulgarian rendering passes; the Ukrainian verb form does not."
+    }
+  ],
+  "penalties": [
+    {
+      "label": "ukrainian-only letters",
+      "pattern": "[іїєґ]",
+      "why": "і, ї, є and ґ do not exist in the Bulgarian alphabet. Their presence is proof of source bleed, and the script check cannot see it because uk and bg are both Cyrillic."
+    },
+    {
+      "label": "russian-only letters",
+      "pattern": "[ыэё]",
+      "why": "ы, э and ё are Russian, not Bulgarian. A model reaching for the wrong Slavic language shows up here."
+    },
+    {
+      "label": "feminine gender agreement on граница",
+      "pattern": "непалски(я|ят)\\s+границ",
+      "why": "граница is feminine, so it takes непалската. Observed: 'китайско-непалския граница'."
+    },
+    {
+      "label": "missing reflexive on спуснахме",
+      "pattern": "спуснахме\\s+(?!се)",
+      "why": "'We descended' is спуснахме се. Observed: 'Спуснахме от 5200'."
+    }
+  ]
+}
