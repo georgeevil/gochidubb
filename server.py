@@ -22,13 +22,18 @@ import sys as _sys
 import types as _types
 
 
+# `_sys` / `_types` are deleted at the end of this block (see the `del`
+# below), so a linter reads them as unbound here. They are not: this helper
+# is only ever called from the loop directly beneath it, long before the
+# del runs. Annotated rather than restructured — CLAUDE.md marks this block
+# load-bearing and warns against moving anything above it.
 def _gochidubb_stub_module(_name: str) -> None:
-    if _name in _sys.modules:
+    if _name in _sys.modules:          # noqa: F821
         return
-    m = _types.ModuleType(_name)
+    m = _types.ModuleType(_name)       # noqa: F821
     m.__file__ = f"<gochidubb-stub:{_name}>"
     m.__path__ = []
-    _sys.modules[_name] = m
+    _sys.modules[_name] = m            # noqa: F821
 
 
 for _n in (
@@ -193,7 +198,7 @@ from pipeline.notices import (
     mask_secret, merge_notices, worst_severity, notice as pnotice,
 )
 
-from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
+from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, STATIC_DIR
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
 from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
                  activity, apikeys as app_apikeys, webhooks as app_webhooks,
@@ -2153,6 +2158,10 @@ async def _stage_translate(job, work, ctx, update, perf):
         todo, target_lang, model,
         context_hint=context_hint,
         progress_callback=_translate_progress,
+        # Naming the source lets the prompt guard closely-related pairs
+        # (uk->bg, ru->uk) where an untranslated word still looks like an
+        # answer. ctx carries whatever whisper actually detected.
+        source_lang=ctx.get("effective_src") or ctx.get("source_lang_detected") or "",
     )
     log.info(
         f"[perf] · translate {total_todo} segment(s) in {time.time()-t0:.1f}s "
@@ -2674,6 +2683,71 @@ def _wizard_pause_after(stage_id: str, ctx: dict) -> Optional[tuple]:
     return None
 
 
+# Which stage's gate runs after which pipeline stage, and where it parks.
+# Deliberately placed *before* the expensive stage each one protects:
+# transcription is checked before a translator is paid for it, translation
+# before the GPU synthesizes it. A gate after the last stage can only ask for
+# a retry; a gate before one can save the work entirely.
+_GATE_AFTER_STAGE = {
+    "diarize": ("asr", "awaiting_transcript_review", "transcription_done"),
+    "translate": ("translation", "awaiting_translation_review", "translation_done"),
+}
+
+
+def _quality_gate_after(stage_id: str, ctx: dict, job: dict,
+                        job_id: str) -> Optional[tuple]:
+    """Pause the job when this stage's output is not worth building on.
+
+    Off unless `quality_gate` is enabled, and never fatal: a scorer that
+    raises must not fail a dub that is otherwise fine, so anything unexpected
+    is logged and the pipeline continues. The verdicts are stashed on the job
+    so the UI, the webhook and the trends endpoint all describe the same
+    decision rather than recomputing it.
+    """
+    # getattr, not attribute access: cfg is runtime-configurable and this
+    # field is new, so an older config object (or a test double) must
+    # degrade to "gate off" rather than failing the whole pipeline.
+    if not getattr(cfg, "quality_gate", False):
+        return None
+    mapping = _GATE_AFTER_STAGE.get(stage_id)
+    if not mapping:
+        return None
+    stage_name, status, cp_name = mapping
+    try:
+        from pipeline.quality import full_report, gate
+        report = full_report(
+            ctx.get("segments") or [],
+            target_lang=ctx.get("target_lang") or job.get("target_lang") or "",
+            source_lang=ctx.get("effective_src") or "",
+        )
+        result = gate(report, stage_name)
+    except Exception as e:
+        log.warning(f"[gate] {stage_name} gate skipped ({e})", exc_info=True)
+        return None
+
+    job["quality_gate"] = {
+        "stage": stage_name,
+        "passed": result["pass"],
+        "score": result["score"],
+        "threshold": result["threshold"],
+        "reasons": result["reasons"],
+        "verdicts": result["verdicts"],
+        "checked_at": time.time(),
+    }
+    if result["pass"]:
+        log.info(f"[gate] {stage_name} passed for {job_id} "
+                 f"(score {result['score']})")
+        return None
+
+    why = "; ".join(result["reasons"])
+    log.warning(f"[gate] {stage_name} gate FAILED for {job_id}: {why}")
+    app_audit.record("job.quality_gate", target=job_id, detail=why)
+    return (status,
+            f"Paused by the {stage_name} quality gate — {why}. "
+            f"Review, retranslate, or continue anyway.",
+            cp_name)
+
+
 async def run_pipeline_stages(
     job_id: str,
     ctx: dict,
@@ -2791,7 +2865,8 @@ async def run_pipeline_stages(
             _save_checkpoint(job_id, work, stage=spec["checkpoint"],
                              data=_ctx_for_checkpoint(ctx))
 
-            pause = _wizard_pause_after(sid, ctx)
+            pause = _wizard_pause_after(sid, ctx) or _quality_gate_after(
+                sid, ctx, job, job_id)
             if pause:
                 status, detail, cp_name = pause
                 update(status=status, progress=hi, step_detail=detail,
@@ -3428,8 +3503,8 @@ async def start_dub(
             model = _fallback
         else:
             return JSONResponse({
-                "error": f"No translation model installed. Pull one via 'ollama pull aya-expanse:8b' "
-                         f"or use the Models panel."
+                "error": "No translation model installed. Pull one via 'ollama pull aya-expanse:8b' "
+                         "or use the Models panel."
             }, 400)
 
     job_id = uuid.uuid4().hex[:8]
@@ -4521,6 +4596,67 @@ def _find_drawtext_font() -> str:
     return ""
 
 
+_FILTER_CACHE: dict = {}
+
+
+def _ffmpeg_has_filter(name: str) -> bool:
+    """Whether this ffmpeg build ships a given filter.
+
+    `drawtext` needs libfreetype, and plenty of builds skip it — Homebrew's
+    ffmpeg 8.x on macOS is one, which turns the showcase stitch into
+    "No such filter: 'drawtext'" after every dub has already been rendered.
+    Checked once and cached; `ffmpeg -filters` costs ~50ms.
+    """
+    if name in _FILTER_CACHE:
+        return _FILTER_CACHE[name]
+    import subprocess as _sp   # module-level import is not available here
+    ok = False
+    try:
+        r = _sp.run(["ffmpeg", "-hide_banner", "-filters"],
+                    capture_output=True, text=True, timeout=20)
+        # Lines look like " ..C drawtext V->V  Draw text on top of video."
+        ok = any(ln.split()[1:2] == [name]
+                 for ln in r.stdout.splitlines() if len(ln.split()) > 1)
+    except Exception as e:
+        log.warning(f"[showcase] could not probe ffmpeg filters: {e}")
+    _FILTER_CACHE[name] = ok
+    return ok
+
+
+def _render_label_png(text: str, dest: Path, font_path: str = "") -> bool:
+    """Draw the showcase language label to an RGBA PNG.
+
+    The fallback for builds without `drawtext`. Pillow does the text
+    rendering, so ffmpeg only has to `overlay` a bitmap — a filter every
+    build has. Deliberately mirrors the drawtext styling (22px white on a
+    black box at 55%, 8px padding) so the two paths look the same.
+
+    Pillow is not a declared dependency — it arrives via matplotlib — so a
+    missing import is an expected outcome, not an error.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+    try:
+        size, pad = 22, 8
+        try:
+            font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default(size)
+        except Exception:
+            font = ImageFont.load_default(size)
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        box = probe.textbbox((0, 0), text, font=font)
+        w, h = box[2] - box[0], box[3] - box[1]
+        img = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 140))
+        ImageDraw.Draw(img).text((pad - box[0], pad - box[1]), text,
+                                 font=font, fill=(255, 255, 255, 255))
+        img.save(dest)
+        return True
+    except Exception as e:
+        log.warning(f"[showcase] label render failed: {e}")
+        return False
+
+
 def _snap_boundaries_to_sentences(segments: list, total_dur: float, n_parts: int) -> list:
     """Compute n_parts contiguous slices that together cover [0, total_dur].
 
@@ -4627,7 +4763,7 @@ def _probe_duration(path: Path) -> float:
         if d > 0:
             return d
     except FileNotFoundError:
-        log.warning(f"[probe] ffprobe not on PATH — falling back to ffmpeg -i")
+        log.warning("[probe] ffprobe not on PATH — falling back to ffmpeg -i")
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         log.warning(f"[probe] ffprobe failed for {path}: {err[-200:].strip() or e}")
@@ -4858,6 +4994,26 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
     # ffmpeg filter syntax requires escaped colons on Windows paths
     font_arg = font_path.replace("\\", "/").replace(":", r"\:") if font_path else ""
 
+    # Which labelling path this build can support. drawtext needs libfreetype;
+    # when it is absent we render the same label with Pillow and overlay it,
+    # which needs no special ffmpeg build. Losing the labels entirely is the
+    # last resort — a stitched reel without captions still beats an error
+    # after every dub has already been rendered.
+    use_drawtext = _ffmpeg_has_filter("drawtext")
+    label_pngs: dict = {}
+    if not use_drawtext:
+        for idx, (job, _s, _e) in enumerate(per_dub_ranges):
+            code = (job.get("target_lang") or "").upper()
+            png = showcase_dir / f"_label_{idx}_{code or 'x'}.png"
+            if _render_label_png(f"· {code} ·", png, font_path):
+                label_pngs[idx] = png
+        if label_pngs:
+            log.info(f"[showcase] ffmpeg has no drawtext filter — overlaying "
+                     f"{len(label_pngs)} rendered label(s) instead")
+        else:
+            log.warning("[showcase] no drawtext filter and no Pillow — "
+                        "stitching without language labels")
+
     filter_parts = []
     inputs = []
     for idx, (job, start, end) in enumerate(per_dub_ranges):
@@ -4870,18 +5026,22 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
         # Escape single quotes and special chars for drawtext text= field
         text_safe = label.replace("'", r"\'")
 
-        drawtext = (
-            f"drawtext="
-            + (f"fontfile='{font_arg}':" if font_arg else "")
-            + f"text='{text_safe}':"
-            "fontsize=22:fontcolor=white:"
-            "box=1:boxcolor=black@0.55:boxborderw=8:"
-            "x=w-tw-24:y=24"
-        )
+        if use_drawtext:
+            drawtext = (
+                "drawtext="
+                + (f"fontfile='{font_arg}':" if font_arg else "")
+                + f"text='{text_safe}':"
+                "fontsize=22:fontcolor=white:"
+                "box=1:boxcolor=black@0.55:boxborderw=8:"
+                "x=w-tw-24:y=24"
+            )
+            label_step = f",{drawtext}"
+        else:
+            label_step = ""   # overlay is wired up after all inputs are known
 
         filter_parts.append(
             f"[{idx}:v]trim=start={start:.3f}:end={end:.3f},"
-            f"setpts=PTS-STARTPTS,{drawtext}[v{idx}]"
+            f"setpts=PTS-STARTPTS{label_step}[v{idx}]"
         )
         # apad+atrim guarantees the audio is EXACTLY seg_dur long: if the
         # dub's audio stream ends before `end` (TTS finished early) apad
@@ -4895,8 +5055,22 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
             f"atrim=duration={seg_dur:.3f}[a{idx}]"
         )
 
+    # Overlay path: the PNGs are appended after every video input, so their
+    # stream indices start at n. Each label is composited onto its own
+    # trimmed segment at the same top-right position drawtext would use.
+    if label_pngs:
+        png_order = sorted(label_pngs)
+        for slot, idx in enumerate(png_order):
+            inputs.extend(["-i", str(label_pngs[idx])])
+            filter_parts.append(
+                f"[v{idx}][{n + slot}:v]overlay=x=W-w-24:y=24:"
+                f"format=auto[v{idx}L]"
+            )
     # Concat all trimmed pieces
-    concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(n))
+    concat_inputs = "".join(
+        f"[v{i}L][a{i}]" if i in label_pngs else f"[v{i}][a{i}]"
+        for i in range(n)
+    )
     filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=1[vout][aout]")
     filter_complex = ";".join(filter_parts)
 
@@ -4923,6 +5097,13 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
         except Exception:
             pass
         return
+    finally:
+        # The rendered label bitmaps were only ever ffmpeg inputs.
+        for _png in label_pngs.values():
+            try:
+                _png.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # Write a manifest for the UI
     try:
@@ -5838,6 +6019,7 @@ async def _run_translate_stage(
     translated = await translate_segments(
         segments, target_lang, model,
         context_hint=context_hint,
+        source_lang=effective_src or "",
     )
     # See comment on unload in main pipeline — free VRAM for VoxCPM
     try:
@@ -5930,7 +6112,7 @@ async def _run_tts_and_merge_stage(
     elif mode == "voice_design":
         # CRITICAL: Voice Design needs NO reference. Without this clear,
         # VoxCPM sees ref + style prefix and produces broken output.
-        log.info(f"[stage] Clearing speaker refs for Voice Design mode")
+        log.info("[stage] Clearing speaker refs for Voice Design mode")
         speaker_refs = {}
         speaker_transcripts = {}
     else:
@@ -7360,7 +7542,6 @@ async def retranslate(
     adjust the context hint, or switch target language mid-flight."""
     if job_id not in jobs:
         return JSONResponse({"error": "Job not found"}, 404)
-    job = jobs[job_id]
     cp = _load_checkpoint(job_id, "transcription_done")
     if not cp:
         return JSONResponse(
@@ -7397,6 +7578,7 @@ async def _retranslate_stage(job_id: str, cp: dict, model: str,
         segments = await translate_segments(
             cp["segments"], target_lang, model,
             context_hint=context_hint,
+            source_lang=effective_src or "",
         )
         _save_checkpoint(job_id, work, stage="translation_done", data={
             **cp,
@@ -8120,7 +8302,61 @@ async def delete_job(job_id: str):
         shutil.rmtree(work, ignore_errors=True)
     delete_job_db(job_id)
     jobs.pop(job_id, None)
+    app_audit.record("job.delete", target=job_id)
     return {"ok": True}
+
+
+# Statuses whose output directory is being written to right now. Deleting one
+# rmtree's the directory out from under a live ffmpeg or TTS worker, which
+# fails the job in a way that looks like a pipeline bug rather than a deletion.
+_UNDELETABLE_STATUSES = {"running", "processing", "queued", "downloading"}
+
+
+@app.post("/api/jobs/bulk_delete")
+async def bulk_delete_jobs(job_ids: str = Form(...)):
+    """Delete many jobs in one call.
+
+    The UI needs this to be one round trip rather than N: selecting thirty
+    jobs and firing thirty DELETEs means thirty chances to half-finish, and
+    no single answer to show afterwards.
+
+    Returns per-id outcomes rather than failing the whole batch on the first
+    problem — a selection that happens to include one running job should
+    delete the other twenty-nine and say so.
+    """
+    ids = [s.strip() for s in job_ids.split(",") if s.strip()]
+    if not ids:
+        return JSONResponse({"error": "No job_ids given"}, 400)
+    if len(ids) > 500:
+        return JSONResponse({"error": "Too many ids in one call (max 500)"}, 400)
+
+    deleted, skipped, freed = [], [], 0
+    for job_id in ids:
+        job = jobs.get(job_id)
+        if job is None:
+            skipped.append({"id": job_id, "reason": "not found"})
+            continue
+        if (job.get("status") or "") in _UNDELETABLE_STATUSES:
+            skipped.append({"id": job_id, "reason": f"job is {job['status']} — cancel it first"})
+            continue
+        work = OUTPUT_DIR / job_id
+        try:
+            if work.exists():
+                freed += _dir_size_bytes(work)
+                shutil.rmtree(work, ignore_errors=True)
+            delete_job_db(job_id)
+            jobs.pop(job_id, None)
+            deleted.append(job_id)
+        except Exception as e:
+            log.warning(f"[delete] {job_id} failed: {e}")
+            skipped.append({"id": job_id, "reason": str(e)[:120]})
+
+    if deleted:
+        app_audit.record("job.bulk_delete", target=f"{len(deleted)} jobs",
+                         detail=",".join(deleted[:20]) + ("…" if len(deleted) > 20 else ""))
+        log.info(f"[delete] removed {len(deleted)} job(s), freed {freed/1e6:.0f} MB")
+    return {"ok": True, "deleted": deleted, "skipped": skipped,
+            "freed_bytes": freed, "freed_mb": round(freed / 1e6, 1)}
 
 
 # ═══════════════════════════════════════════════════════════════════════

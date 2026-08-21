@@ -19,7 +19,6 @@ import asyncio
 import json
 import logging
 import sqlite3
-import time
 from pathlib import Path
 from typing import Optional
 

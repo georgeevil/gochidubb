@@ -24,6 +24,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Background volume is no longer stuck at 15%.** `merge_audio_video` took a
   `bg_volume` parameter its only caller never passed, so "Keep background
   audio" was a toggle with a fixed, unreachable mix level behind it.
+- **Lint CI now actually runs.** `.github/workflows/lint.yml` triggered on
+  `main` while the default branch is `master`, so the job had never run once,
+  on any PR — `ruff check .` reported 104 findings against a branch nobody was
+  gating. Fixing the trigger alone would have turned CI red immediately, so
+  this also adds a `ruff.toml` that configures off the patterns the codebase
+  uses on purpose (compact `a(); b()` statements, the load-bearing
+  speechbrain/k2 stub block's E402, `pipeline/__init__.py`'s re-exports, now
+  declared via `__all__`) and fixes what was genuinely wrong: a bare `except:`
+  in `pipeline/models.py` swallowing `KeyboardInterrupt`, an unused local in
+  `server.py`, and 15 dead imports. Ruff is pinned so a new release cannot
+  turn every PR red.
+
+### Added
+- **Quality gates: a bad stage now stops the job instead of being reported
+  afterwards.** `pipeline/quality.py` already scored five stages and emitted
+  verdicts with `suggested_action`, but only when someone opened the panel —
+  so a bad dub completed silently. A gate now runs at the transcription and
+  translation checkpoints, *before* the expensive stage each one protects, and
+  parks the job at `awaiting_review` with the failing verdicts attached rather
+  than spending GPU on synthesis. The `job.awaiting_review` webhook carries
+  the same verdicts, so an agent can act on the payload. Off via
+  `GOCHIDUBB_QUALITY_GATE=0`.
+- **`translation_quality` can see source-language bleed.** It previously only
+  caught whole lines identical to their source; the uk→bg failure hid inside
+  otherwise-Bulgarian lines. It now reports verbatim source words and letters
+  outside the target's alphabet, and those lower the score — a dub used to be
+  able to score 100 while the panel showed a "serious" verdict about it.
+
+### Fixed
+- **Translations between closely-related languages no longer pass source words
+  through.** The batch prompt — the one actually used — never named the source
+  language, and one of its rules said "if a line cannot be translated, repeat
+  its source text". Between distant languages that is harmless; between two
+  Cyrillic Slavic languages it licensed exactly the failure seen on a uk→bg
+  dub, where `набагато` survived untranslated and `Кіронг` kept a Ukrainian
+  letter Bulgarian does not have. The prompt now names the direction, and when
+  source and target share a script it forbids passing text through. Added
+  `foreign_letters()`, which catches alphabet-level bleed the existing script
+  check structurally cannot — it maps `ru`, `uk`, `bg` and `mk` all to
+  "cyrillic", so Ukrainian handed back as Bulgarian scored 100%.
+
+### Fixed
+- **Showcase stitching no longer dies on ffmpeg builds without `drawtext`.**
+  That filter needs libfreetype, which Homebrew's ffmpeg 8.x on macOS does not
+  ship, so the reel failed with `No such filter: 'drawtext'` *after* every dub
+  had already been rendered. The build is probed once, and when `drawtext` is
+  missing the same label is rendered with Pillow and composited with `overlay`
+  — a filter every build has — so the language captions survive rather than
+  being dropped. If Pillow is unavailable too, the reel is stitched without
+  labels and says so, because a reel without captions beats an error after an
+  hour of GPU time.
+
+### Fixed
+- **A degraded TTS segment no longer speaks in a different voice.** When every
+  tier and QA retry fails, the fallback now ships the *first* take rather than
+  the best-scoring one. QA scores transcription accuracy — CER and language
+  match — and never scores timbre, so "best score" says nothing about whether
+  the voice still matches the speaker: a degraded Chinese segment shipped at
+  225 Hz against a 133 Hz reference while being the better-scoring of its two
+  takes. Only the first attempt uses the unmutated `voice_seed`, so it is the
+  one that matches every other segment. This is the trade `voice_design` mode
+  already makes.
+
+### Added
+- **Delete jobs from the UI, one or many.** History rows gain a checkbox and a
+  per-row Delete; the toolbar offers select-all and a count, and shift-clicking
+  a checkbox selects the range between it and the last one clicked. Deletion is
+  one `POST /api/jobs/bulk_delete` rather than N round trips, so a selection of
+  thirty is one answer rather than thirty chances to half-finish, and it reports
+  what it freed. Jobs still writing to their own output directory are refused
+  and the reason is shown before you confirm — rmtree-ing a live job's directory
+  fails it in a way that looks like a pipeline bug. The per-row button routes
+  through the same confirmation as the bulk one, so there is a single delete
+  path rather than two that can drift apart.
+
+### Fixed
 - **Lip-sync could never actually run.** The Wav2Lip wiring has been complete
   for a while — discovery, subprocess call, remux, an auto-hook in the queue
   worker, a UI toggle — but three things stopped any install from working.

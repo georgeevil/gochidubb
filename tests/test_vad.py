@@ -1,7 +1,6 @@
 """Tests for pipeline/vad.py — VAD filtering logic and edge cases."""
 from unittest.mock import patch
 
-import pytest
 
 from pipeline.vad import (apply_vad_filter, get_speech_timestamps,
                           map_to_original, remap_segments, SPEECH_RATIO_WARNING)
@@ -77,9 +76,15 @@ class TestApplyVadFilter:
                                                 mock_ffmpeg, caplog):
         import logging
         caplog.set_level(logging.WARNING)
+        # VAD padding adds 0.1s on each side → 1.2s speech / 10s total = 12%.
+        # Pinned against the real constant so that lowering the threshold
+        # fails here with the reason rather than on the assertion below.
+        fixture_ratio = 1.2 / 10.0
+        assert fixture_ratio < SPEECH_RATIO_WARNING, (
+            f"fixture speech ratio {fixture_ratio:.0%} no longer sits below the "
+            f"{SPEECH_RATIO_WARNING:.0%} warning threshold — adjust the mock"
+        )
         apply_vad_filter("/fake/input.wav", "/fake/output.wav")
-        # VAD padding adds 0.1s on each side → 1.2s speech / 10s total ≈ 12%
-        # The threshold for warning is 15%, so it should fire
         assert any("only" in record.message and "%" in record.message
                    for record in caplog.records if "VAD" in record.message)
 

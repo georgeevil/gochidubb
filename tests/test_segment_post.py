@@ -142,12 +142,11 @@ class TestSplitVeryLongSegments:
         segs = [{"start": 0.0, "end": 20.0, "text": "First sentence here. Second sentence there. "
                                                       "Third sentence at the end."}]
         result = _split_very_long_segments(segs, threshold=10.0)
-        orig_text = segs[0]["text"]
-        split_text = " ".join(s["text"] for s in result)
-        # After merging whitespace, all words should be preserved
-        assert "First" in split_text
-        assert "Second" in split_text
-        assert "Third" in split_text
+        orig_words = segs[0]["text"].split()
+        split_words = " ".join(s["text"] for s in result).split()
+        # The split may re-flow whitespace, but it must not drop, duplicate,
+        # or reorder a single word — that would desync the dub from the audio.
+        assert split_words == orig_words
 
     def test_empty_input(self):
         assert _split_very_long_segments([], 15.0) == []

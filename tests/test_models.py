@@ -1,5 +1,4 @@
 """Tests for pipeline/models.py — model size estimation and system checks."""
-from unittest.mock import patch
 
 import pytest
 

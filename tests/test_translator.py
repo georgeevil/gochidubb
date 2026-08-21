@@ -444,3 +444,78 @@ class TestTranslateTexts:
         monkeypatch.setattr(T, "translate_text", fake_translate_text)
         asyncio.run(T.translate_texts(["x"], "ru", context_hint="a vlog"))
         assert seen.get("context_hint") == "a vlog"
+
+
+class TestRelatedLanguagePairs:
+    """uk→bg produced Bulgarian with Ukrainian words and letters left in it.
+
+    Two closely-related Cyrillic languages let a model "translate" by copying:
+    the output is the right script, the right length, and passes every guard
+    the pipeline had. The benchmark could not have predicted it either — its
+    sources are German, English and Spanish, none of which share surface forms
+    with Bulgarian.
+    """
+
+    def test_source_language_is_named_for_a_related_pair(self):
+        from pipeline.translator import _build_batch_prompt
+        p = _build_batch_prompt(["Набагато легше."], "bg", source_lang="uk")
+        assert "from Ukrainian into Bulgarian" in p
+
+    def test_related_pair_gets_an_explicit_no_passthrough_rule(self):
+        from pipeline.translator import _build_batch_prompt
+        p = _build_batch_prompt(["Набагато легше."], "bg", source_lang="uk")
+        assert "same script and share vocabulary" in p
+        assert "never copy a line through unchanged" in p
+
+    def test_unrelated_pair_is_not_burdened_with_that_rule(self):
+        from pipeline.translator import _build_batch_prompt
+        p = _build_batch_prompt(["Gracias."], "bg", source_lang="es")
+        assert "from Spanish into Bulgarian" in p
+        assert "same script and share vocabulary" not in p
+
+    def test_omitting_source_lang_still_builds_a_valid_prompt(self):
+        """Back-compat: callers that don't know the source must still work."""
+        from pipeline.translator import _build_batch_prompt
+        p = _build_batch_prompt(["hello", "world"], "bg")
+        assert "into Bulgarian" in p
+        assert "Output EXACTLY 2 lines" in p
+
+    def test_the_repeat_the_source_rule_is_gone(self):
+        """That rule licensed the exact pass-through this guards against."""
+        from pipeline.translator import _build_batch_prompt
+        p = _build_batch_prompt(["x"], "bg", source_lang="uk")
+        assert "repeat its source text" not in p
+
+
+class TestForeignAlphabetDetection:
+    """The script check maps ru/uk/bg/mk all to "cyrillic", so it scores
+    Ukrainian-as-Bulgarian at 100%. This sees inside the script."""
+
+    def test_ukrainian_letter_in_bulgarian_is_flagged(self):
+        from pipeline.translator import foreign_letters
+        # Real output from job 8e5a1562
+        assert foreign_letters("Тибетско-китайски град Кіронг.", "bg") == "і"
+
+    def test_clean_bulgarian_is_not_flagged(self):
+        from pipeline.translator import foreign_letters
+        assert foreign_letters("Мировата обиколка продължава 864 дни.", "bg") == ""
+
+    def test_russian_letters_in_bulgarian_are_flagged(self):
+        from pipeline.translator import foreign_letters
+        # "это было" carries both Russian-only letters
+        assert set(foreign_letters("это было", "bg")) == {"э", "ы"}
+
+    def test_russian_target_flags_ukrainian_letters(self):
+        from pipeline.translator import foreign_letters
+        assert foreign_letters("Кіровоград", "ru") == "і"
+
+    def test_a_language_with_no_table_entry_is_never_flagged(self):
+        from pipeline.translator import foreign_letters
+        assert foreign_letters("anything at all", "es") == ""
+
+    def test_word_level_copies_are_out_of_scope(self):
+        """Documents the limit: 'набагато' is Ukrainian but every letter in it
+        exists in Bulgarian, so an alphabet check cannot see it. Catching that
+        needs a lexical check — see CLD-224."""
+        from pipeline.translator import foreign_letters
+        assert foreign_letters("Набагато по-лесно", "bg") == ""

@@ -4,8 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
-import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 log = logging.getLogger("gochidubb.models")
 
@@ -116,7 +115,7 @@ def _estimate_model_size(model_id: str) -> float:
             match = re.search(r'(\d+)b', model_lower)
             if match:
                 return float(match.group(1)) * 0.6  # Approximate GB per B
-        except:
+        except Exception:
             pass
     
     return 0.0

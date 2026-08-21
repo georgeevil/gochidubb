@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("gochidubb.quality")
@@ -142,8 +143,63 @@ def asr_quality(segments: List[dict]) -> Dict[str, Any]:
     return out
 
 
-def translation_quality(segments: List[dict]) -> Dict[str, Any]:
-    """Untranslated lines + length-ratio distribution of the translation."""
+def _source_bleed(src: str, tgt: str, target_lang: str,
+                  source_lang: str = "") -> str:
+    """Evidence that `tgt` carries untranslated `src`, or "".
+
+    Two signals, both cheap and language-agnostic:
+
+    * a letter outside the target's alphabet — `і` in Bulgarian, say, which
+      the script check cannot see because it maps uk and bg both to Cyrillic;
+    * a long word repeated verbatim from the source.
+
+    The word check only runs for same-script pairs. Across scripts a repeated
+    token is almost always a name or a number that *should* carry over, and
+    flagging those would bury the real signal.
+    """
+    if not target_lang:
+        return ""
+    try:
+        from .translator import _LANG_SCRIPT, foreign_letters
+    except ImportError:  # pragma: no cover - translator is always present
+        return ""
+
+    foreign = foreign_letters(tgt, target_lang)
+    if foreign:
+        return f"non-{target_lang} letters {foreign!r}"
+
+    t2, s2 = (target_lang or "")[:2].lower(), (source_lang or "")[:2].lower()
+    if not s2 or s2 == t2:
+        return ""
+    if _LANG_SCRIPT.get(s2) != _LANG_SCRIPT.get(t2):
+        return ""
+
+    src_words = {w for w in re.findall(r"\w{5,}", src.lower())}
+    if not src_words:
+        return ""
+    # Numbers and anything with a digit are legitimately identical.
+    repeated = [w for w in re.findall(r"\w{5,}", tgt.lower())
+                if w in src_words and not any(c.isdigit() for c in w)]
+    if repeated:
+        return f"verbatim {source_lang} word(s) {sorted(set(repeated))[:3]}"
+    return ""
+
+
+def translation_quality(segments: List[dict], target_lang: str = "",
+                        source_lang: str = "") -> Dict[str, Any]:
+    """Untranslated lines, length-ratio distribution, and source bleed.
+
+    "Untranslated" used to mean the whole line came back identical. That misses
+    the failure that actually shipped: on a uk→bg dub, single Ukrainian words
+    survived *inside* otherwise-Bulgarian lines, so every line differed from
+    its source and nothing flagged it. Two cheap signals catch it — words
+    repeated verbatim from the source, and letters outside the target
+    language's alphabet.
+
+    Both need the language pair, which is why this now takes it. Called
+    without it, the two new counts are simply absent and behaviour is
+    unchanged.
+    """
     segments = segments or []
     considered = [(i, s) for i, s in enumerate(segments)
                   if (s.get("text") or "").strip()]
@@ -153,6 +209,8 @@ def translation_quality(segments: List[dict]) -> Dict[str, Any]:
     untranslated: List[int] = []
     ratios: List[float] = []
     outliers: List[int] = []
+    bleed: List[int] = []
+    bleed_examples: List[str] = []
     for i, s in considered:
         src = (s.get("text") or "").strip()
         tgt = (s.get("translated_text") or "").strip()
@@ -163,6 +221,11 @@ def translation_quality(segments: List[dict]) -> Dict[str, Any]:
         ratios.append(ratio)
         if ratio > LEN_RATIO_HIGH or ratio < LEN_RATIO_LOW:
             outliers.append(_idx(s, i))
+        leaked = _source_bleed(src, tgt, target_lang, source_lang)
+        if leaked:
+            bleed.append(_idx(s, i))
+            if len(bleed_examples) < 5:
+                bleed_examples.append(leaked)
 
     out: Dict[str, Any] = {
         "available": True,
@@ -172,6 +235,10 @@ def translation_quality(segments: List[dict]) -> Dict[str, Any]:
         "outlier_indices": outliers[:20],
         "outlier_count": len(outliers),
     }
+    if target_lang:
+        out["bleed_count"] = len(bleed)
+        out["bleed_indices"] = bleed[:20]
+        out["bleed_examples"] = bleed_examples
     if ratios:
         out["len_ratio_mean"] = round(_mean(ratios), 3)
         out["len_ratio_p90"] = round(_percentile(ratios, 90), 3)
@@ -313,7 +380,13 @@ def _score_translation(tr: Dict[str, Any]) -> Optional[float]:
     n = max(tr.get("n_segments", 0), 1)
     untranslated_pct = 100.0 * tr.get("untranslated_count", 0) / n
     outlier_pct = 100.0 * tr.get("outlier_count", 0) / n
-    return _clamp(100.0 - 1.5 * untranslated_pct - 0.5 * outlier_pct)
+    # Bleed is weighted like a wholly-untranslated line, because that is what
+    # it is in miniature: a stretch of source language reaching the viewer.
+    # Without this a dub could score 100 while the panel showed a "serious"
+    # verdict about it, which teaches people to distrust the number.
+    bleed_pct = 100.0 * (tr.get("bleed_count") or 0) / n
+    return _clamp(100.0 - 1.5 * untranslated_pct - 0.5 * outlier_pct
+                  - 1.5 * bleed_pct)
 
 
 def _score_tts(tts: Dict[str, Any]) -> Optional[float]:
@@ -394,6 +467,15 @@ def _verdicts(asr, tr, tts, tm, ld) -> List[Dict[str, Any]]:
                 f"{LEN_RATIO_HIGH}x or <{LEN_RATIO_LOW}x the source length) — "
                 f"likely merged, dropped or padded lines.",
                 tr.get("outlier_indices"), "edit_translations")
+        bc = tr.get("bleed_count", 0)
+        if bc:
+            eg = ", ".join(tr.get("bleed_examples") or [])
+            pct = 100.0 * bc / n
+            add("serious" if pct >= 20 else "warn", "translation",
+                f"{bc}/{n} translations still carry source-language material "
+                f"({eg}). Closely-related languages let a model 'translate' by "
+                f"copying — the line reads as the target language but is not.",
+                tr.get("bleed_indices"), "retranslate")
 
     if tts.get("available"):
         dc = tts.get("degraded_count", 0)
@@ -486,12 +568,76 @@ def rollup(asr: Dict[str, Any], translation: Dict[str, Any],
     }
 
 
+# ── Gates ────────────────────────────────────────────────────────────────
+#
+# A gate turns a report into one decision: keep going, or stop and ask. It is
+# deliberately separate from scoring — scoring says how good something is,
+# gating says whether that is good enough to spend the next stage's compute
+# on, and only the second one is a policy.
+#
+# Thresholds are per-stage 0-100 scores, set so that a job a human would call
+# obviously broken trips and a merely-imperfect one does not. They are
+# conservative on purpose: a false pause costs a click, a false pass costs
+# the GPU time of everything downstream.
+GATE_THRESHOLDS = {
+    "asr": 55.0,
+    "translation": 60.0,
+    "tts": 50.0,
+}
+
+# Signals that stop a job regardless of the composite score, because they
+# describe damage a good score can average away — twenty clean lines and two
+# lines of untranslated source still ships two lines of the wrong language.
+GATE_HARD_SIGNALS = {
+    "translation": (
+        ("bleed_count", 0.15, "source-language material left in the translation"),
+        ("untranslated_count", 0.10, "segments with no translation at all"),
+    ),
+}
+
+
+def gate(report: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    """Decide whether the pipeline should pause after `stage`.
+
+    Returns ``{"pass", "stage", "score", "threshold", "reasons", "verdicts"}``.
+    Passing when a stage could not be scored is deliberate: an unmeasurable
+    signal is not evidence of a problem, and blocking on it would stop every
+    job whose inputs predate the scorers.
+    """
+    data = report.get(stage) or {}
+    rollup_scores = (report.get("rollup") or {}).get("stages") or {}
+    entry = rollup_scores.get(stage) or {}
+    score = entry.get("score")
+    threshold = GATE_THRESHOLDS.get(stage)
+    reasons: List[str] = []
+
+    if not data.get("available") or score is None or threshold is None:
+        return {"pass": True, "stage": stage, "score": score,
+                "threshold": threshold, "reasons": [], "verdicts": []}
+
+    if score < threshold:
+        reasons.append(f"{stage} score {score} is below the {threshold:.0f} gate")
+
+    n = max(data.get("n_segments") or data.get("n_with_qa") or 1, 1)
+    for key, frac, label in GATE_HARD_SIGNALS.get(stage, ()):  # type: ignore[misc]
+        count = data.get(key) or 0
+        if count and count / n >= frac:
+            reasons.append(f"{count}/{n} {label}")
+
+    verdicts = [v for v in (report.get("rollup") or {}).get("verdicts", [])
+                if v.get("stage") == stage and v.get("severity") in ("serious", "warn")]
+    return {"pass": not reasons, "stage": stage, "score": score,
+            "threshold": threshold, "reasons": reasons, "verdicts": verdicts}
+
+
 def full_report(segments: List[dict],
                 placements: Optional[List[dict]] = None,
-                loudnorm: Optional[dict] = None) -> Dict[str, Any]:
+                loudnorm: Optional[dict] = None,
+                target_lang: str = "",
+                source_lang: str = "") -> Dict[str, Any]:
     """Run every scorer + rollup. Convenience for the API route and CLI."""
     asr = asr_quality(segments)
-    tr = translation_quality(segments)
+    tr = translation_quality(segments, target_lang, source_lang)
     tts = tts_quality(segments)
     tm = timing_quality(placements or [])
     ld = loudness_quality(loudnorm)

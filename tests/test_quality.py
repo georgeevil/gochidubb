@@ -328,3 +328,106 @@ class TestParseLoudnormStderr:
         q = loudness_quality(_parse_loudnorm_stderr(REAL_STDERR))
         assert q["available"] is True
         assert q["output_i"] == pytest.approx(-16.58)
+
+
+class TestSourceBleedDetection:
+    """The uk→bg failure: Ukrainian words and letters inside otherwise-
+    Bulgarian lines. Every line differed from its source, so the existing
+    untranslated check saw nothing."""
+
+    def _seg(self, i, src, tgt):
+        return {"idx": i, "text": src, "translated_text": tgt}
+
+    def test_partial_bleed_is_invisible_without_the_language_pair(self):
+        from pipeline.quality import translation_quality
+        segs = [self._seg(0, "Набагато легше якось на голову.",
+                          "Набагато по-лесно, каквото и да е на главата.")]
+        out = translation_quality(segs)          # no pair given
+        assert out["untranslated_count"] == 0    # the old check sees nothing
+        assert "bleed_count" not in out
+
+    def test_verbatim_source_word_is_caught_with_the_pair(self):
+        from pipeline.quality import translation_quality
+        segs = [self._seg(0, "Набагато легше якось на голову.",
+                          "Набагато по-лесно, каквото и да е на главата.")]
+        out = translation_quality(segs, target_lang="bg", source_lang="uk")
+        assert out["bleed_count"] == 1
+        assert "набагато" in out["bleed_examples"][0]
+
+    def test_foreign_letter_is_caught(self):
+        from pipeline.quality import translation_quality
+        segs = [self._seg(0, "Тибетське-китайське місто Кіронг.",
+                          "Тибетско-китайски град Кіронг.")]
+        out = translation_quality(segs, target_lang="bg", source_lang="uk")
+        assert out["bleed_count"] == 1
+        assert "і" in out["bleed_examples"][0]
+
+    def test_clean_translation_is_not_flagged(self):
+        from pipeline.quality import translation_quality
+        segs = [self._seg(0, "Остання моя ніч в Китаї.",
+                          "Последната ми нощ в Китай.")]
+        out = translation_quality(segs, target_lang="bg", source_lang="uk")
+        assert out["bleed_count"] == 0
+
+    def test_cross_script_repeats_are_not_flagged(self):
+        """A name carried across scripts is correct, not bleed."""
+        from pipeline.quality import translation_quality
+        segs = [self._seg(0, "Barcelona is lovely", "Барселона is lovely")]
+        out = translation_quality(segs, target_lang="bg", source_lang="en")
+        assert out["bleed_count"] == 0
+
+    def test_bleed_lowers_the_score_so_it_matches_the_verdict(self):
+        """A 100 score beside a 'serious' verdict teaches people to
+        distrust the number."""
+        from pipeline.quality import translation_quality, rollup
+        segs = [self._seg(i, "Набагато легше", "Набагато по-лесно")
+                for i in range(4)]
+        tr = translation_quality(segs, target_lang="bg", source_lang="uk")
+        r = rollup({"available": False}, tr, {"available": False},
+                   {"available": False}, {"available": False})
+        assert r["stages"]["translation"]["score"] < 60
+
+
+class TestQualityGate:
+    """Gating is policy: is this good enough to spend the next stage on."""
+
+    def _report(self, bleed, n):
+        segs = []
+        for i in range(n):
+            if i < bleed:
+                segs.append({"idx": i, "text": "Набагато легше",
+                             "translated_text": "Набагато по-лесно"})
+            else:
+                segs.append({"idx": i, "text": "Остання моя ніч",
+                             "translated_text": "Последната ми нощ"})
+        from pipeline.quality import full_report
+        return full_report(segs, target_lang="bg", source_lang="uk")
+
+    def test_a_clean_translation_passes(self):
+        from pipeline.quality import gate
+        g = gate(self._report(0, 10), "translation")
+        assert g["pass"] and not g["reasons"]
+
+    def test_widespread_bleed_trips_the_gate(self):
+        from pipeline.quality import gate
+        g = gate(self._report(3, 10), "translation")
+        assert not g["pass"]
+        assert any("source-language material" in r for r in g["reasons"])
+
+    def test_a_single_bleed_in_a_long_job_does_not_trip_it(self):
+        """One place name in fifty lines is not a reason to stop."""
+        from pipeline.quality import gate
+        g = gate(self._report(1, 50), "translation")
+        assert g["pass"]
+
+    def test_an_unscorable_stage_passes_rather_than_blocking(self):
+        from pipeline.quality import gate, full_report
+        g = gate(full_report([]), "translation")
+        assert g["pass"]
+
+    def test_failing_gate_carries_actionable_verdicts(self):
+        from pipeline.quality import gate
+        g = gate(self._report(5, 10), "translation")
+        assert not g["pass"]
+        assert g["verdicts"], "a paused job must say what to do about it"
+        assert any(v.get("suggested_action") for v in g["verdicts"])

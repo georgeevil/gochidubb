@@ -1,0 +1,39 @@
+# Ruff configuration.
+#
+# The point of this file is to make `ruff check .` meaningful: green when the
+# codebase is in the state its authors intended, red when something is
+# actually wrong. Before it existed the repo reported 104 findings, almost all
+# of them deliberate patterns, and the lint job had never run at all
+# (.github/workflows/lint.yml triggered on `main`; the default branch is
+# `master`). A permanently-red gate is the same as no gate, so the ignores
+# below are deliberate and each one is justified.
+
+target-version = "py310"
+line-length = 100
+
+[lint]
+# Ruff's defaults are E4/E7/E9 + F. Kept, minus two stylistic rules the
+# codebase uses on purpose:
+#
+#   E701/E702  compound statements and semicolons. Used for genuinely paired
+#              operations — `w.setnchannels(1); w.setsampwidth(2)`,
+#              `h = int(t // 3600); m = int((t % 3600) // 60)`. Splitting
+#              those across lines makes them harder to read, not easier.
+ignore = ["E701", "E702"]
+
+[lint.per-file-ignores]
+# server.py opens with a speechbrain/k2 stub block that MUST run before any
+# other import — CLAUDE.md documents it as load-bearing and warns against
+# moving imports above it. Every import in the file is therefore "not at top",
+# which is E402 by construction.
+"server.py" = ["E402"]
+
+# Test files import fixtures and helpers for their side effects and for
+# readability of the test surface; an unused name there is not a defect.
+"tests/conftest.py" = ["F401"]
+
+# Tests group imports with the section they support rather than hoisting
+# everything to the top — `import sys, types` sitting directly above the
+# stub they exist to build reads better than the same names 100 lines away
+# from their only use.
+"tests/*" = ["E402"]

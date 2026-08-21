@@ -209,8 +209,8 @@ def _note_fallback(notices: list, used: str, errors: list) -> None:
         remediation=[
             "Run System → Setup → Run checks — it asks Hugging Face whether "
             "this is a permissions problem or just a failed download",
-            f"If access is fine, re-run the Diarize stage; the download is "
-            f"usually transient",
+            "If access is fine, re-run the Diarize stage; the download is "
+            "usually transient",
         ],
         url=f"https://hf.co/{repo}" if repo else f"https://hf.co/{used}",
     ))
