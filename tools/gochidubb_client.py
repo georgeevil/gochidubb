@@ -111,6 +111,8 @@ class GoChiDUBBClient:
         wizard_mode: str = "auto",
         mode: str = "dub",
         scheduled_at: Optional[float] = None,
+        voxcpm_cfg: float = 0.0,
+        voxcpm_steps: int = 0,
     ) -> dict:
         """Submit a single-language dub. Returns dict with `job_id`.
 
@@ -118,6 +120,8 @@ class GoChiDUBBClient:
         used for music videos where dubbing makes no sense).
         scheduled_at: unix epoch seconds; a future timestamp parks the job
         as status='scheduled' and the server starts it at that time.
+        voxcpm_cfg / voxcpm_steps: per-job VoxCPM guidance and inference
+        steps. 0 (the default) means "use the server's global setting".
         """
         files, form = self._source_fields(source)
         form.update({
@@ -133,6 +137,8 @@ class GoChiDUBBClient:
             "context_hint": context_hint,
             "wizard_mode": wizard_mode,
             "mode": mode,
+            "voxcpm_cfg": str(float(voxcpm_cfg or 0)),
+            "voxcpm_steps": str(int(voxcpm_steps or 0)),
         })
         if model:
             form["model"] = model
@@ -155,6 +161,8 @@ class GoChiDUBBClient:
         keep_bg: bool = False,
         auto_denoise: bool = False,
         context_hint: str = "",
+        voxcpm_cfg: float = 0.0,
+        voxcpm_steps: int = 0,
     ) -> dict:
         """Submit N separate dubs (Quick Test mode). 2-6 target_langs."""
         if isinstance(target_langs, (list, tuple)):
@@ -171,6 +179,8 @@ class GoChiDUBBClient:
             "keep_bg": str(bool(keep_bg)).lower(),
             "auto_denoise": str(bool(auto_denoise)).lower(),
             "context_hint": context_hint,
+            "voxcpm_cfg": str(float(voxcpm_cfg or 0)),
+            "voxcpm_steps": str(int(voxcpm_steps or 0)),
         })
         if model:
             form["model"] = model
@@ -191,6 +201,8 @@ class GoChiDUBBClient:
         keep_bg: bool = False,
         auto_denoise: bool = False,
         context_hint: str = "",
+        voxcpm_cfg: float = 0.0,
+        voxcpm_steps: int = 0,
     ) -> dict:
         """Submit a multilingual showcase reel. 2-6 target_langs are
         dubbed independently then stitched into one continuous video."""
@@ -208,6 +220,8 @@ class GoChiDUBBClient:
             "keep_bg": str(bool(keep_bg)).lower(),
             "auto_denoise": str(bool(auto_denoise)).lower(),
             "context_hint": context_hint,
+            "voxcpm_cfg": str(float(voxcpm_cfg or 0)),
+            "voxcpm_steps": str(int(voxcpm_steps or 0)),
         })
         if model:
             form["model"] = model
@@ -222,6 +236,8 @@ class GoChiDUBBClient:
         model: Optional[str] = None,
         voice_preset: Optional[str] = None,
         tts_speed: Optional[str] = None,
+        voxcpm_cfg: Optional[float] = None,
+        voxcpm_steps: Optional[int] = None,
     ) -> dict:
         """Re-dub an existing job's source into new language(s) without
         re-uploading. Inherits settings from the original; overrides allowed."""
@@ -229,7 +245,8 @@ class GoChiDUBBClient:
             target_langs = ",".join(target_langs)
         form = {"target_langs": target_langs, "mode": mode}
         for k, v in (("model", model), ("voice_preset", voice_preset),
-                     ("tts_speed", tts_speed)):
+                     ("tts_speed", tts_speed), ("voxcpm_cfg", voxcpm_cfg),
+                     ("voxcpm_steps", voxcpm_steps)):
             if v is not None:
                 form[k] = v
         return await self._request("POST", f"/api/job/{job_id}/redub", data=form)

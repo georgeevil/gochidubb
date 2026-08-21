@@ -993,6 +993,9 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
   const [lipSync, setLipSync] = useState(() => _lsGet('lipSync', false));
   const [llmRegroup, setLlmRegroup] = useState(() => _lsGet('llmRegroup', false));
   const [wizardReview, setWizardReview] = useState(() => _lsGet('wizardReview', false));
+  // Per-job VoxCPM overrides. 0 = "auto", i.e. follow Settings -> Voice & TTS.
+  const [voxCfg, setVoxCfg] = useState(() => _lsGet('voxCfg', 0));
+  const [voxSteps, setVoxSteps] = useState(() => _lsGet('voxSteps', 0));
 
   const [qtTrimSeconds, setQtTrimSeconds] = useState(() => _lsGet('qtTrim', 60));
   const [qtLangs, setQtLangs] = useState(() => {
@@ -1102,6 +1105,8 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
   useEffect(() => { _lsSet('lipSync', lipSync); }, [lipSync]);
   useEffect(() => { _lsSet('llmRegroup', llmRegroup); }, [llmRegroup]);
   useEffect(() => { _lsSet('wizardReview', wizardReview); }, [wizardReview]);
+  useEffect(() => { _lsSet('voxCfg', voxCfg); }, [voxCfg]);
+  useEffect(() => { _lsSet('voxSteps', voxSteps); }, [voxSteps]);
   useEffect(() => { _lsSet('qtTrim', qtTrimSeconds); }, [qtTrimSeconds]);
   useEffect(() => { _lsSet('qtLangs', qtLangs); }, [qtLangs]);
 
@@ -1127,6 +1132,8 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     fd.append('voice_style', voiceStyle);
     fd.append('voice_preset', voicePreset);
     fd.append('tts_speed', ttsSpeed);
+    fd.append('voxcpm_cfg', String(voxCfg));
+    fd.append('voxcpm_steps', String(voxSteps));
     fd.append('wizard_mode', wizardReview ? 'review_translation' : 'auto');
     fd.append('auto_denoise', autoDenoise);
     fd.append('llm_regroup', llmRegroup);
@@ -1159,6 +1166,8 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     fd.append('voice_style', voiceStyle);
     fd.append('voice_preset', voicePreset);
     fd.append('tts_speed', ttsSpeed);
+    fd.append('voxcpm_cfg', String(voxCfg));
+    fd.append('voxcpm_steps', String(voxSteps));
     fd.append('wizard_mode', 'auto');
     fd.append('auto_denoise', autoDenoise);
     fd.append('llm_regroup', llmRegroup);
@@ -1194,6 +1203,8 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     fd.append('voice_preset', voicePreset);
     fd.append('voice_style', voiceStyle);
     fd.append('tts_speed', ttsSpeed);
+    fd.append('voxcpm_cfg', String(voxCfg));
+    fd.append('voxcpm_steps', String(voxSteps));
     fd.append('keep_bg', keepBg);
     fd.append('auto_denoise', autoDenoise);
     fd.append('context_hint', contextHint);
@@ -1226,6 +1237,8 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
     fd.append('voice_preset', voicePreset);
     fd.append('voice_style', voiceStyle);
     fd.append('tts_speed', ttsSpeed);
+    fd.append('voxcpm_cfg', String(voxCfg));
+    fd.append('voxcpm_steps', String(voxSteps));
     fd.append('keep_bg', keepBg);
     fd.append('auto_denoise', autoDenoise);
     fd.append('context_hint', contextHint);
@@ -1481,6 +1494,27 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
                   : 'Auto-runs Wav2Lip after dubbing. Best for talking-head footage; fails on action shots or far-away faces. Adds 2-5x video duration.'}/>
         <Toggle value={llmRegroup}  onChange={setLlmRegroup}  label="LLM segment regrouping" hint="+20-40s on long videos · fixes mid-sentence breaks · best for podcasts, lectures, seminars"/>
         <Toggle value={wizardReview} onChange={setWizardReview} label="Wizard mode — pause for review" hint="Pause after translation so you can edit segments and replace voice references."/>
+
+        {/* Per-job VoxCPM tuning. The same two knobs live in Settings ->
+            Voice & TTS as global defaults; these override them for this run
+            only, which is the point — one hard source shouldn't change the
+            default for everything else. 'auto' means inherit. */}
+        <div style={{ marginTop: 18 }}>
+          <div className="caps" style={{ marginBottom: 10 }}>
+            VoxCPM tuning · this job only
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <NumberKnob label="Guidance (cfg)" min={1} max={3} step={0.1} sentinel={0}
+                      value={voxCfg} onChange={setVoxCfg}
+                      hint="Higher sticks closer to the translated text; lower sounds
+                            more natural but can drift. Used as-is, including for
+                            cross-lingual jobs. auto = the global setting."/>
+          <NumberKnob label="Inference steps" min={4} max={24} step={1} sentinel={0}
+                      value={voxSteps} onChange={setVoxSteps}
+                      hint="More steps trade render time for quality.
+                            auto = follow the global setting and the quality tier."/>
+          </div>
+        </div>
 
         <div style={{ marginTop: 14 }}>
           <Field label="Translation context (optional)" hint="A short hint for the LLM. Examples: 'BJJ grappling seminar', 'tech podcast', 'cooking show'.">
@@ -1945,6 +1979,24 @@ function RetryOption({ opt, value, onChange, models, voicePresets }) {
         />
         <span style={{ color: 'var(--ink-2)', ...common }}>{opt.label}</span>
       </label>
+    );
+  } else if (opt.type === 'number') {
+    // Without this branch a numeric option falls through to the free-text
+    // input below and posts a string, which the server then refuses.
+    control = (
+      <div>
+        <div className="caps" style={{ marginBottom: 4 }}>{opt.label}</div>
+        <input
+          className="field"
+          type="number"
+          min={opt.min} max={opt.max} step={opt.step}
+          value={value === undefined ? '' : value}
+          placeholder="unchanged"
+          onChange={e => onChange(opt.key,
+            e.target.value === '' ? undefined : Number(e.target.value))}
+          style={{ ...common, minWidth: 120 }}
+        />
+      </div>
     );
   } else if (opt.type === 'select' || opt.type === 'model' || opt.type === 'voice') {
     // 'model' and 'voice' are 'select' whose choices come from live server

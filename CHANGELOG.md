@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-job VoxCPM guidance and inference steps.** Settings → Voice & TTS set
+  these globally, and per-job control stopped at the fast/balanced/quality
+  tier. But tuning is per-job by nature — one hard source (heavy accent, noisy
+  reference, awkward language pair) may want stronger guidance without moving
+  the default for everything else, which previously meant changing the global
+  setting, running the job, and remembering to change it back. New dub's
+  **Advanced** block now has two knobs, `auto` by default, threaded through
+  `/api/dub`, `/api/dub/batch`, `/api/quick_test`, `/api/showcase`, redub and
+  `retry_tts`, plus the per-stage retry panel, the CLI (`--voxcpm-cfg`,
+  `--voxcpm-steps`) and the MCP tools. Both are bounded by the same
+  `FIELD_SPECS` the Settings tab uses — they reach VoxCPM directly, so an
+  out-of-range value is refused rather than clamped quietly.
+
+  An explicit per-job value is **final**: it skips the cross-lingual floor
+  instead of being clamped up by it. Almost every dub is cross-lingual, so the
+  alternative would make asking for *less* guidance silently do nothing.
+
 - **The translation benchmark can finally speak to closely-related language
   pairs.** Every source fixture was German, English or Spanish — none of which
   shares surface forms with a Cyrillic target — so translate-by-copying could
@@ -34,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a clean venv at 1016/1016.
 
 ### Fixed
+- **Multi-language dubs failed the moment they left the queue.**
+  `/api/quick_test` put `lip_sync` into the pipeline arguments, and the queue
+  worker splats those into `run_pipeline(job_id, **args)` — which has no such
+  parameter. Every job it created was accepted, persisted, shown as queued,
+  and then died with a `TypeError` at dequeue. The flag belongs on the job
+  dict, where the post-success Wav2Lip hook already reads it from. Two tests
+  now check that every enqueue site — and every stashed `_pending_args` a
+  scheduled job replays hours later — binds to `run_pipeline`'s signature.
+
 - **The dubbed MP4 now plays in QuickTime, WhatsApp and Finder.** The render
   stream-copied the source video into an `.mp4` without inspecting it, so a
   VP9 or AV1 source (routine for 1080p YouTube) produced a valid file that
