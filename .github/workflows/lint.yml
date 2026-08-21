@@ -37,15 +37,22 @@ jobs:
         run: |
           python -m compileall -q server.py pipeline/ tools/ app/
 
-# No `tests` job here, deliberately. The suite passes locally (1003 tests)
-# but is not yet hermetic enough to gate on:
-#   * pipeline/__init__.py is an eager barrel, so `from pipeline.x import y`
-#     imports transcriber -> torch. Without torch, 21 of 36 test files fail
-#     to COLLECT and zero tests run.
-#   * With the full dependency set installed (pytest numpy soundfile aiohttp
-#     httpx python-multipart python-dotenv + cpu-only torch), 995 pass and 8
-#     still fail on environment: torchaudio missing, a timing-sensitive
-#     ResourceSampler, and three HF-probe tests.
-# Turning the job on is not the same as the tests running, and a job that is
-# red on its first run is the same mistake this file already made once.
-# Tracked in CLD-225.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          # Separate, and from the CPU index: the default index serves the
+          # multi-GB CUDA build, which this suite has no use for. ~17s.
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+      - name: Run tests
+        # -p no:randomly keeps ordering stable; the suite has one known
+        # whole-suite ordering artifact (an unawaited coroutine warning in
+        # test_lm_studio_client) that predates this job.
+        run: pytest -q

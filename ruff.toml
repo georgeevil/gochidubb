@@ -28,6 +28,12 @@ ignore = ["E701", "E702"]
 # which is E402 by construction.
 "server.py" = ["E402"]
 
+# pipeline/__init__.py is a lazy re-export module (PEP 562 __getattr__). Its
+# TYPE_CHECKING block exists so type checkers and IDEs can see names that only
+# exist at runtime, and __all__ is computed from a dict, so nothing statically
+# connects the two. Re-exports are the documented exception to F401.
+"pipeline/__init__.py" = ["F401"]
+
 # Test files import fixtures and helpers for their side effects and for
 # readability of the test surface; an unused name there is not a defect.
 "tests/conftest.py" = ["F401"]
