@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Quality gates: a bad stage now stops the job instead of being reported
+  afterwards.** `pipeline/quality.py` already scored five stages and emitted
+  verdicts with `suggested_action`, but only when someone opened the panel —
+  so a bad dub completed silently. A gate now runs at the transcription and
+  translation checkpoints, *before* the expensive stage each one protects, and
+  parks the job at `awaiting_review` with the failing verdicts attached rather
+  than spending GPU on synthesis. The `job.awaiting_review` webhook carries
+  the same verdicts, so an agent can act on the payload. Off via
+  `GOCHIDUBB_QUALITY_GATE=0`.
+- **`translation_quality` can see source-language bleed.** It previously only
+  caught whole lines identical to their source; the uk→bg failure hid inside
+  otherwise-Bulgarian lines. It now reports verbatim source words and letters
+  outside the target's alphabet, and those lower the score — a dub used to be
+  able to score 100 while the panel showed a "serious" verdict about it.
+
 ### Fixed
 - **Translations between closely-related languages no longer pass source words
   through.** The batch prompt — the one actually used — never named the source
