@@ -236,4 +236,9 @@ def payload_for_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "duration_sec": job.get("duration"),
         "error": job.get("error"),
         "batch_id": job.get("batch_id"),
+        # Why a job is awaiting review, when it is there because a gate said
+        # so rather than because the user asked to review every job. Carries
+        # the same verdicts the UI shows, so an agent can act on the payload
+        # without a second round trip.
+        "quality_gate": job.get("quality_gate"),
     }

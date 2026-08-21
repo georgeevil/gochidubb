@@ -115,6 +115,9 @@ class UserConfig:
     # ── Deployment mode ───────────────────────────────────────────────
     # "local" is today's experience: no auth, no billing surfaces.
     # "hosted" reveals the Workspace UI group and enforces API-key scopes.
+    # Pause a job when a stage's output is not worth building on, rather
+    # than spending the next stage's GPU time and reporting afterwards.
+    quality_gate: bool = True
     mode: str = "local"                  # "local" | "hosted"
 
     # ── Whisper ───────────────────────────────────────────────────────
@@ -288,6 +291,7 @@ def _load_config() -> UserConfig:
     # Layer 1: environment variables (highest priority)
     env_map = {
         "GOCHIDUBB_MODE": "mode",
+        "GOCHIDUBB_QUALITY_GATE": "quality_gate",
         "HF_TOKEN": "hf_token",
         "VOXCPM_MODEL": "voxcpm_model",
         "VOXCPM_CFG": "voxcpm_cfg",

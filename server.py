@@ -2678,6 +2678,71 @@ def _wizard_pause_after(stage_id: str, ctx: dict) -> Optional[tuple]:
     return None
 
 
+# Which stage's gate runs after which pipeline stage, and where it parks.
+# Deliberately placed *before* the expensive stage each one protects:
+# transcription is checked before a translator is paid for it, translation
+# before the GPU synthesizes it. A gate after the last stage can only ask for
+# a retry; a gate before one can save the work entirely.
+_GATE_AFTER_STAGE = {
+    "diarize": ("asr", "awaiting_transcript_review", "transcription_done"),
+    "translate": ("translation", "awaiting_translation_review", "translation_done"),
+}
+
+
+def _quality_gate_after(stage_id: str, ctx: dict, job: dict,
+                        job_id: str) -> Optional[tuple]:
+    """Pause the job when this stage's output is not worth building on.
+
+    Off unless `quality_gate` is enabled, and never fatal: a scorer that
+    raises must not fail a dub that is otherwise fine, so anything unexpected
+    is logged and the pipeline continues. The verdicts are stashed on the job
+    so the UI, the webhook and the trends endpoint all describe the same
+    decision rather than recomputing it.
+    """
+    # getattr, not attribute access: cfg is runtime-configurable and this
+    # field is new, so an older config object (or a test double) must
+    # degrade to "gate off" rather than failing the whole pipeline.
+    if not getattr(cfg, "quality_gate", False):
+        return None
+    mapping = _GATE_AFTER_STAGE.get(stage_id)
+    if not mapping:
+        return None
+    stage_name, status, cp_name = mapping
+    try:
+        from pipeline.quality import full_report, gate
+        report = full_report(
+            ctx.get("segments") or [],
+            target_lang=ctx.get("target_lang") or job.get("target_lang") or "",
+            source_lang=ctx.get("effective_src") or "",
+        )
+        result = gate(report, stage_name)
+    except Exception as e:
+        log.warning(f"[gate] {stage_name} gate skipped ({e})", exc_info=True)
+        return None
+
+    job["quality_gate"] = {
+        "stage": stage_name,
+        "passed": result["pass"],
+        "score": result["score"],
+        "threshold": result["threshold"],
+        "reasons": result["reasons"],
+        "verdicts": result["verdicts"],
+        "checked_at": time.time(),
+    }
+    if result["pass"]:
+        log.info(f"[gate] {stage_name} passed for {job_id} "
+                 f"(score {result['score']})")
+        return None
+
+    why = "; ".join(result["reasons"])
+    log.warning(f"[gate] {stage_name} gate FAILED for {job_id}: {why}")
+    app_audit.record("job.quality_gate", target=job_id, detail=why)
+    return (status,
+            f"Paused by the {stage_name} quality gate — {why}. "
+            f"Review, retranslate, or continue anyway.",
+            cp_name)
+
+
 async def run_pipeline_stages(
     job_id: str,
     ctx: dict,
@@ -2795,7 +2860,8 @@ async def run_pipeline_stages(
             _save_checkpoint(job_id, work, stage=spec["checkpoint"],
                              data=_ctx_for_checkpoint(ctx))
 
-            pause = _wizard_pause_after(sid, ctx)
+            pause = _wizard_pause_after(sid, ctx) or _quality_gate_after(
+                sid, ctx, job, job_id)
             if pause:
                 status, detail, cp_name = pause
                 update(status=status, progress=hi, step_detail=detail,
