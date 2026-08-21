@@ -5,8 +5,12 @@ Audio transcription using faster-whisper (optimized for Apple Silicon)
 
 import logging
 from typing import List, Dict, Optional, Tuple
-import torch
 import multiprocessing  # For detecting CPU cores
+
+# torch is imported inside transcribe() rather than here. It is used on exactly
+# one line — the MPS check below — but a module-level import made every pure
+# helper in this file (get_optimal_thread_count, word_confidence_stats) and
+# every test of them require a multi-hundred-MB dependency. See CLD-225.
 
 
 logger = logging.getLogger(__name__)
@@ -109,6 +113,7 @@ def transcribe(
     
     try:
         # For Apple Silicon MPS support - use CPU or try MPS
+        import torch
         if device == "mps" or (device == "cpu" and hasattr(torch, 'backends') and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()):
             # faster-whisper doesn't directly support MPS, but we can use CPU with int8
             # which is already very optimized

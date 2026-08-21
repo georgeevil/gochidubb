@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The test suite is hermetic, and CI now runs it.** `pipeline/__init__.py`
+  was an eager barrel importing all nine submodules, so `from
+  pipeline.segment_post import ...` — pure string and timing arithmetic —
+  pulled `transcriber` and therefore torch. In a clean environment 22 of 36
+  test files failed to *collect* and zero tests ran, which is why tests could
+  not be gated on. The package is now lazy (PEP 562 `__getattr__`) and
+  `transcriber` defers its one torch use into the function that needs it, so
+  **1003 of 1016 tests pass with no torch installed at all**. A `tests` job
+  runs the full suite from a documented `requirements-dev.txt`; verified from
+  a clean venv at 1016/1016.
+
 ### Fixed
 - **The dubbed MP4 now plays in QuickTime, WhatsApp and Finder.** The render
   stream-copied the source video into an `.mp4` without inspecting it, so a

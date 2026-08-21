@@ -1,0 +1,48 @@
+# Development and CI dependencies.
+#
+# NOT requirements.txt. That file installs what a dub needs — VoxCPM, whisper,
+# yt-dlp, the works. This one installs what the *test suite* needs, which is a
+# much smaller set, because the suite is pure-function by design (CLAUDE.md):
+# no model loads, no ffmpeg, no network.
+#
+# Every entry below is here because something fails without it, verified in a
+# clean venv rather than guessed. The suite collects 1016 tests and passes all
+# of them with exactly this list.
+#
+#     python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+#     .venv/bin/pytest -q
+#     .venv/bin/ruff check .
+
+pytest
+
+# ── What the code under test imports ────────────────────────────────────
+numpy                 # segment maths, metrics, quality scorers
+aiohttp               # translator's HTTP client (5 test files)
+fastapi               # route tests (3 test files)
+httpx                 # webhook delivery
+soundfile             # audio round-trips
+python-multipart      # FastAPI Form() parsing — route tests fail to collect without it
+python-dotenv         # server.py loads .env at import
+huggingface_hub       # diagnostics' HF probe tests
+psutil                # metrics ResourceSampler — without it the sampler yields no data
+                      # points and the "a fast stage must still yield a data point"
+                      # test fails in a way that reads as flakiness
+
+# ── Linting ─────────────────────────────────────────────────────────────
+# Pinned to match .github/workflows/lint.yml. An unpinned linter turns a new
+# upstream rule into a red build on an unrelated PR.
+ruff==0.15.*
+
+# ── torch ───────────────────────────────────────────────────────────────
+# Install SEPARATELY from the CPU index, or pip pulls the multi-GB CUDA build:
+#
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#
+# ~17s and a few hundred MB. Deliberately not listed as a requirement here so
+# nobody installs the CUDA build by accident.
+#
+# 1003 of the 1016 tests pass without torch at all — pipeline/__init__.py is a
+# lazy barrel (PEP 562) and transcriber defers its torch import, so the pure
+# tests no longer drag it in. The remaining 13 genuinely exercise torch and
+# torchaudio behaviour, and they are worth running rather than skipping: a
+# skipped test that looks like a passing one is worse than a red one.
