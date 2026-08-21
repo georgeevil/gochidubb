@@ -22,13 +22,18 @@ import sys as _sys
 import types as _types
 
 
+# `_sys` / `_types` are deleted at the end of this block (see the `del`
+# below), so a linter reads them as unbound here. They are not: this helper
+# is only ever called from the loop directly beneath it, long before the
+# del runs. Annotated rather than restructured — CLAUDE.md marks this block
+# load-bearing and warns against moving anything above it.
 def _gochidubb_stub_module(_name: str) -> None:
-    if _name in _sys.modules:
+    if _name in _sys.modules:          # noqa: F821
         return
-    m = _types.ModuleType(_name)
+    m = _types.ModuleType(_name)       # noqa: F821
     m.__file__ = f"<gochidubb-stub:{_name}>"
     m.__path__ = []
-    _sys.modules[_name] = m
+    _sys.modules[_name] = m            # noqa: F821
 
 
 for _n in (
@@ -193,7 +198,7 @@ from pipeline.notices import (
     mask_secret, merge_notices, worst_severity, notice as pnotice,
 )
 
-from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, CONFIG_FILE
+from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, STATIC_DIR
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
 from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
                  activity, apikeys as app_apikeys, webhooks as app_webhooks,
@@ -3498,8 +3503,8 @@ async def start_dub(
             model = _fallback
         else:
             return JSONResponse({
-                "error": f"No translation model installed. Pull one via 'ollama pull aya-expanse:8b' "
-                         f"or use the Models panel."
+                "error": "No translation model installed. Pull one via 'ollama pull aya-expanse:8b' "
+                         "or use the Models panel."
             }, 400)
 
     job_id = uuid.uuid4().hex[:8]
@@ -4758,7 +4763,7 @@ def _probe_duration(path: Path) -> float:
         if d > 0:
             return d
     except FileNotFoundError:
-        log.warning(f"[probe] ffprobe not on PATH — falling back to ffmpeg -i")
+        log.warning("[probe] ffprobe not on PATH — falling back to ffmpeg -i")
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         log.warning(f"[probe] ffprobe failed for {path}: {err[-200:].strip() or e}")
@@ -5023,7 +5028,7 @@ def _assemble_showcase_sync(batch_id: str, siblings: list, showcase_dir: Path) -
 
         if use_drawtext:
             drawtext = (
-                f"drawtext="
+                "drawtext="
                 + (f"fontfile='{font_arg}':" if font_arg else "")
                 + f"text='{text_safe}':"
                 "fontsize=22:fontcolor=white:"
@@ -6107,7 +6112,7 @@ async def _run_tts_and_merge_stage(
     elif mode == "voice_design":
         # CRITICAL: Voice Design needs NO reference. Without this clear,
         # VoxCPM sees ref + style prefix and produces broken output.
-        log.info(f"[stage] Clearing speaker refs for Voice Design mode")
+        log.info("[stage] Clearing speaker refs for Voice Design mode")
         speaker_refs = {}
         speaker_transcripts = {}
     else:
@@ -7537,7 +7542,6 @@ async def retranslate(
     adjust the context hint, or switch target language mid-flight."""
     if job_id not in jobs:
         return JSONResponse({"error": "Job not found"}, 404)
-    job = jobs[job_id]
     cp = _load_checkpoint(job_id, "transcription_done")
     if not cp:
         return JSONResponse(

@@ -1,7 +1,6 @@
 """Tests for pipeline/diarizer.py — speaker assignment and reference extraction."""
 from unittest.mock import patch
 
-import pytest
 
 from pipeline.diarizer import assign_speakers_to_segments, extract_fallback_reference
 

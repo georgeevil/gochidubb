@@ -1,5 +1,4 @@
 """Tests for pipeline/synthesizer.py — BaseTTSEngine abstraction and engine setup."""
-from unittest.mock import patch
 
 import pytest
 

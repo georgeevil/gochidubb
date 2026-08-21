@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pipeline.notices import redact
 

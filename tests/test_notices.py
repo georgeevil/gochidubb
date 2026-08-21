@@ -1,5 +1,4 @@
 """Tests for pipeline/notices.py — the setup-notice vocabulary."""
-import pytest
 
 from pipeline.notices import (
     SEVERITIES,

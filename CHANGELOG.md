@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Lint CI now actually runs.** `.github/workflows/lint.yml` triggered on
+  `main` while the default branch is `master`, so the job had never run once,
+  on any PR — `ruff check .` reported 104 findings against a branch nobody was
+  gating. Fixing the trigger alone would have turned CI red immediately, so
+  this also adds a `ruff.toml` that configures off the patterns the codebase
+  uses on purpose (compact `a(); b()` statements, the load-bearing
+  speechbrain/k2 stub block's E402, `pipeline/__init__.py`'s re-exports, now
+  declared via `__all__`) and fixes what was genuinely wrong: a bare `except:`
+  in `pipeline/models.py` swallowing `KeyboardInterrupt`, an unused local in
+  `server.py`, and 15 dead imports. Ruff is pinned so a new release cannot
+  turn every PR red.
+
 ### Added
 - **Quality gates: a bad stage now stops the job instead of being reported
   afterwards.** `pipeline/quality.py` already scored five stages and emitted
