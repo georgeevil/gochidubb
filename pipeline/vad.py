@@ -10,9 +10,7 @@ Uses silero-vad (ONNX-based, 1 MB model, no GPU required).
 Falls back gracefully if silero-vad is not installed.
 """
 import logging
-import os
 import subprocess
-import tempfile
 
 log = logging.getLogger("gochidubb.vad")
 

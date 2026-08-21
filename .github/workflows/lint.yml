@@ -1,10 +1,14 @@
 name: lint
 
+# The default branch is `master`. This previously said `main`, so the job
+# had never run — not once, on any PR. `ruff check .` reported 104 findings
+# at the time it was fixed; see ruff.toml for which are configured off and
+# why, and the accompanying commit for the two real bugs it was hiding.
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   ruff:
@@ -15,7 +19,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned linter turns "someone released a new rule"
+        # into "every PR is red", on a repo where a red gate has already
+        # proven to mean an ignored gate.
+        run: pip install 'ruff==0.15.*'
       - name: Lint
         run: ruff check . --output-format=github
 
@@ -29,3 +36,16 @@ jobs:
       - name: Compile-check all Python files
         run: |
           python -m compileall -q server.py pipeline/ tools/ app/
+
+# No `tests` job here, deliberately. The suite passes locally (1003 tests)
+# but is not yet hermetic enough to gate on:
+#   * pipeline/__init__.py is an eager barrel, so `from pipeline.x import y`
+#     imports transcriber -> torch. Without torch, 21 of 36 test files fail
+#     to COLLECT and zero tests run.
+#   * With the full dependency set installed (pytest numpy soundfile aiohttp
+#     httpx python-multipart python-dotenv + cpu-only torch), 995 pass and 8
+#     still fail on environment: torchaudio missing, a timing-sensitive
+#     ResourceSampler, and three HF-probe tests.
+# Turning the job on is not the same as the tests running, and a job that is
+# red on its first run is the same mistake this file already made once.
+# Tracked in CLD-225.
