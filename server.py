@@ -199,7 +199,7 @@ from pipeline.notices import (
     mask_secret, merge_notices, worst_severity, notice as pnotice,
 )
 
-from app.config import cfg, BASE, UPLOAD_DIR, OUTPUT_DIR, STATIC_DIR
+from app.config import cfg, coerce_field, BASE, UPLOAD_DIR, OUTPUT_DIR, STATIC_DIR
 from app.db import init_db, save_job_sync, load_all_jobs, delete_job_db
 from app import (logbuf, artifact_store, reuse_runtime, reuse as app_reuse,
                  activity, apikeys as app_apikeys, webhooks as app_webhooks,
@@ -1052,6 +1052,26 @@ TTS_REBUILD_KEYS = frozenset({
     "tts_engine", "voxcpm_model", "voxcpm_cfg", "voxcpm_steps",
     "voxcpm_denoise_refs",
 })
+
+
+def validate_voxcpm_overrides(voxcpm_cfg, voxcpm_steps):
+    """Clean a per-job VoxCPM override pair. Returns (cfg, steps, error).
+
+    0 / None / "" means "not overridden — use the global setting", so it
+    skips validation; anything else is bounded by the same FIELD_SPECS the
+    Settings tab uses. These two numbers are handed to VoxCPM directly, so an
+    out-of-range value is refused at the door rather than clamped quietly.
+    """
+    out = []
+    for key, raw in (("voxcpm_cfg", voxcpm_cfg), ("voxcpm_steps", voxcpm_steps)):
+        if raw is None or raw == "" or float(raw or 0) == 0:
+            out.append(0)
+            continue
+        try:
+            out.append(coerce_field(key, raw))
+        except ValueError as e:
+            return 0, 0, str(e)
+    return out[0], out[1], ""
 
 
 def reset_tts_engine() -> bool:
@@ -2543,6 +2563,8 @@ async def _stage_tts(job, work, ctx, update, perf):
                 tts_speed=ctx.get("tts_speed", "balanced"),
                 is_cross_lingual=(effective_src != target_lang),
                 target_lang=target_lang,
+                cfg_override=ctx.get("voxcpm_cfg"),
+                steps_override=ctx.get("voxcpm_steps"),
             )
         else:
             todo = await tts_used.synthesize_segments_async(
@@ -3009,6 +3031,9 @@ async def run_pipeline(
     wizard_mode: str = "auto",  # "auto" | "review_translation" | "review_transcript"
     auto_denoise: bool = True,  # apply ffmpeg denoise before WhisperX
     mode: str = "dub",  # "dub" | "reupload" (3E: reupload = download only)
+    # Per-job VoxCPM overrides; 0 = follow Settings → Voice & TTS (CLD-189)
+    voxcpm_cfg: float = 0.0,
+    voxcpm_steps: int = 0,
 ):
     """Main dubbing pipeline entry point.
 
@@ -3034,6 +3059,8 @@ async def run_pipeline(
         "tts_speed": tts_speed,
         "wizard_mode": wizard_mode,
         "auto_denoise": auto_denoise,
+        "voxcpm_cfg": voxcpm_cfg,
+        "voxcpm_steps": voxcpm_steps,
     }
     # Reupload mode walks only the download stage; the driver's tail then
     # finalizes dubbed_video.mp4 from the source (see _finalize_reupload).
@@ -3257,6 +3284,8 @@ async def scout_dub(request: _ScoutRequest):
         lip_sync=bool(body.get("lip_sync", False)),
         mode=mode,
         scheduled_at=scheduled_at,
+        voxcpm_cfg=float(body.get("voxcpm_cfg") or 0.0),
+        voxcpm_steps=int(body.get("voxcpm_steps") or 0),
     )
     if isinstance(resp, JSONResponse):
         return resp  # start_dub validation error — pass it through
@@ -3535,11 +3564,18 @@ async def start_dub(
     lip_sync: bool = Form(False),  # if True, auto-run Wav2Lip after pipeline completes
     mode: str = Form("dub"),  # "dub" | "reupload" (3E: reupload = no dubbing)
     scheduled_at: float = Form(0.0),  # unix epoch seconds; 0 = start immediately
+    voxcpm_cfg: float = Form(0.0),    # 0 = use the global setting
+    voxcpm_steps: int = Form(0),      # 0 = use the global setting
 ):
     mode = normalize_job_mode(mode)
     if mode is None:
         return JSONResponse(
             {"error": f"Unknown mode. Options: {list(JOB_MODES)}"}, 400)
+
+    voxcpm_cfg, voxcpm_steps, _vox_err = validate_voxcpm_overrides(
+        voxcpm_cfg, voxcpm_steps)
+    if _vox_err:
+        return JSONResponse({"error": _vox_err}, 400)
 
     # Validate translation model exists in Ollama - fall back gracefully
     # otherwise. Reupload jobs never translate, so they skip the check —
@@ -3680,6 +3716,8 @@ async def start_dub(
         "wizard_mode": wizard_mode,
         "auto_denoise": auto_denoise,
         "mode": mode,
+        "voxcpm_cfg": voxcpm_cfg,
+        "voxcpm_steps": voxcpm_steps,
     }
 
     jobs[job_id] = {
@@ -3698,6 +3736,8 @@ async def start_dub(
         "voice_mode": ("upload" if ref_path else
                        ("custom" if voice_style.strip() else "preset")),
         "tts_speed": tts_speed,
+        "voxcpm_cfg": voxcpm_cfg,
+        "voxcpm_steps": voxcpm_steps,
         "wizard_mode": wizard_mode,
         "lip_sync": bool(lip_sync),
         "mode": mode,
@@ -3745,6 +3785,8 @@ async def start_batch_dub(
     auto_denoise: bool = Form(False),
     batch_label: str = Form(""),  # optional: "BJJ Course Week 1" for summary
     scheduled_at: float = Form(0.0),  # unix epoch seconds; 0 = start immediately
+    voxcpm_cfg: float = Form(0.0),    # 0 = use the global setting
+    voxcpm_steps: int = Form(0),      # 0 = use the global setting
 ):
     """Enqueue multiple videos for night-mode processing.
 
@@ -3760,6 +3802,11 @@ async def start_batch_dub(
 
     Returns: {job_ids: [...], batch_id: str} so UI can track summary.
     """
+    voxcpm_cfg, voxcpm_steps, _vox_err = validate_voxcpm_overrides(
+        voxcpm_cfg, voxcpm_steps)
+    if _vox_err:
+        return JSONResponse({"error": _vox_err}, 400)
+
     # Validate Ollama model once (not per-job)
     _ok, _installed = await check_ollama()
     if _ok and model not in _installed:
@@ -3855,6 +3902,8 @@ async def start_batch_dub(
             "voice_mode": ("upload" if ref_path else
                           ("custom" if voice_style.strip() else "preset")),
             "tts_speed": tts_speed,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
             "whisper_model": whisper_model,
             "keep_bg": keep_bg,
             "wizard_mode": wizard_mode,
@@ -3873,6 +3922,7 @@ async def start_batch_dub(
                 "context_hint": context_hint, "voice_style": voice_style,
                 "voice_preset": voice_preset, "tts_speed": tts_speed,
                 "wizard_mode": wizard_mode, "auto_denoise": auto_denoise,
+                "voxcpm_cfg": voxcpm_cfg, "voxcpm_steps": voxcpm_steps,
             } if is_scheduled else None),
         }
         save_job(jobs[jid])
@@ -3884,6 +3934,7 @@ async def start_batch_dub(
             "context_hint": context_hint, "voice_style": voice_style,
             "voice_preset": voice_preset, "tts_speed": tts_speed,
             "wizard_mode": wizard_mode, "auto_denoise": auto_denoise,
+            "voxcpm_cfg": voxcpm_cfg, "voxcpm_steps": voxcpm_steps,
         })
         job_ids.append(jid)
 
@@ -3912,6 +3963,8 @@ async def start_batch_dub(
             "voice_mode": ("upload" if ref_path else
                           ("custom" if voice_style.strip() else "preset")),
             "tts_speed": tts_speed,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
             "whisper_model": whisper_model,
             "keep_bg": keep_bg,
             "wizard_mode": wizard_mode,
@@ -3928,6 +3981,7 @@ async def start_batch_dub(
                 "context_hint": context_hint, "voice_style": voice_style,
                 "voice_preset": voice_preset, "tts_speed": tts_speed,
                 "wizard_mode": wizard_mode, "auto_denoise": auto_denoise,
+                "voxcpm_cfg": voxcpm_cfg, "voxcpm_steps": voxcpm_steps,
             } if is_scheduled else None),
         }
         save_job(jobs[jid])
@@ -3939,6 +3993,7 @@ async def start_batch_dub(
             "context_hint": context_hint, "voice_style": voice_style,
             "voice_preset": voice_preset, "tts_speed": tts_speed,
             "wizard_mode": wizard_mode, "auto_denoise": auto_denoise,
+            "voxcpm_cfg": voxcpm_cfg, "voxcpm_steps": voxcpm_steps,
         })
         job_ids.append(jid)
 
@@ -4437,6 +4492,8 @@ async def start_quick_test(
     wizard_mode: str = Form("auto"),       # "auto" | "review_translation" | …
     lip_sync: bool = Form(False),
     scheduled_at: float = Form(0.0),
+    voxcpm_cfg: float = Form(0.0),         # 0 = use the global setting
+    voxcpm_steps: int = Form(0),           # 0 = use the global setting
 ):
     """Multi-language dub: fan one source out into N dub jobs, one per target
     language, sharing a batch_id so the UI can show them together.
@@ -4447,6 +4504,10 @@ async def start_quick_test(
     voices and languages before committing GPU time to the full thing.
     """
     # ── Validate inputs ───────────────────────────────────────────────
+    voxcpm_cfg, voxcpm_steps, _vox_err = validate_voxcpm_overrides(
+        voxcpm_cfg, voxcpm_steps)
+    if _vox_err:
+        return JSONResponse({"error": _vox_err}, 400)
     if not video and not source.strip():
         return JSONResponse({"error": "Provide either a video file or a URL"}, 400)
     if video and source.strip():
@@ -4575,6 +4636,8 @@ async def start_quick_test(
             "voice_mode": ("upload" if ref_path else
                           ("custom" if voice_style.strip() else "preset")),
             "tts_speed": tts_speed,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
             "whisper_model": whisper_model,
             "keep_bg": keep_bg,
             "wizard_mode": wizard_mode,
@@ -4612,8 +4675,14 @@ async def start_quick_test(
             "voice_preset": voice_preset,
             "tts_speed": tts_speed,
             "wizard_mode": wizard_mode,
-            "lip_sync": lip_sync,
+            # NOT lip_sync: these are run_pipeline's kwargs, and it has no
+            # such parameter — passing it raised TypeError at dequeue and
+            # failed every multi-language job. The post-success hook reads
+            # the flag off the job dict (see _job_queue_worker), which is
+            # where it belongs.
             "auto_denoise": auto_denoise,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
         })
         job_ids.append(jid)
 
@@ -5251,11 +5320,17 @@ async def start_showcase(
     auto_denoise: bool = Form(False),
     context_hint: str = Form(""),
     batch_label: str = Form(""),
+    voxcpm_cfg: float = Form(0.0),         # 0 = use the global setting
+    voxcpm_steps: int = Form(0),           # 0 = use the global setting
 ):
     """Showcase: trim a short clip, fan out into N normal dub jobs, and
     when all finish, automatically stitch them into one multilingual reel
     (each segment in a different language with a corner badge)."""
     # ── Input validation — identical to /api/quick_test ───────────────
+    voxcpm_cfg, voxcpm_steps, _vox_err = validate_voxcpm_overrides(
+        voxcpm_cfg, voxcpm_steps)
+    if _vox_err:
+        return JSONResponse({"error": _vox_err}, 400)
     if not video and not source.strip():
         return JSONResponse({"error": "Provide either a video file or a URL"}, 400)
     if video and source.strip():
@@ -5353,6 +5428,8 @@ async def start_showcase(
             "voice_mode": ("upload" if ref_path else
                           ("custom" if voice_style.strip() else "preset")),
             "tts_speed": tts_speed,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
             "whisper_model": whisper_model,
             "keep_bg": keep_bg,
             "wizard_mode": "auto",
@@ -5382,6 +5459,8 @@ async def start_showcase(
             "tts_speed": tts_speed,
             "wizard_mode": "auto",
             "auto_denoise": auto_denoise,
+            "voxcpm_cfg": voxcpm_cfg,
+            "voxcpm_steps": voxcpm_steps,
         })
         job_ids.append(jid)
 
@@ -5465,6 +5544,10 @@ async def redub_job(
     tts_speed: Optional[str] = Form(None),
     keep_bg: Optional[bool] = Form(None),
     speaker_mode: Optional[str] = Form(None),
+    # None = inherit whatever the original job ran with; 0 = force back to
+    # the global setting even if the original had an override.
+    voxcpm_cfg: Optional[float] = Form(None),
+    voxcpm_steps: Optional[int] = Form(None),
 ):
     """Re-dub an existing video into new language(s). Reuses the original
     source (file path or URL) — no re-upload required, just specify which
@@ -5561,7 +5644,16 @@ async def redub_job(
         "auto_denoise": bool(orig.get("auto_denoise", False)),
         "context_hint": orig.get("context_hint", ""),
         "source_lang": orig.get("source_lang", "auto"),
+        "voxcpm_cfg": (orig.get("voxcpm_cfg", 0) if voxcpm_cfg is None
+                       else voxcpm_cfg),
+        "voxcpm_steps": (orig.get("voxcpm_steps", 0) if voxcpm_steps is None
+                         else voxcpm_steps),
     }
+    settings["voxcpm_cfg"], settings["voxcpm_steps"], _vox_err = (
+        validate_voxcpm_overrides(settings["voxcpm_cfg"],
+                                  settings["voxcpm_steps"]))
+    if _vox_err:
+        return JSONResponse({"error": _vox_err}, 400)
     label_base = (orig.get("title") or orig.get("source_label", "")
                   or Path(orig_source).name or job_id)
 
@@ -5581,6 +5673,8 @@ async def redub_job(
             "voice_preset": settings["voice_preset"],
             "voice_mode": orig.get("voice_mode", "preset"),
             "tts_speed": settings["tts_speed"],
+            "voxcpm_cfg": settings["voxcpm_cfg"],
+            "voxcpm_steps": settings["voxcpm_steps"],
             "whisper_model": settings["whisper_model"],
             "keep_bg": settings["keep_bg"],
             "wizard_mode": "auto",
@@ -5615,6 +5709,8 @@ async def redub_job(
             "tts_speed": settings["tts_speed"],
             "wizard_mode": "auto",
             "auto_denoise": settings["auto_denoise"],
+            "voxcpm_cfg": settings["voxcpm_cfg"],
+            "voxcpm_steps": settings["voxcpm_steps"],
         }
 
     # ── Single mode: one job, no batch wrapper ────────────────────────
@@ -6283,6 +6379,12 @@ async def _run_tts_and_merge_stage(
                 tts_speed=tts_speed,
                 is_cross_lingual=(src_lang != tgt_lang),
                 target_lang=tgt_lang,
+                # Redub / retry_tts / per-segment regen all reach synthesis
+                # through here, and each writes the override onto the job
+                # before calling — so the job dict is the single place to
+                # read it from, rather than a fourth positional parameter.
+                cfg_override=job.get("voxcpm_cfg"),
+                steps_override=job.get("voxcpm_steps"),
             )
         else:
             synth_input = await tts_used.synthesize_segments_async(
@@ -6401,12 +6503,28 @@ async def retry_tts(
     voice_preset: str = Form("auto"),
     tts_speed: str = Form("balanced"),
     reference: Optional[UploadFile] = File(None),
+    # None = keep whatever the job already ran with; 0 = drop back to global.
+    voxcpm_cfg: Optional[float] = Form(None),
+    voxcpm_steps: Optional[int] = Form(None),
 ):
     """Re-runs only TTS + merge stages using saved state from a completed job.
     Much faster than re-running the full pipeline (no download, transcribe,
     translate steps)."""
     if job_id not in jobs:
         return JSONResponse({"error": "Job not found"}, 404)
+
+    # _run_tts_and_merge_stage reads the overrides off the job dict, so a
+    # per-retry change is applied by persisting it before the run starts.
+    if voxcpm_cfg is not None or voxcpm_steps is not None:
+        _cfg, _steps, _vox_err = validate_voxcpm_overrides(
+            jobs[job_id].get("voxcpm_cfg", 0) if voxcpm_cfg is None else voxcpm_cfg,
+            jobs[job_id].get("voxcpm_steps", 0) if voxcpm_steps is None else voxcpm_steps,
+        )
+        if _vox_err:
+            return JSONResponse({"error": _vox_err}, 400)
+        jobs[job_id]["voxcpm_cfg"] = _cfg
+        jobs[job_id]["voxcpm_steps"] = _steps
+        save_job(jobs[job_id])
 
     ref_path = ""
     if reference and reference.filename:
@@ -6498,7 +6616,14 @@ _RETRY_OVERRIDE_KEYS = {
     "speaker_mode", "context_hint", "voice_style", "voice_preset",
     "tts_speed", "auto_denoise", "wizard_mode", "reference_audio",
     "skip_diarization", "translate_failed_only", "tts_keep_existing",
+    "voxcpm_cfg", "voxcpm_steps",
 }
+
+# Retry overrides that are numbers handed straight to VoxCPM rather than
+# strings the pipeline interprets. Everything in _RETRY_OVERRIDE_KEYS is
+# otherwise taken as-is from the request body, which is fine for a model
+# name and is not for these.
+_RETRY_NUMERIC_KEYS = ("voxcpm_cfg", "voxcpm_steps")
 
 # Declarative retry controls, rendered generically by the UI so a new
 # knob only has to be added here (plus honoured in the stage handler).
@@ -6547,6 +6672,12 @@ STAGE_RETRY_OPTIONS = {
         {"key": "tts_keep_existing", "type": "bool",
          "label": "Only missing segments",
          "hint": "Keep rendered audio, synthesize just the gaps"},
+        {"key": "voxcpm_cfg", "type": "number", "label": "Guidance (cfg)",
+         "min": 1, "max": 3, "step": 0.1,
+         "hint": "Higher sticks closer to the text. Blank = global setting"},
+        {"key": "voxcpm_steps", "type": "number", "label": "Inference steps",
+         "min": 4, "max": 24, "step": 1,
+         "hint": "More steps, better quality, slower. Blank = global setting"},
     ],
     "assemble": [],
     "merge": [],
@@ -6954,6 +7085,8 @@ def _fresh_run_ctx(job: dict) -> dict:
         "voice_preset": job.get("voice_preset", "auto"),
         "tts_speed": job.get("tts_speed", "balanced"),
         "auto_denoise": bool(job.get("auto_denoise", True)),
+        "voxcpm_cfg": job.get("voxcpm_cfg", 0),
+        "voxcpm_steps": job.get("voxcpm_steps", 0),
     }
 
 
@@ -7023,10 +7156,15 @@ async def retry_stage(
     # wizard pause inherited from the original run.
     ctx["wizard_mode"] = "auto"
     for k, v in ov.items():
-        if k in _RETRY_OVERRIDE_KEYS:
-            ctx[k] = v
-        else:
+        if k not in _RETRY_OVERRIDE_KEYS:
             log.warning(f"[retry] Ignoring non-overridable key '{k}'")
+            continue
+        if k in _RETRY_NUMERIC_KEYS:
+            try:
+                v = coerce_field(k, v) if v not in (None, "", 0, "0") else 0
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, 400)
+        ctx[k] = v
 
     if reference and reference.filename:
         ref_ext = Path(reference.filename).suffix or ".wav"
@@ -7045,9 +7183,11 @@ async def retry_stage(
     job["step_detail"] = f"Queued — retrying from '{stage}'"
     # Surface the changed settings on the job so History/Result reflect them.
     for k in ("model", "target_lang", "voice_preset", "voice_style",
-              "tts_speed", "whisper_model", "context_hint", "speaker_mode"):
+              "tts_speed", "whisper_model", "context_hint", "speaker_mode",
+              "voxcpm_cfg", "voxcpm_steps"):
         if k in ov:
-            job[k] = ov[k]
+            # ctx carries the coerced value; ov still holds the raw one.
+            job[k] = ctx.get(k, ov[k])
     save_job(job)
 
     log.info(

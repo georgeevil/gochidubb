@@ -79,11 +79,13 @@ class TestClearJobError:
 # ── _fresh_run_ctx (regression guard for the retry_stage refactor) ───
 
 class TestFreshRunCtx:
-    # Exactly the keys the pre-refactor retry_stage index-0 branch built.
+    # Exactly the keys the pre-refactor retry_stage index-0 branch built,
+    # plus the per-job VoxCPM overrides that landed on master alongside it.
     EXPECTED_KEYS = {
         "source", "source_lang", "target_lang", "model", "keep_bg",
         "whisper_model", "reference_audio", "speaker_mode", "context_hint",
         "voice_style", "voice_preset", "tts_speed", "auto_denoise",
+        "voxcpm_cfg", "voxcpm_steps",
     }
 
     def test_produces_every_pre_refactor_key(self):

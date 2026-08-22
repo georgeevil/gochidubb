@@ -100,6 +100,8 @@ async def gochidubb_dub(
     wizard_mode: str = "auto",
     mode: str = "dub",
     scheduled_at: Optional[float] = None,
+    voxcpm_cfg: float = 0.0,
+    voxcpm_steps: int = 0,
     wait: bool = False,
     wait_timeout: float = 1800.0,
 ) -> dict:
@@ -122,6 +124,11 @@ async def gochidubb_dub(
             for music videos where dubbing makes no sense).
         scheduled_at: unix epoch seconds; a future timestamp parks the job
             as status='scheduled' and the server starts it at that time.
+        voxcpm_cfg: Per-job VoxCPM guidance, 1.0-3.0. 0 (default) means
+            "use the server's global setting". Raise it when a source is
+            hard — heavy accent, noisy reference, awkward language pair.
+        voxcpm_steps: Per-job VoxCPM inference steps, 4-24. 0 (default)
+            follows the global setting and the tts_speed tier.
         wait: If True, block until job finishes and return final status + url.
             Ignored for scheduled jobs (they start later).
         wait_timeout: Max seconds to wait when wait=True.
@@ -137,6 +144,7 @@ async def gochidubb_dub(
         keep_bg=keep_bg, auto_denoise=auto_denoise,
         context_hint=context_hint, wizard_mode=wizard_mode,
         mode=mode, scheduled_at=scheduled_at,
+        voxcpm_cfg=voxcpm_cfg, voxcpm_steps=voxcpm_steps,
     )
     job_id = res.get("job_id")
     if wait and job_id and not res.get("scheduled_at"):
@@ -158,6 +166,8 @@ async def gochidubb_compare(
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
     keep_bg: bool = True,
+    voxcpm_cfg: float = 0.0,
+    voxcpm_steps: int = 0,
     wait: bool = False,
     wait_timeout: float = 3600.0,
 ) -> dict:
@@ -167,12 +177,14 @@ async def gochidubb_compare(
     target_langs: 2-6 language codes.
     trim_seconds: 15-120, default 60.
     keep_bg: background music/SFX kept by default.
+    voxcpm_cfg / voxcpm_steps: per-job VoxCPM overrides; 0 = global setting.
     """
     c = await _get_client()
     res = await c.submit_compare(
         source, target_langs, trim_seconds=trim_seconds,
         source_lang=source_lang, model=model,
         voice_preset=voice_preset, tts_speed=tts_speed, keep_bg=keep_bg,
+        voxcpm_cfg=voxcpm_cfg, voxcpm_steps=voxcpm_steps,
     )
     if wait and res.get("batch_id"):
         jobs = await c.wait_for_batch(res["batch_id"], timeout=wait_timeout)
@@ -195,6 +207,8 @@ async def gochidubb_showcase(
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
     keep_bg: bool = True,
+    voxcpm_cfg: float = 0.0,
+    voxcpm_steps: int = 0,
     wait: bool = False,
     wait_timeout: float = 3600.0,
 ) -> dict:
@@ -206,12 +220,14 @@ async def gochidubb_showcase(
 
     target_langs: 2-6 codes. trim_seconds: 15-120.
     keep_bg: background music/SFX kept by default.
+    voxcpm_cfg / voxcpm_steps: per-job VoxCPM overrides; 0 = global setting.
     """
     c = await _get_client()
     res = await c.submit_showcase(
         source, target_langs, trim_seconds=trim_seconds,
         source_lang=source_lang, model=model,
         voice_preset=voice_preset, tts_speed=tts_speed, keep_bg=keep_bg,
+        voxcpm_cfg=voxcpm_cfg, voxcpm_steps=voxcpm_steps,
     )
     if wait and res.get("batch_id"):
         bid = res["batch_id"]
@@ -231,6 +247,8 @@ async def gochidubb_redub(
     model: Optional[str] = None,
     voice_preset: Optional[str] = None,
     tts_speed: Optional[str] = None,
+    voxcpm_cfg: Optional[float] = None,
+    voxcpm_steps: Optional[int] = None,
     wait: bool = False,
     wait_timeout: float = 3600.0,
 ) -> dict:
@@ -239,11 +257,14 @@ async def gochidubb_redub(
 
     mode: 'single' (1 lang), 'compare' (2-6 separate dubs),
           'showcase' (2-6 stitched into one reel).
+    voxcpm_cfg / voxcpm_steps: omit to inherit the original job's values;
+          0 drops back to the server's global setting.
     """
     c = await _get_client()
     res = await c.redub(
         job_id, target_langs, mode=mode,
         model=model, voice_preset=voice_preset, tts_speed=tts_speed,
+        voxcpm_cfg=voxcpm_cfg, voxcpm_steps=voxcpm_steps,
     )
     if wait:
         if res.get("batch_id"):

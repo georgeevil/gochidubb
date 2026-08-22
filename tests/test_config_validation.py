@@ -180,3 +180,65 @@ def test_bg_migration_does_not_rerun_on_an_already_migrated_config():
     c.config_version = C.CONFIG_VERSION
     C._migrate(c, C.CONFIG_VERSION)
     assert c.background_volume == C._LEGACY_BG_VOLUME
+
+
+# ── per-job overrides (CLD-189) ─────────────────────────────────────
+#
+# The Settings tab writes through cfg.set(), which validates. A per-job
+# override skips config entirely — it rides the request into synthesis —
+# so it needs its own gate, and it reuses the same FIELD_SPECS bounds
+# rather than inventing a second set that could drift.
+
+@pytest.fixture(scope="module")
+def srv():
+    """server.py, with the heavy optional ML stack stubbed."""
+    import sys
+    import types
+    from pathlib import Path
+    for name in ("voxcpm", "whisperx", "faster_whisper", "pyannote",
+                 "edge_tts", "demucs"):
+        sys.modules.setdefault(name, types.ModuleType(name))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    return pytest.importorskip("server")
+
+
+@pytest.mark.parametrize("blank", [0, 0.0, None, ""])
+def test_blank_override_means_use_the_global(srv, blank):
+    """Every knob left on 'auto' posts one of these."""
+    assert srv.validate_voxcpm_overrides(blank, blank) == (0, 0, "")
+
+
+def test_in_range_values_are_coerced_and_kept(srv):
+    cfg, steps, err = srv.validate_voxcpm_overrides("2.4", "18")
+    assert (cfg, steps, err) == (2.4, 18, "")
+
+
+@pytest.mark.parametrize("cfg_value, steps", [
+    (99.0, 0),      # cfg above the 1.0-3.0 range
+    (0.5, 0),       # cfg below it
+    (0, 500),       # steps above the 4-24 range
+    (0, 2),         # steps below it
+])
+def test_out_of_range_is_refused_with_a_reason(srv, cfg_value, steps):
+    """These numbers are handed to VoxCPM directly. Refused at the door,
+    with the message the user sees, rather than clamped quietly."""
+    out_cfg, out_steps, err = srv.validate_voxcpm_overrides(cfg_value, steps)
+    assert err, "an out-of-range override must be rejected"
+    assert (out_cfg, out_steps) == (0, 0)
+
+
+def test_one_bad_value_rejects_the_pair(srv):
+    """Half-applying would run the job with a guidance the user never
+    chose alongside a step count they did."""
+    _, _, err = srv.validate_voxcpm_overrides(2.4, 999)
+    assert "voxcpm_steps" in err
+
+
+def test_bounds_match_the_settings_tab(srv):
+    """The per-job gate and the global one must agree, or the same number
+    is accepted in Settings and refused on a job."""
+    for key in ("voxcpm_cfg", "voxcpm_steps"):
+        assert key in C.FIELD_SPECS
+    lo, hi = C.FIELD_SPECS["voxcpm_cfg"][1:3]
+    assert srv.validate_voxcpm_overrides(lo, 0)[2] == ""
+    assert srv.validate_voxcpm_overrides(hi, 0)[2] == ""

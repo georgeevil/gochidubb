@@ -484,6 +484,29 @@ class TestRetryOverrides:
     def test_every_stage_has_an_options_entry(self):
         assert set(server.STAGE_RETRY_OPTIONS) == set(server.STAGE_ORDER)
 
+    def test_numeric_options_declare_their_bounds(self):
+        """The UI renders these generically, so min/max/step have to come
+        from the declaration — otherwise a number input offers no bounds at
+        all and every out-of-range value becomes a round trip to a 400."""
+        for stage, opts in server.STAGE_RETRY_OPTIONS.items():
+            for opt in opts:
+                if opt.get("type") == "number":
+                    assert {"min", "max", "step"} <= set(opt), (stage, opt["key"])
+
+    def test_numeric_retry_keys_are_the_ones_that_need_coercing(self):
+        """_RETRY_NUMERIC_KEYS drives coercion in retry_stage. A number
+        declared in the options table but missing here would reach VoxCPM as
+        whatever string the client posted."""
+        declared = {opt["key"] for opts in server.STAGE_RETRY_OPTIONS.values()
+                    for opt in opts if opt.get("type") == "number"}
+        assert declared == set(server._RETRY_NUMERIC_KEYS)
+
+    def test_per_job_voxcpm_overrides_are_retryable(self):
+        """Re-running just the TTS stage with a different guidance is the
+        cheapest way to use this feature — no re-transcribe, no re-translate."""
+        for key in ("voxcpm_cfg", "voxcpm_steps"):
+            assert key in server._RETRY_OVERRIDE_KEYS
+
 
 # ── Event-loop responsiveness ────────────────────────────────────────
 
@@ -572,3 +595,121 @@ class TestNonBlockingStages:
             "these run on the event loop and will freeze the UI: "
             + ", ".join(sorted(set(offenders)))
         )
+
+
+# ── Queue payload / run_pipeline agreement ───────────────────────────
+
+class TestEnqueuePayloads:
+    """Everything a route enqueues is splatted into run_pipeline as keyword
+    arguments (`await run_pipeline(job_id, **pipeline_args)`), so a key the
+    signature doesn't have is a TypeError at DEQUEUE — after the job has been
+    accepted, persisted and shown as queued. That is how `lip_sync` in the
+    multi-language route killed every job it created: the flag belongs on the
+    job dict (the post-success hook reads it there), not in the pipeline args.
+    """
+
+    @staticmethod
+    def _pipeline_params():
+        import ast
+        import inspect
+        tree = ast.parse(inspect.getsource(server))
+        fn = next(n for n in tree.body
+                  if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_pipeline")
+        assert fn.args.kwarg is None, (
+            "run_pipeline grew **kwargs — this check silently stops working")
+        return ({a.arg for a in fn.args.args} |
+                {a.arg for a in fn.args.kwonlyargs})
+
+    def test_every_enqueue_site_binds(self):
+        import ast
+        import inspect
+        params = self._pipeline_params()
+        tree = ast.parse(inspect.getsource(server))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name not in ("enqueue_job", "_enqueue_or_defer"):
+                continue
+            if len(node.args) < 2 or not isinstance(node.args[1], ast.Dict):
+                continue
+            for k in node.args[1].keys:
+                # __stage_retry__ is the queue's other payload shape and does
+                # not reach run_pipeline at all.
+                if (isinstance(k, ast.Constant) and k.value not in params
+                        and not str(k.value).startswith("__")):
+                    offenders.append(f"line {node.lineno}: {k.value}")
+        assert not offenders, (
+            "run_pipeline cannot accept these enqueued keys: "
+            + ", ".join(offenders))
+
+    def test_every_scheduled_stash_binds(self):
+        """_pending_args is replayed through the same call by the scheduler,
+        so a deferred job must not fail hours later for this reason."""
+        import ast
+        import inspect
+        params = self._pipeline_params()
+        tree = ast.parse(inspect.getsource(server))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for k, v in zip(node.keys, node.values):
+                if not (isinstance(k, ast.Constant) and k.value == "_pending_args"):
+                    continue
+                d = v.body if isinstance(v, ast.IfExp) else v
+                if not isinstance(d, ast.Dict):
+                    continue
+                for kk in d.keys:
+                    if isinstance(kk, ast.Constant) and kk.value not in params:
+                        offenders.append(f"line {k.lineno}: {kk.value}")
+        assert not offenders, (
+            "these stashed keys would fail when the scheduler replays them: "
+            + ", ".join(offenders))
+
+
+class TestPerJobVoxcpmOverrides:
+    """The route accepts a number, the pipeline puts it in ctx, and the TTS
+    stage hands it to the engine. Each hop is cheap to break silently.
+    """
+
+    def test_run_pipeline_puts_the_override_in_ctx(self, monkeypatch):
+        """ctx is what every stage reads, and what gets checkpointed — so a
+        retry hours later replays the same value."""
+        seen = {}
+
+        async def fake_stages(job_id, ctx, **kw):
+            seen.update(ctx)
+
+        monkeypatch.setattr(server, "run_pipeline_stages", fake_stages)
+        monkeypatch.setitem(server.jobs, "j1", {"id": "j1"})
+        asyncio.run(server.run_pipeline(
+            "j1", source="x", source_lang="en", target_lang="ru",
+            model="m", keep_bg=False, whisper_model="tiny",
+            voxcpm_cfg=2.4, voxcpm_steps=18))
+        assert seen["voxcpm_cfg"] == 2.4
+        assert seen["voxcpm_steps"] == 18
+
+    def test_default_is_the_inherit_sentinel(self):
+        """An old queued job, or any caller that doesn't set them, must keep
+        following the global setting rather than pinning a value."""
+        import inspect
+        sig = inspect.signature(server.run_pipeline)
+        assert sig.parameters["voxcpm_cfg"].default == 0.0
+        assert sig.parameters["voxcpm_steps"].default == 0
+
+    def test_the_tts_stage_forwards_them_to_the_engine(self):
+        """_stage_tts is the single call site for a normal run; if it stops
+        passing the overrides the whole feature is inert with no error."""
+        import inspect
+        src = inspect.getsource(server._stage_tts)
+        assert 'cfg_override=ctx.get("voxcpm_cfg")' in src
+        assert 'steps_override=ctx.get("voxcpm_steps")' in src
+
+    def test_the_rerun_path_reads_them_off_the_job(self):
+        """Redub, retry_tts and per-segment regen all go through here."""
+        import inspect
+        src = inspect.getsource(server._run_tts_and_merge_stage)
+        assert 'cfg_override=job.get("voxcpm_cfg")' in src
+        assert 'steps_override=job.get("voxcpm_steps")' in src

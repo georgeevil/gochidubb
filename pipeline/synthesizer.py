@@ -38,6 +38,44 @@ SPEED_TIMESTEPS = {"quality": 10, "balanced": 8, "fast": 6}
 # attempt; the bound alone is what decides whether it runs at all.
 SPEED_RETRIES = {"quality": 2, "balanced": 1, "fast": 1}
 
+
+def resolve_guidance(base_cfg, base_steps, is_cross_lingual,
+                     xling_cfg=2.5, xling_steps=14,
+                     cfg_override=None, steps_override=None):
+    """Final (cfg, timesteps) for one synthesis run.
+
+    Three sources, most specific first:
+
+    1. A per-job override from the New dub form — an explicit "this source is
+       hard, give it more guidance" for one job only.
+    2. The global setting (engine ``cfg_value`` / ``inference_timesteps``),
+       itself resolved against the tts_speed tier by ``effective_timesteps``.
+    3. The cross-lingual floor, which raises both when source and target
+       languages differ (VoxCPM otherwise drifts toward source-language
+       phonetics on a fifth to a third of segments).
+
+    A per-job override is FINAL: it skips the cross-lingual floor rather than
+    being clamped up by it. Almost every dub is cross-lingual, so clamping
+    would make a lowered cfg silently inert — a knob that does nothing is
+    worse than no knob. Raising works either way.
+
+    0 / None means "not overridden" — the same sentinel ``voxcpm_steps``
+    already uses for "follow the tier".
+    """
+    cfg_set = bool(cfg_override)
+    steps_set = bool(steps_override)
+    out_cfg = float(cfg_override) if cfg_set else float(base_cfg)
+    out_steps = int(steps_override) if steps_set else int(base_steps)
+
+    if is_cross_lingual:
+        if not cfg_set:
+            out_cfg = max(out_cfg, float(xling_cfg))
+        if not steps_set:
+            out_steps = max(out_steps, int(xling_steps))
+
+    return out_cfg, out_steps
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Backup speechbrain/k2 stubs — in case this module is imported first
 # (e.g. from a test harness) before server.py has run.
@@ -134,7 +172,8 @@ class BaseTTSEngine:
                            speaker_refs=None, speaker_transcripts=None,
                            progress_callback=None, voice_seed=None,
                            tts_speed="balanced",
-                           is_cross_lingual=False, target_lang="ru"):
+                           is_cross_lingual=False, target_lang="ru",
+                           cfg_override=None, steps_override=None):
         """Core synthesis call.
 
         Args:
@@ -155,6 +194,9 @@ class BaseTTSEngine:
             tts_speed: "fast" | "balanced" | "quality"
             is_cross_lingual: bool, tweaks guidance for cross-lingual work
             target_lang: str, used by QA to detect wrong-language output
+            cfg_override, steps_override: per-job VoxCPM guidance / step
+                count. Falsy means "use the global setting". Engines
+                without those concepts ignore them.
 
         Returns:
             Modified segments list with 'audio_path' set on synthesized
@@ -393,7 +435,9 @@ class VoxCPMSynthesizer(BaseTTSEngine):
                            progress_callback=None, voice_seed: Optional[int] = None,
                            tts_speed: str = "balanced",
                            is_cross_lingual: bool = False,
-                           target_lang: str = "ru"):
+                           target_lang: str = "ru",
+                           cfg_override: Optional[float] = None,
+                           steps_override: Optional[int] = None):
         """Run TTS in a SUBPROCESS.
 
         tts_speed: "quality" (tier 1→2→3, slow), "balanced" (2→3, ~3x faster,
@@ -405,6 +449,9 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         target_lang: Target language code (e.g. "ru"), used by Whisper QA
         to detect when TTS produced wrong-language output (a fatal defect
         that triggers regen with a fresh seed).
+        cfg_override / steps_override: per-job values from the New dub form,
+        overriding the global Settings → Voice & TTS ones for this run only.
+        Falsy = not set. See resolve_guidance().
         """
         import json
         import subprocess
@@ -516,26 +563,38 @@ class VoxCPMSynthesizer(BaseTTSEngine):
         # cfg.voxcpm_steps (surfaced in Settings → Voice & TTS) overrides the
         # tier when set; 0 means "follow the tier", which is the default and
         # what every install got before this value reached synthesis at all.
-        base_timesteps = self.effective_timesteps(tts_speed)
-        base_cfg = self.cfg_value
-
+        #
         # Cross-lingual dubbing (e.g. English video → Russian audio) needs
-        # stronger guidance. Without this, VoxCPM sometimes drifts toward
-        # source-language phonetics on ~20-30% of segments = "зажёванные
-        # слова". Bumping cfg from 2.0 → 2.5 and steps from 8 → 14 trades
-        # ~60% more inference time per segment for MUCH higher success rate,
-        # which is a net win because bad segments trigger retry_badcase
-        # anyway (another full retry = same cost as just doing it right).
-        if is_cross_lingual:
-            xling_cfg, xling_steps = 2.5, 14
-            try:
-                from app.config import cfg as _user_cfg
-                xling_cfg = float(getattr(_user_cfg, "voxcpm_xling_cfg", xling_cfg))
-                xling_steps = int(getattr(_user_cfg, "voxcpm_xling_steps", xling_steps))
-            except Exception:
-                pass  # keep the defaults if config is unavailable (bare worker)
-            base_cfg = max(base_cfg, xling_cfg)
-            base_timesteps = max(base_timesteps, xling_steps)
+        # stronger guidance on top of that. Without it, VoxCPM sometimes drifts
+        # toward source-language phonetics on ~20-30% of segments = "зажёванные
+        # слова". Bumping cfg from 2.0 → 2.5 and steps from 8 → 14 trades ~60%
+        # more inference time per segment for a MUCH higher success rate, which
+        # is a net win because bad segments trigger retry_badcase anyway
+        # (another full retry = same cost as just doing it right).
+        #
+        # resolve_guidance() arbitrates the three sources; see its docstring
+        # for why a per-job override beats the cross-lingual floor.
+        xling_cfg, xling_steps = 2.5, 14
+        try:
+            from app.config import cfg as _user_cfg
+            xling_cfg = float(getattr(_user_cfg, "voxcpm_xling_cfg", xling_cfg))
+            xling_steps = int(getattr(_user_cfg, "voxcpm_xling_steps", xling_steps))
+        except Exception:
+            pass  # keep the defaults if config is unavailable (bare worker)
+
+        base_cfg, base_timesteps = resolve_guidance(
+            self.cfg_value, self.effective_timesteps(tts_speed),
+            is_cross_lingual, xling_cfg, xling_steps,
+            cfg_override, steps_override,
+        )
+        if cfg_override or steps_override:
+            log.info(
+                f"Per-job VoxCPM override: cfg={base_cfg}, "
+                f"timesteps={base_timesteps} "
+                f"(cfg{'=job' if cfg_override else '=global'}, "
+                f"steps{'=job' if steps_override else '=global'})"
+            )
+        elif is_cross_lingual:
             log.info(
                 f"Cross-lingual mode: cfg={base_cfg}, timesteps={base_timesteps}"
             )
@@ -939,7 +998,10 @@ class F5TTSEngine(BaseTTSEngine):
                            speaker_refs=None, speaker_transcripts=None,
                            progress_callback=None, voice_seed=None,
                            tts_speed="balanced",
-                           is_cross_lingual=False, target_lang="ru"):
+                           is_cross_lingual=False, target_lang="ru",
+                           cfg_override=None, steps_override=None):
+        # cfg_override / steps_override are VoxCPM concepts; accepted so this
+        # engine stays substitutable for it, ignored here.
         import soundfile as sf
 
         if self._model is None:
