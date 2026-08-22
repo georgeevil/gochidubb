@@ -3253,6 +3253,7 @@ function DownloadRescuePanel({ job }) {
 function JobErrorPanel({ job, compact }) {
   const [showTb, setShowTb] = useState(false);
   const [showRescue, setShowRescue] = useState(!compact);
+  const [reporting, setReporting] = useState(false);
   const le = job.last_error;
   const msg = (le && le.message) || job.error;
   if (!msg) return null;
@@ -3306,6 +3307,10 @@ function JobErrorPanel({ job, compact }) {
             logs at failure →
           </button>
         )}
+        <button className="mono" onClick={() => setReporting(s => !s)}
+                style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+          {reporting ? 'hide report' : 'report this →'}
+        </button>
       </div>
       <div className="wrap-any" style={{ color: 'var(--err)', fontSize: 12, lineHeight: 1.45 }}>{msg}</div>
       {showTb && le?.traceback_tail && (
@@ -3315,6 +3320,156 @@ function JobErrorPanel({ job, compact }) {
                     borderRadius: 5, padding: 8 }}>{le.traceback_tail}</pre>
       )}
       {rescue && showRescue && <DownloadRescuePanel job={job}/>}
+      {reporting && <BugReportFlow jobId={job.id}/>}
+    </div>
+  );
+}
+
+// ── Bug report flow ─────────────────────────────────────────────────
+// Rendered inside JobErrorPanel by "report this →". GET /api/bugreport/{id}
+// previews the redacted report; "Send to Linear" POSTs it (server-side the
+// signature dedupes: create issue or comment on the existing one). The
+// Linear key is write-only — saved via /api/secrets like the VK token, only
+// a presence boolean ever comes back.
+function BugReportFlow({ jobId }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+  const [apiKey, setApiKey] = useState('');
+  const [teamId, setTeamId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const refetch = async () => {
+    try {
+      const r = await fetch(`/api/bugreport/${jobId}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
+      setData(d); setErr('');
+    } catch (e) { setErr(String(e.message || e)); }
+  };
+  useEffect(() => { refetch(); }, [jobId]);
+
+  const send = async () => {
+    setSending(true); setErr('');
+    try {
+      const r = await fetch(`/api/bugreport/${jobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
+      setSent(d);
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setSending(false); }
+  };
+
+  const saveLinear = async () => {
+    setSaving(true); setErr('');
+    try {
+      const r = await fetch('/api/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linear_api_key: apiKey.trim(),
+                               linear_team_id: teamId.trim(),
+                               linear_project_id: projectId.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
+      setApiKey('');
+      await refetch();       // flips linear_configured
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setSaving(false); }
+  };
+
+  const report = data && data.report;
+  const le = (report && report.last_error) || {};
+  const nLogs = ((report && report.logs) || []).length;
+  const mailtoHref = (() => {
+    if (!report) return '';
+    const subject = `[gochidubb] ${le.stage || 'error'}: ${(le.message || '').slice(0, 70)}`;
+    const logLines = (report.logs || []).slice(0, 10)
+      .map(l => `[${l.level}] ${l.message}`).join('\n');
+    const body = [
+      le.message || '', '',
+      `signature: ${data.signature || ''}`,
+      `stage: ${le.stage || ''}`,
+      `job: ${jobId}`, '',
+      logLines,
+    ].join('\n').slice(0, 1500);
+    return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  })();
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8,
+                  borderTop: '1px dashed oklch(0.7 0.2 25 / 0.28)' }}>
+      {!data && !err && (
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>Preparing report…</div>
+      )}
+      {report && (
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+          sig {data.signature || '—'} · {(le.stage_label || le.stage || 'error').toLowerCase()} · {nLogs} log lines attached
+        </div>
+      )}
+      {err && (
+        <div style={{ padding: '6px 8px', borderRadius: 5, fontSize: 11, color: 'var(--err)',
+                      background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)' }}>
+          {err}
+        </div>
+      )}
+      {sent ? (
+        <a className="mono" href={sent.url || '#'} target="_blank" rel="noreferrer"
+           style={{ fontSize: 11.5, color: 'var(--accent)' }}>
+          {sent.action === 'commented'
+            ? '✓ added to existing issue →'
+            : `✓ created ${sent.issue || 'issue'} →`}
+        </a>
+      ) : report && (
+        <>
+          <input className="field" placeholder="What were you doing? (optional)"
+                 value={note} onChange={e => setNote(e.target.value)}
+                 style={{ fontSize: 11.5, maxWidth: 420 }}/>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {data.linear_configured && (
+              <button className="btn btn-primary" onClick={send} disabled={sending}
+                      style={{ fontSize: 11, padding: '5px 12px' }}>
+                {sending ? 'Sending…' : 'Send to Linear'}
+              </button>
+            )}
+            <CopyButton text={JSON.stringify(report, null, 2)} label="Copy report"/>
+            <a className="mono" href={mailtoHref}
+               style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>mail it →</a>
+          </div>
+          {!data.linear_configured && (
+            <div style={{ padding: 10, background: 'var(--bg-2)',
+                          border: '1px solid var(--line)', borderRadius: 8 }}>
+              <div className="caps" style={{ marginBottom: 6 }}>Linear credentials</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.55, marginBottom: 8 }}>
+                Reports go straight to your Linear workspace (create a personal API key at
+                linear.app → Settings → Security &amp; access). Stored locally, never shown again.
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="field" type="password" placeholder="lin_api_…"
+                       value={apiKey} onChange={e => setApiKey(e.target.value)}
+                       style={{ flex: 1, minWidth: 160, maxWidth: 260 }}/>
+                <input className="field" placeholder="team id"
+                       value={teamId} onChange={e => setTeamId(e.target.value)}
+                       style={{ width: 130 }}/>
+                <input className="field" placeholder="project id (optional)"
+                       value={projectId} onChange={e => setProjectId(e.target.value)}
+                       style={{ width: 160 }}/>
+                <button className="btn" onClick={saveLinear}
+                        disabled={saving || !apiKey.trim() || !teamId.trim()}>
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

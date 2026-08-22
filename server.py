@@ -61,6 +61,7 @@ import json
 import re
 import logging
 import os
+import platform
 import shutil
 import signal
 import sys
@@ -8262,6 +8263,7 @@ async def patch_config(body: str = Form(...)):
 
 from fastapi import Request  # noqa: E402  (kept local to this route region)
 from app import secrets as app_secrets  # noqa: E402
+from app import bugreport  # noqa: E402
 
 
 @app.post("/api/secrets")
@@ -8299,6 +8301,75 @@ async def set_secrets(request: Request):
 async def get_secrets_status():
     """Presence booleans per known secret key — never the values."""
     return app_secrets.secret_status()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Bug reports — package a failed job for an issue tracker
+# ═══════════════════════════════════════════════════════════════════════
+# Assembly and delivery live in app/bugreport.py; these routes only look up
+# the in-memory job (the DB copy has large fields stripped) and take a cheap
+# system snapshot — no subprocesses, no network probes.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _bug_report_payload(job_id: str) -> dict:
+    job = jobs[job_id]
+    system = {
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "gpu_backend": gpu_backend(),
+        "gpu": gpu_snapshot() or {},
+        "translation_backend": "lm_studio" if USE_LM_STUDIO else "ollama",
+        "mode": cfg.mode,
+    }
+    logs = bugreport.select_log_window(logbuf.snapshot, job.get("last_error"))
+    return bugreport.build_bug_report(job, system=system, logs=logs)
+
+
+@app.get("/api/bugreport/{job_id}")
+async def get_bug_report(job_id: str):
+    """Preview: the full report plus whether a Linear sink is configured."""
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    payload = _bug_report_payload(job_id)
+    return {"report": payload, "signature": payload["signature"],
+            "linear_configured": bugreport.sink_configured()}
+
+
+@app.post("/api/bugreport/{job_id}")
+async def send_bug_report(job_id: str, request: Request):
+    """Deliver the report to the configured sink (Linear).
+
+    Optional JSON body {"note": "..."} — a missing or malformed body is
+    tolerated, and the note is redacted before it leaves the machine.
+    """
+    job = jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, 404)
+    if not (job.get("last_error") or job.get("error")):
+        return JSONResponse({"error": "Job has no recorded error"}, 400)
+    note = ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            note = bugreport.redact(str(body.get("note") or ""))[:2000]
+    except Exception:
+        pass
+    sink = bugreport.get_sink()
+    if sink is None:
+        return JSONResponse({"error": "Linear is not configured. Set "
+                             "linear_api_key and linear_team_id via "
+                             "/api/secrets."}, 400)
+    report = _bug_report_payload(job_id)
+    result = await sink.deliver(report, note=note)
+    log.info(f"[bugreport] {job_id} -> {result.get('action')} "
+             f"{result.get('issue') or ''}")
+    if not result.get("ok"):
+        return JSONResponse({"ok": False,
+                             "error": result.get("error") or "Delivery failed"},
+                            502)
+    return {"ok": True, "action": result.get("action"),
+            "url": result.get("url"), "issue": result.get("issue"),
+            "signature": result.get("signature")}
 
 
 # ═══════════════════════════════════════════════════════════════════════
