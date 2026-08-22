@@ -330,6 +330,15 @@ async def gochidubb_cancel_job(job_id: str) -> dict:
 
 
 @mcp.tool()
+async def gochidubb_rescue_job(job_id: str, file_path: str) -> dict:
+    """Attach a manually-downloaded video file to a job whose download
+    failed (see the job's download_hint) and resume it from the extract
+    stage."""
+    c = await _get_client()
+    return await c.attach_source(job_id, file_path)
+
+
+@mcp.tool()
 async def gochidubb_delete_job(job_id: str) -> dict:
     """Delete a job and its output files. Cannot be undone."""
     c = await _get_client()

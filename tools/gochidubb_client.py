@@ -270,6 +270,18 @@ class GoChiDUBBClient:
     async def cancel_job(self, job_id: str) -> dict:
         return await self._request("POST", f"/api/dub/{job_id}/cancel")
 
+    async def attach_source(self, job_id: str, file_path: str) -> dict:
+        """Attach a manually-downloaded video to a job whose download
+        failed and resume the pipeline from the extract stage."""
+        p = Path(file_path).expanduser().resolve()
+        if not p.exists():
+            raise GoChiDUBBError(f"Video file not found: {p}")
+        # httpx will close the file handle when the request finishes
+        f = open(p, "rb")
+        files = {"video": (p.name, f, "application/octet-stream")}
+        return await self._request(
+            "POST", f"/api/job/{job_id}/attach_source", files=files)
+
     async def delete_job(self, job_id: str) -> dict:
         return await self._request("DELETE", f"/api/job/{job_id}")
 

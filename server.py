@@ -495,6 +495,7 @@ def _clear_job_error(job: dict) -> None:
     job.pop("last_error", None)
     job.pop("failed_stage", None)
     job.pop("stale_from_restart", None)
+    job.pop("download_hint", None)
 
 
 def _maybe_terminate_tts_worker():
@@ -2982,6 +2983,11 @@ async def run_pipeline_stages(
         # end of the failure window, and the traceback must be inside it.
         log.exception(f"Pipeline failed at stage '{job.get('stage_id')}': {e}")
         _set_job_error(job, e)
+        # A DownloadFailed carries a structured rescue hint (which yt-dlp
+        # command to run by hand) — surface it for the UI's rescue panel.
+        hint = getattr(e, "hint", None)
+        if isinstance(hint, dict) and hint:
+            job["download_hint"] = hint
         update(status="error")
 
 
@@ -4848,6 +4854,34 @@ def _probe_duration(path: Path) -> float:
     except Exception as e:
         log.warning(f"[probe] ffmpeg fallback failed: {type(e).__name__}: {e}")
     return 0.0
+
+
+def _validate_attached_video(path: Path) -> Optional[str]:
+    """Why `path` is not a usable video, or None when it is.
+
+    Two checks: a positive probed duration (rejects images and corrupt
+    files) and an actual video stream (rejects audio-only files — a WAV
+    has a duration but nothing to dub onto).
+    """
+    import subprocess  # follow existing per-function-import pattern
+    if _probe_duration(path) <= 0:
+        return ("File has no readable duration — it doesn't look like a "
+                "video (an image, or corrupt?)")
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            check=True, capture_output=True, text=True, timeout=15,
+        )
+    except Exception as e:
+        log.warning(f"[rescue] stream probe failed for {path}: "
+                    f"{type(e).__name__}: {e}")
+        return f"Could not inspect the file's streams: {type(e).__name__}"
+    if "video" not in (r.stdout or ""):
+        return ("File has no video stream (audio-only?) — attach the "
+                "downloaded video file itself")
+    return None
 
 
 _showcase_assembling: set = set()  # in-progress batch IDs (de-dupe re-entry)
@@ -6897,6 +6931,31 @@ async def get_job_audit(job_id: str):
     return await asyncio.to_thread(_audit_job, OUTPUT_DIR / job_id)
 
 
+def _fresh_run_ctx(job: dict) -> dict:
+    """Pipeline context for a from-scratch run of an existing job.
+
+    The same fields the original /api/dub submission produced, rebuilt from
+    the persisted job — used by retry_stage for a from-download re-run and
+    by attach_source when a manually-downloaded file replaces the download
+    stage entirely.
+    """
+    return {
+        "source": job.get("source", ""),
+        "source_lang": job.get("source_lang", "auto"),
+        "target_lang": job.get("target_lang", "ru"),
+        "model": job.get("model") or cfg.translation_model,
+        "keep_bg": bool(job.get("keep_bg")),
+        "whisper_model": job.get("whisper_model") or cfg.whisper_model,
+        "reference_audio": "",
+        "speaker_mode": job.get("speaker_mode", "main"),
+        "context_hint": job.get("context_hint", ""),
+        "voice_style": job.get("voice_style", ""),
+        "voice_preset": job.get("voice_preset", "auto"),
+        "tts_speed": job.get("tts_speed", "balanced"),
+        "auto_denoise": bool(job.get("auto_denoise", True)),
+    }
+
+
 @app.post("/api/dub/{job_id}/retry_stage/{stage}")
 async def retry_stage(
     job_id: str,
@@ -6943,21 +7002,7 @@ async def retry_stage(
     # Build the input context: the checkpoint written by the previous
     # stage, or the original request for a from-scratch re-run.
     if _stage_index(stage) == 0:
-        ctx = {
-            "source": job.get("source", ""),
-            "source_lang": job.get("source_lang", "auto"),
-            "target_lang": job.get("target_lang", "ru"),
-            "model": job.get("model") or cfg.translation_model,
-            "keep_bg": bool(job.get("keep_bg")),
-            "whisper_model": job.get("whisper_model") or cfg.whisper_model,
-            "reference_audio": "",
-            "speaker_mode": job.get("speaker_mode", "main"),
-            "context_hint": job.get("context_hint", ""),
-            "voice_style": job.get("voice_style", ""),
-            "voice_preset": job.get("voice_preset", "auto"),
-            "tts_speed": job.get("tts_speed", "balanced"),
-            "auto_denoise": bool(job.get("auto_denoise", True)),
-        }
+        ctx = _fresh_run_ctx(job)
         if not ctx["source"]:
             return JSONResponse({"error": "Job has no source to re-download"}, 409)
     else:
@@ -7018,6 +7063,77 @@ async def retry_stage(
         "ok": True, "job_id": job_id,
         "retry_from": stage, "stop_after": stop_after or None,
     }
+
+
+@app.post("/api/job/{job_id}/attach_source")
+async def attach_source(job_id: str, video: UploadFile = File(...)):
+    """Rescue a job whose download failed: accept a manually-downloaded
+    video, install it as the job's source, and resume from 'extract'.
+
+    Pairs with the `download_hint` a failed download attaches to the job —
+    the user runs one of the suggested yt-dlp commands locally, then drops
+    the file here. Deliberately not restricted to errored jobs: any
+    non-busy job can have its source replaced and re-run.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    job = jobs[job_id]
+    if job.get("status") in _BUSY_STATUSES:
+        return JSONResponse(
+            {"error": "Job is busy — cancel it before attaching a source"},
+            409,
+        )
+    if not (video and video.filename):
+        return JSONResponse({"error": "Provide a video file"}, 400)
+
+    ext = Path(video.filename).suffix or ".mp4"
+    tmp_path = UPLOAD_DIR / f"{job_id}_attached{ext}"
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(video.file, f)
+
+    why = _validate_attached_video(tmp_path)
+    if why:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        log.info(f"[rescue] job={job_id} rejected {video.filename!r}: {why}")
+        return JSONResponse({"error": why}, 400)
+    duration = _probe_duration(tmp_path)
+
+    work = OUTPUT_DIR / job_id
+    work.mkdir(exist_ok=True)
+    dest = work / "source_video.mp4"
+    shutil.move(str(tmp_path), str(dest))
+    size_mb = round(dest.stat().st_size / 1048576, 2)
+    # Keep job["source"] as-is (provenance — a re-download retry stays
+    # possible), just record how the video actually got here.
+    job["rescued_with_upload"] = video.filename
+
+    ctx = _fresh_run_ctx(job)
+    ctx["video_path"] = str(dest)
+    ctx["duration"] = duration
+    ctx["wizard_mode"] = "auto"
+    # Write the download checkpoint the download stage would have written,
+    # so the stage panel shows it as done and retry_stage("extract") keeps
+    # working later.
+    _save_checkpoint(job_id, work, stage="download_done",
+                     data=_ctx_for_checkpoint(ctx))
+
+    _clear_job_error(job)
+    job.pop("cancel_requested", None)
+    job["status"] = "queued"
+    job["duration"] = round(duration, 1)
+    job["step_detail"] = "Queued — resuming from attached video"
+    save_job(job)
+
+    log.info(f"[rescue] job={job_id} attached {video.filename!r} "
+             f"({size_mb} MB, {duration:.1f}s) — resuming from 'extract'")
+    await enqueue_job(job_id, {"__stage_retry__": {
+        "ctx": ctx, "start_stage": "extract", "stop_after": "",
+    }})
+    return {"ok": True, "job_id": job_id, "resumed_from": "extract",
+            "duration": duration, "size_mb": size_mb}
 
 
 @app.post("/api/dub/{job_id}/edit_translations")

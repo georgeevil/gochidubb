@@ -3167,13 +3167,99 @@ function _openLogFocus(focus) {
   window.dispatchEvent(new CustomEvent('gcd:open-logs'));
 }
 
+// ── Download rescue panel ──
+// Rendered inside JobErrorPanel when the download stage failed and the
+// server attached a `download_hint`: shows why yt-dlp failed, the exact
+// commands to run by hand, and a drop-zone that uploads the manually
+// downloaded file to /attach_source so the job resumes from 'extract'.
+function DownloadRescuePanel({ job }) {
+  const hint = job.download_hint;
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState('');
+  const [drag, setDrag] = useState(false);
+  const inputRef = useRef(null);
+  if (!hint) return null;
+
+  const upload = async (f) => {
+    if (!f || uploading) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('video', f);
+      const r = await fetch(`/api/job/${job.id}/attach_source`, { method: 'POST', body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(d.error || `Upload failed (HTTP ${r.status})`);
+      // On success there is nothing to do here — polling sees the job's
+      // status flip to 'queued' and the error panel disappears with it.
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8,
+                  borderTop: '1px solid oklch(0.7 0.2 25 / 0.2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span className="mono" style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px',
+                      borderRadius: 4, color: 'var(--ink-2)',
+                      border: '1px solid var(--line)' }}>
+          {hint.failure_class}
+        </span>
+        <span style={{ fontSize: 12, lineHeight: 1.45, flex: 1, minWidth: 200 }}>{hint.summary}</span>
+      </div>
+      {hint.detail && (
+        <div className="mono wrap-any" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{hint.detail}</div>
+      )}
+      {(hint.commands || []).map((cmd, i) => (
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="caps">{cmd.label}</div>
+            <div style={{ flex: 1 }}/>
+            <CopyButton text={cmd.command}/>
+          </div>
+          <pre className="mono wrap-any" style={{ margin: 0, fontSize: 10.5, lineHeight: 1.5,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      background: 'var(--bg-1)', border: '1px solid var(--line)',
+                      borderRadius: 5, padding: '6px 8px' }}>{cmd.command}</pre>
+        </div>
+      ))}
+      <div
+        className={'dropzone' + (drag ? ' dragging' : '')}
+        onClick={() => !uploading && inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); if (!uploading) setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={e => {
+          e.preventDefault(); setDrag(false);
+          if (!uploading && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+        }}
+        style={uploading ? { opacity: 0.6, pointerEvents: 'none' } : undefined}
+      >
+        <input ref={inputRef} type="file" accept="video/*" style={{ display: 'none' }}
+          onChange={e => { upload(e.target.files[0]); e.target.value = ''; }}/>
+        <div style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+          {uploading ? 'Uploading & validating…' : '…or drop the downloaded video here to resume this job'}
+        </div>
+      </div>
+      {err && (
+        <div className="wrap-any" style={{ color: 'var(--err)', fontSize: 11.5 }}>{err}</div>
+      )}
+    </div>
+  );
+}
+
 function JobErrorPanel({ job, compact }) {
   const [showTb, setShowTb] = useState(false);
+  const [showRescue, setShowRescue] = useState(!compact);
   const le = job.last_error;
   const msg = (le && le.message) || job.error;
   if (!msg) return null;
   const history = (job.error_history || []).length;
   const canFocus = !!(le && le.log_to);
+  const rescue = !!(job.download_hint
+    && ((le && le.stage === 'download') || job.failed_stage === 'download'));
   return (
     <div style={{ padding: compact ? '8px 10px' : '10px 12px', borderRadius: 6,
                   background: 'oklch(0.7 0.2 25 / 0.08)',
@@ -3200,6 +3286,12 @@ function JobErrorPanel({ job, compact }) {
           </span>
         )}
         <div style={{ flex: 1 }}/>
+        {rescue && compact && (
+          <button className="mono" onClick={() => setShowRescue(s => !s)}
+                  style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+            {showRescue ? 'hide rescue' : 'rescue options'}
+          </button>
+        )}
         {le?.traceback_tail && (
           <button className="mono" onClick={() => setShowTb(s => !s)}
                   style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
@@ -3222,6 +3314,7 @@ function JobErrorPanel({ job, compact }) {
                     background: 'var(--bg-1)', border: '1px solid var(--line)',
                     borderRadius: 5, padding: 8 }}>{le.traceback_tail}</pre>
       )}
+      {rescue && showRescue && <DownloadRescuePanel job={job}/>}
     </div>
   );
 }

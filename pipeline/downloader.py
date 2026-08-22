@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -80,6 +81,144 @@ def _is_403(*outputs: str) -> bool:
         "403" in blob
         and ("forbidden" in blob or "http error 403" in blob or "status code 403" in blob)
     ) or "http error 403" in blob
+
+
+class DownloadFailed(RuntimeError):
+    """A download attempt failed, with a structured rescue hint attached.
+
+    `hint` is the dict from classify_download_failure — the server persists
+    it on the job as `download_hint` so the UI can show the user exactly
+    which yt-dlp command to run by hand.
+    """
+
+    def __init__(self, msg, hint=None):
+        super().__init__(msg)
+        self.hint = hint
+
+
+# Network-level failure needles — DNS, TCP, TLS and plain timeouts. All are
+# substrings of what urllib/yt-dlp print, lowercased.
+_NETWORK_NEEDLES = (
+    "getaddrinfo failed",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "connection refused",
+    "connection reset",
+    "network is unreachable",
+    "urlopen error",
+    "timed out",
+    "timeout",
+    "ssl:",
+)
+
+
+def classify_download_failure(stderr: str, stdout: str = "",
+                              source: str = "") -> dict:
+    """Classify a failed yt-dlp run into an actionable rescue hint.
+
+    Returns {"failure_class", "summary", "detail", "commands"} where
+    `commands` is a list of {"label", "command"} shell one-liners the user
+    can run locally to fetch the video themselves. Never raises — this only
+    ever runs on an already-failed download, and a classifier crash would
+    replace a useful error with a useless one.
+    """
+    try:
+        stderr = stderr if isinstance(stderr, str) else str(stderr or "")
+        stdout = stdout if isinstance(stdout, str) else str(stdout or "")
+        source = source if isinstance(source, str) else str(source or "")
+
+        # yt-dlp echoes YouTube's own message text, which uses a curly
+        # apostrophe ("you’re not a bot") — normalize before matching.
+        blob = (stderr + " " + stdout).lower().replace("’", "'")
+
+        detail = ""
+        for line in stderr.splitlines():
+            line = line.strip()
+            if line.startswith("ERROR:"):
+                detail = line[:200]
+                break
+        if not detail:
+            detail = stderr.strip()[:200]
+
+        q = shlex.quote(source) if source else "<URL>"
+        emb = {"label": "Retry via embedded player (what the server tried)",
+               "command": ("yt-dlp --extractor-args "
+                           f'"youtube:player_client=web_embedded" {q}')}
+        cook = {"label": "Retry with your browser's YouTube cookies",
+                "command": f"yt-dlp --cookies-from-browser firefox {q}"}
+        plain = {"label": "Plain yt-dlp download",
+                 "command": f"yt-dlp {q}"}
+        upd = {"label": "Update yt-dlp first",
+               "command": "yt-dlp -U"}
+        fmt = {"label": "List available formats",
+               "command": f"yt-dlp -F {q}"}
+
+        # First match wins — specific before generic, because a bot-check
+        # message frequently arrives alongside a 403.
+        if ("sign in to confirm you're not a bot" in blob
+                or "use --cookies-from-browser or --cookies" in blob):
+            failure_class = "bot-check"
+            summary = ("YouTube flagged this download as bot traffic and "
+                       "wants cookies from a signed-in browser. Set the "
+                       "\"Cookies from browser\" option in Settings to "
+                       "firefox, or download it yourself with cookies.")
+            commands = [cook, emb]
+        elif ("sign in to confirm your age" in blob
+                or "age-restricted" in blob
+                or "inappropriate for some users" in blob):
+            failure_class = "age-gate"
+            summary = ("The video is age-restricted — YouTube only serves it "
+                       "to a signed-in account, so downloading it needs "
+                       "cookies from a browser that is logged in.")
+            commands = [cook]
+        elif ("not available in your country" in blob
+                or "not made this video available in your country" in blob
+                or "geo restriction" in blob
+                or "geo-restricted" in blob
+                or "unavailable from your location" in blob
+                or "blocked it in your country" in blob):
+            failure_class = "geo-block"
+            summary = ("YouTube blocks this video in your region. Retry via "
+                       "the embedded player, or download it yourself over a "
+                       "VPN or from another network.")
+            commands = [emb, plain]
+        elif _is_403(stderr, stdout):
+            # Classification only happens after the automatic web_embedded
+            # retry already failed, so this 403 is persistent.
+            failure_class = "persistent-403"
+            summary = ("YouTube kept answering HTTP 403 even through the "
+                       "embedded-player fallback — usually an outdated "
+                       "yt-dlp or an IP-level block. Try the commands in "
+                       "order.")
+            commands = [emb, cook, upd, plain]
+        elif ("requested format is not available" in blob
+                or "no video formats found" in blob
+                or "only images are available" in blob):
+            failure_class = "format"
+            summary = ("yt-dlp found no downloadable video format — the "
+                       "video may be a live stream, images-only, or need a "
+                       "newer yt-dlp.")
+            commands = [plain, fmt, upd]
+        elif any(n in blob for n in _NETWORK_NEEDLES):
+            failure_class = "network"
+            summary = ("The download failed at the network level — check "
+                       "connectivity, DNS and any proxy or VPN, then retry.")
+            commands = [plain]
+        else:
+            failure_class = "unknown"
+            summary = (f"yt-dlp failed: {detail}" if detail
+                       else "yt-dlp failed without any error output.")
+            commands = [upd, plain]
+
+        return {"failure_class": failure_class, "summary": summary,
+                "detail": detail, "commands": commands}
+    except Exception:
+        log.warning("[download] failure classifier crashed", exc_info=True)
+        return {"failure_class": "unknown",
+                "summary": "yt-dlp failed and the failure could not be "
+                           "classified.",
+                "detail": "", "commands": [{"label": "Update yt-dlp first",
+                                            "command": "yt-dlp -U"}]}
 
 
 def _parse_probe_json(stdout: str):
@@ -279,7 +418,10 @@ def download_video(source: str, output_dir: str, info: dict | None = None) -> st
                         "retrying it with player_client=web_embedded")
             result = _run(simple_fmt, _PLAYER_CLIENT_FALLBACK)
         if result.returncode != 0:
-            raise RuntimeError(f"YouTube download failed: {result.stderr[:300]}")
+            raise DownloadFailed(
+                f"YouTube download failed: {result.stderr[:300]}",
+                hint=classify_download_failure(
+                    result.stderr, result.stdout, source))
 
     # yt-dlp sometimes adds extensions; find the actual file
     if not os.path.exists(output_path):
@@ -291,7 +433,10 @@ def download_video(source: str, output_dir: str, info: dict | None = None) -> st
                 break
 
     if not os.path.exists(output_path):
-        raise RuntimeError("Download completed but video file not found")
+        # No stderr to classify — yt-dlp claimed success but left no file.
+        raise DownloadFailed(
+            "Download completed but video file not found",
+            hint=classify_download_failure("", "", source))
 
     size_mb = os.path.getsize(output_path) / 1048576
     log.info(f"Downloaded: {output_path} ({size_mb:.1f} MB)")
