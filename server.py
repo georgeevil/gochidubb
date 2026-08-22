@@ -444,6 +444,59 @@ def _mark_interrupted(job_id: str) -> None:
         log.debug(f"[queue] could not persist interrupted status: {e}")
 
 
+def _set_job_error(job: dict, exc, stage_id: str = "") -> dict:
+    """Attach a structured error to the job (and keep the legacy string).
+
+    The structured form is what lets the UI say *where* it failed and show
+    the exact log lines: `log_from` is the ring seq recorded when the failed
+    stage started (see run_pipeline_stages), `log_to` the seq at failure —
+    by which point the caller must already have logged the traceback, or the
+    window won't cover it. History survives retries so a fail→retry→fail
+    sequence stays legible; `last_error` and `error` are cleared on restart
+    by _clear_job_error.
+    """
+    if isinstance(exc, BaseException):
+        message = str(exc) or type(exc).__name__
+        etype = type(exc).__name__
+        tb_tail = ""
+        if exc.__traceback__ is not None:
+            import traceback as _tb
+            tb_tail = "".join(
+                _tb.format_exception(type(exc), exc, exc.__traceback__))[-2500:]
+    else:
+        message, etype, tb_tail = str(exc), "", ""
+    stage = stage_id or job.get("failed_stage") or job.get("stage_id") or ""
+    err = {
+        "stage": stage,
+        "stage_label": (STAGE_BY_ID.get(stage) or {}).get("label", stage),
+        "type": etype,
+        "message": message,
+        "traceback_tail": tb_tail,
+        "ts": time.time(),
+        "log_from": int(job.get("_stage_log_from") or 0),
+        "log_to": logbuf.current_seq(),
+    }
+    job["error"] = message           # legacy consumers (CLI, MCP, old UI paths)
+    job["last_error"] = err
+    hist = job.setdefault("error_history", [])
+    hist.append({k: v for k, v in err.items() if k != "traceback_tail"})
+    del hist[:-8]                    # cap: an error loop must not bloat the job
+    return err
+
+
+def _clear_job_error(job: dict) -> None:
+    """Reset error state when a job is (re)started.
+
+    Every restart path must call this, or the previous failure keeps
+    rendering until the new run finishes — the exact stale-error bug this
+    replaces. `error_history` deliberately survives.
+    """
+    job.pop("error", None)
+    job.pop("last_error", None)
+    job.pop("failed_stage", None)
+    job.pop("stale_from_restart", None)
+
+
 def _maybe_terminate_tts_worker():
     """Best-effort kill of the persistent VoxCPM TTS subprocess.
     Called when we detect cancel mid-synthesis so the next iteration
@@ -642,6 +695,8 @@ async def _job_queue_worker():
             # in a big batch). See "#3 started_at is never recorded" audit.
             if job_id in jobs:
                 jobs[job_id]["started_at"] = time.time()
+                # A re-run must not display the previous run's failure.
+                _clear_job_error(jobs[job_id])
                 save_job(jobs[job_id])
             # Queue stores args as a dict keyword, not positional tuple — so we
             # can add new pipeline params without breaking old enqueue sites
@@ -686,7 +741,7 @@ async def _job_queue_worker():
             log.error(f"[queue] Job {job_id} crashed: {e}", exc_info=True)
             if job_id in jobs:
                 jobs[job_id]["status"] = "error"
-                jobs[job_id]["error"] = str(e) or type(e).__name__
+                _set_job_error(jobs[job_id], e)
                 save_job(jobs[job_id])
         else:
             # Job completed cleanly. Run post-success hooks:
@@ -2815,6 +2870,9 @@ async def run_pipeline_stages(
             spec = PIPELINE_STAGES[i]
             sid = spec["id"]
             lo, hi = spec["progress"]
+            # Anchor for the failure log window: if this stage dies, the UI
+            # shows exactly the ring entries produced since this point.
+            job["_stage_log_from"] = logbuf.current_seq()
             update(
                 status=spec["status"], progress=lo, stage_id=sid,
                 step_detail=spec["hint"],
@@ -2920,8 +2978,11 @@ async def run_pipeline_stages(
         raise
     except Exception as e:
         job["failed_stage"] = job.get("stage_id", "")
-        update(status="error", error=str(e))
+        # Log BEFORE recording: _set_job_error snapshots the ring seq as the
+        # end of the failure window, and the traceback must be inside it.
         log.exception(f"Pipeline failed at stage '{job.get('stage_id')}': {e}")
+        _set_job_error(job, e)
+        update(status="error")
 
 
 async def run_pipeline(
@@ -6276,7 +6337,8 @@ async def retry_tts_pipeline(job_id: str, voice_style: str, voice_preset: str,
             _load_checkpoint(job_id, "tts_done")
     if not state:
         job["status"] = "error"
-        job["error"] = "No saved state to retry - run full pipeline once first"
+        _set_job_error(job, "No saved state to retry - run full pipeline once first",
+                       stage_id="tts")
         save_job(job)
         return
     try:
@@ -6289,7 +6351,9 @@ async def retry_tts_pipeline(job_id: str, voice_style: str, voice_preset: str,
         )
     except Exception as e:
         log.error(f"[retry] Failed: {e}", exc_info=True)
-        job.update(status="error", error=str(e)); save_job(job)
+        _set_job_error(job, e, stage_id="tts")
+        job["status"] = "error"
+        save_job(job)
 
 
 
@@ -6315,6 +6379,10 @@ async def retry_tts(
         ref_path = str(UPLOAD_DIR / f"{job_id}_retry_ref{ref_ext}")
         with open(ref_path, "wb") as f:
             shutil.copyfileobj(reference.file, f)
+
+    # A re-run must not display the previous run's failure while it works.
+    _clear_job_error(jobs[job_id])
+    save_job(jobs[job_id])
 
     asyncio.create_task(retry_tts_pipeline(
         job_id, voice_style, voice_preset, tts_speed, ref_path,
@@ -6633,6 +6701,15 @@ def build_stage_report(job_id: str) -> dict:
         if q and q.get("available"):
             s["quality_score"] = q.get("score")
 
+    # The failed stage's row should carry the job's structured error even
+    # when metrics.json has nothing for it (e.g. a crash before the stage
+    # timer wrote its record).
+    last_error = job.get("last_error")
+    if last_error and job_status == "error":
+        for s in stages:
+            if s["id"] == last_error.get("stage") and not s["error"]:
+                s["error"] = last_error.get("message")
+
     total = sum(s["duration_sec"] or 0 for s in stages)
     return {
         "job_id": job_id,
@@ -6640,6 +6717,7 @@ def build_stage_report(job_id: str) -> dict:
         "busy": is_busy,
         "current_stage": live_stage,
         "failed_stage": job.get("failed_stage"),
+        "last_error": last_error,
         "total_duration_sec": round(total, 3),
         "gpu_backend": gpu_backend(),
         "quality_overall": qual.get("overall"),
@@ -6915,9 +6993,7 @@ async def retry_stage(
     # the original source refs instead of a previously-baked preset.
     ctx["_is_retry"] = True
 
-    job.pop("error", None)
-    job.pop("failed_stage", None)
-    job.pop("stale_from_restart", None)
+    _clear_job_error(job)
     job.pop("cancel_requested", None)
     job["status"] = "queued"
     job["step_detail"] = f"Queued — retrying from '{stage}'"
@@ -7458,8 +7534,7 @@ async def continue_pipeline(
     # the job is alive again. _continue_from_checkpoint will set status
     # to "translating"/"synthesizing" as it starts each stage.
     job["status"] = "resuming"
-    job.pop("error", None)
-    job.pop("stale_from_restart", None)
+    _clear_job_error(job)
     save_job(job)
 
     asyncio.create_task(_continue_from_checkpoint(
@@ -7527,7 +7602,9 @@ async def _continue_from_checkpoint(
         save_job(job)
     except Exception as e:
         log.error(f"[continue] Failed: {e}", exc_info=True)
-        job.update(status="error", error=str(e)); save_job(job)
+        _set_job_error(job, e)
+        job["status"] = "error"
+        save_job(job)
 
 
 @app.post("/api/dub/{job_id}/retranslate")
@@ -7710,7 +7787,8 @@ async def _regen_single_segment(
         )
     except Exception as e:
         log.error(f"[regen_seg] Failed: {e}", exc_info=True)
-        update(status="error", error=str(e))
+        _set_job_error(job, e, stage_id="tts")
+        update(status="error")
 
 
 def _voice_preset_payload() -> dict:

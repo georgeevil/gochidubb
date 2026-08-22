@@ -2896,6 +2896,8 @@ function FeedJobCard({ item, onOpen }) {
 
       <FeedStageChips job={job} transitions={item.transitions}/>
 
+      {job.status === 'error' && <JobErrorPanel job={job} compact/>}
+
       {active && (
         <div style={{ height: 4, background: 'var(--line)', borderRadius: 2,
                       overflow: 'hidden' }}>
@@ -3146,6 +3148,81 @@ function AgentFeedView({ jobs, system, narrow, onOpenJob, onSwitchToHome }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// JOB ERROR PANEL — the one way a failed job explains itself.
+// Renders the structured `last_error` the server records at the moment of
+// failure: stage, exception type, traceback tail, and the log-ring window
+// covering exactly the failed stage's lines ("logs at failure →" jumps to
+// System → Logs pre-filtered to that window). Falls back to the legacy
+// flat `error` string for jobs recorded before the structure existed.
+// ═══════════════════════════════════════════════════════════════════
+function _openLogFocus(focus) {
+  try { localStorage.setItem('log_focus', JSON.stringify(focus)); } catch (_) {}
+  // App switches the view, SystemView switches its tab, LogsTab re-reads
+  // the focus — all off this one event, so no prop-threading through the
+  // whole view tree just to open a filtered log.
+  window.dispatchEvent(new CustomEvent('gcd:open-logs'));
+}
+
+function JobErrorPanel({ job, compact }) {
+  const [showTb, setShowTb] = useState(false);
+  const le = job.last_error;
+  const msg = (le && le.message) || job.error;
+  if (!msg) return null;
+  const history = (job.error_history || []).length;
+  const canFocus = !!(le && le.log_to);
+  return (
+    <div style={{ padding: compact ? '8px 10px' : '10px 12px', borderRadius: 6,
+                  background: 'oklch(0.7 0.2 25 / 0.08)',
+                  border: '1px solid oklch(0.7 0.2 25 / 0.28)',
+                  display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {le?.stage && (
+          <span className="mono" style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px',
+                        borderRadius: 4, color: 'var(--err)',
+                        border: '1px solid oklch(0.7 0.2 25 / 0.4)' }}>
+            {(le.stage_label || le.stage).toLowerCase()} ✕
+          </span>
+        )}
+        {le?.type && (
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{le.type}</span>
+        )}
+        {le?.ts && (
+          <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>{fmtClock(le.ts)}</span>
+        )}
+        {history > 1 && (
+          <span className="mono" title="Earlier failures of this job, kept across retries"
+                style={{ fontSize: 10, color: 'var(--ink-4)' }}>
+            ×{history} attempts
+          </span>
+        )}
+        <div style={{ flex: 1 }}/>
+        {le?.traceback_tail && (
+          <button className="mono" onClick={() => setShowTb(s => !s)}
+                  style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+            {showTb ? 'hide trace' : 'trace'}
+          </button>
+        )}
+        {canFocus && (
+          <button className="mono"
+                  onClick={() => _openLogFocus({ from: le.log_from || 0, to: le.log_to,
+                                                 job: job.id, stage: le.stage_label || le.stage })}
+                  style={{ fontSize: 10.5, color: 'var(--err)' }}>
+            logs at failure →
+          </button>
+        )}
+      </div>
+      <div className="wrap-any" style={{ color: 'var(--err)', fontSize: 12, lineHeight: 1.45 }}>{msg}</div>
+      {showTb && le?.traceback_tail && (
+        <pre className="mono" style={{ margin: 0, fontSize: 10, lineHeight: 1.5, color: 'var(--ink-2)',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflow: 'auto',
+                    background: 'var(--bg-1)', border: '1px solid var(--line)',
+                    borderRadius: 5, padding: 8 }}>{le.traceback_tail}</pre>
+      )}
+    </div>
+  );
+}
+
 function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCancelled, onSwitchToHome, onRefresh }) {
   if (!runningJob) {
     return (
@@ -3173,12 +3250,7 @@ function ProcessingView({ runningJob, sphereOn, system, voicePresets, onJobCance
         {runningJob.step_detail && (
           <div className="mono" style={{ color: 'var(--ink-3)' }}>{runningJob.step_detail}</div>
         )}
-        {runningJob.error && (
-          <div style={{ padding: '10px 12px', borderRadius: 6, color: 'var(--err)', fontSize: 12,
-                        background: 'oklch(0.7 0.2 25 / 0.1)', border: '1px solid oklch(0.7 0.2 25 / 0.25)' }}>
-            {runningJob.error}
-          </div>
-        )}
+        <JobErrorPanel job={runningJob}/>
         <StagePanel jobId={runningJob.id} system={system} voicePresets={voicePresets}
                     onChanged={onRefresh}/>
       </div>
@@ -3631,6 +3703,9 @@ function HistoryView({ jobs, system, voicePresets, publishPending = [],
             </div>
             {openId === j.id && (
               <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(j.status === 'error' || j.status === 'interrupted') && (
+                  <JobErrorPanel job={j} compact/>
+                )}
                 {j.status === 'complete' && <QualityPanel jobId={j.id}/>}
                 {j.status === 'complete' && (
                   <PublishPanel jobId={j.id} defaultOpen={pendingIds.has(j.id)}/>
@@ -3801,22 +3876,45 @@ function LogsTab() {
   const [live, setLive] = useState(true);
   const [meta, setMeta] = useState({});
   const boxRef = useRef(null);
+  // A failure window set by JobErrorPanel's "logs at failure →": show only
+  // the ring entries the failed stage produced, frozen (no live tail).
+  const readFocus = () => {
+    try { return JSON.parse(localStorage.getItem('log_focus') || 'null'); }
+    catch (_) { return null; }
+  };
+  const [focus, setFocus] = useState(readFocus);
+  useEffect(() => {
+    const h = () => setFocus(readFocus());
+    window.addEventListener('gcd:open-logs', h);
+    return () => window.removeEventListener('gcd:open-logs', h);
+  }, []);
+  const clearFocus = () => {
+    try { localStorage.removeItem('log_focus'); } catch (_) {}
+    setFocus(null);
+  };
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/logs?limit=500&level=${encodeURIComponent(level)}`);
+      // Focused: pull deep and unfiltered, then cut to the seq window — the
+      // failed stage's lines may be any level, and may sit far back.
+      const url = focus
+        ? '/api/logs?limit=2000'
+        : `/api/logs?limit=500&level=${encodeURIComponent(level)}`;
+      const r = await fetch(url);
       const d = await r.json();
-      setEntries(d.entries || []);
+      let es = d.entries || [];
+      if (focus) es = es.filter(e => e.seq >= (focus.from || 0) && e.seq <= focus.to);
+      setEntries(es);
       setMeta({ dropped: d.dropped, capacity: d.capacity });
     } catch (_) {}
-  }, [level]);
+  }, [level, focus]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (!live) return;
+    if (!live || focus) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [live, load]);
+  }, [live, load, focus]);
   useEffect(() => {
     if (live && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
   }, [entries, live]);
@@ -3845,6 +3943,26 @@ function LogsTab() {
           navigator.clipboard?.writeText(text);
         }}>{I.copy} Copy</button>
       </div>
+
+      {focus && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                      padding: '8px 11px', borderRadius: 6, marginBottom: 10, fontSize: 11.5,
+                      background: 'oklch(0.7 0.2 25 / 0.08)',
+                      border: '1px solid oklch(0.7 0.2 25 / 0.28)', color: 'var(--err)' }}>
+          <span>
+            Failure window{focus.stage ? ` — ${String(focus.stage).toLowerCase()}` : ''}
+            {focus.job ? ` · job ${focus.job}` : ''}
+          </span>
+          {entries.length === 0 && (
+            <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+              these lines have been evicted from the ring — only recent output is kept
+            </span>
+          )}
+          <div style={{ flex: 1 }}/>
+          <button className="btn btn-ghost" style={{ padding: '3px 9px', fontSize: 11 }}
+                  onClick={clearFocus}>Show all logs</button>
+        </div>
+      )}
 
       <div ref={boxRef} className="scroll" style={{
         height: 'calc(100vh - 260px)', overflow: 'auto', padding: 12,
@@ -4211,6 +4329,14 @@ function VoiceTtsTab({ system }) {
 function SystemView({ system, onRefreshSystem }) {
   const [tab, setTab] = useState(_lsGet('system_tab', 'overview'));
   const pick = (t) => { setTab(t); _lsSet('system_tab', t); };
+  // "logs at failure →" from a job error panel: if this view is already
+  // mounted the localStorage-seeded initial tab won't re-run, so follow
+  // the event too.
+  useEffect(() => {
+    const h = () => setTab('logs');
+    window.addEventListener('gcd:open-logs', h);
+    return () => window.removeEventListener('gcd:open-logs', h);
+  }, []);
   const issues = system?.notices || [];
   const problems = issues.filter(n => n.severity === 'error').length;
 
@@ -5724,6 +5850,14 @@ function App() {
   // What ⌘K last parsed, handed to HomeView to pre-fill the form.
   const [pendingCommand, setPendingCommand] = useState(null);
   const narrow = useIsNarrow();
+
+  // "logs at failure →" on any job error panel: jump to System → Logs.
+  // The tab and the window filter follow the same event (SystemView, LogsTab).
+  useEffect(() => {
+    const h = () => { _lsSet('system_tab', 'logs'); setView('system'); };
+    window.addEventListener('gcd:open-logs', h);
+    return () => window.removeEventListener('gcd:open-logs', h);
+  }, []);
   const [navOpen, setNavOpen] = useState(false);
 
   // Rotating a phone into landscape can cross the breakpoint while the drawer
