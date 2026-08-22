@@ -92,6 +92,66 @@ def price_minutes(total_minutes: float) -> Dict[str, Any]:
     }
 
 
+def marginal_cost(used_minutes: float, new_minutes: float) -> Dict[str, Any]:
+    """What `new_minutes` more would cost on top of `used_minutes` already spent.
+
+    This is the number a wizard shows before Start, and it must be computed
+    as a *difference* of two cumulative prices — not by pricing the new
+    minutes from zero. A workspace already 480 minutes into the month pays
+    the first band for 20 more minutes and the second band for the rest;
+    pricing 40 minutes standalone would charge all 40 at the first rate and
+    quote a total the meter then disagrees with.
+
+    `rate` is the rate the *first* new minute is charged at (what the
+    schedule row should highlight); `effective_rate` is what the whole
+    purchase averages out to once it crosses a band.
+
+    **`cost` and `sum(band["cost"])` can differ by a cent, deliberately.**
+    `cost` is the difference of two *displayed* totals — each already
+    rounded to cents, the way the meter shows them — so it is exactly the
+    amount the meter's headline figure will move by once this job runs.
+    That is the number to quote, and the one a user can check against their
+    bill. The bands are the exact unrounded decomposition of the same
+    minutes, rounded once each for display, so they answer a different
+    question: where the money goes, not what the total changes by.
+
+    Callers rendering the breakdown must show `cost` as the total rather
+    than summing the bands — the sum is a decomposition, not the quote.
+    """
+    used = max(0.0, float(used_minutes or 0.0))
+    new = max(0.0, float(new_minutes or 0.0))
+
+    before = price_minutes(used)
+    after = price_minutes(used + new)
+
+    bands: List[Dict[str, Any]] = []
+    for b_before, b_after in zip(before["bands"], after["bands"]):
+        band_minutes = max(0.0, b_after["minutes"] - b_before["minutes"])
+        bands.append({
+            "from": b_after["from"],
+            "to": b_after["to"],
+            "rate": b_after["rate"],
+            "minutes": round(band_minutes, 2),
+            "cost": round(band_minutes * b_after["rate"], 4),
+        })
+
+    # Difference of the two *displayed* totals, not of the raw arithmetic —
+    # see the docstring. This is what the meter's headline will move by.
+    cost = after["cost"] - before["cost"]
+    return {
+        "used_minutes": round(used, 2),
+        "new_minutes": round(new, 2),
+        "total_minutes": round(used + new, 2),
+        "cost": round(cost, 2),
+        "total_cost": round(after["cost"], 2),
+        "rate": tier_for(used),
+        "effective_rate": round(cost / new, 4) if new > 0 else tier_for(used),
+        "bands": bands,
+        # Same honesty boundary as summarize(): this server bills nobody.
+        "estimate": True,
+    }
+
+
 def minutes_to_next_tier(total_minutes: float) -> Optional[Dict[str, Any]]:
     """How far to the next cheaper rate, or None when already on the last."""
     for upper, _rate in TIERS:
