@@ -147,6 +147,41 @@ def test_fresh_install_needs_no_migration():
     assert c.config_version == C.CONFIG_VERSION
 
 
+# ── the background_volume migration ─────────────────────────────────
+
+def test_bg_ducking_accepts_checkbox_spellings():
+    for truthy in ("1", "true", "yes", "on"):
+        assert C.coerce_field("bg_ducking", truthy) is True
+    for falsy in ("0", "false", "off", ""):
+        assert C.coerce_field("bg_ducking", falsy) is False
+
+
+def test_legacy_flat_mix_level_becomes_the_ducked_bed_ceiling():
+    # _save() wrote 0.15 into every existing file, so a stored 0.15 means
+    # "the old default" and should follow it to the new ducked-bed 0.5.
+    c = _detached()
+    c.background_volume = C._LEGACY_BG_VOLUME
+    C._migrate(c, 1)
+    assert c.background_volume == 0.5
+    assert c.config_version == C.CONFIG_VERSION
+
+
+def test_bg_migration_leaves_a_deliberate_level_alone():
+    c = _detached()
+    c.background_volume = 0.3
+    C._migrate(c, 1)
+    assert c.background_volume == 0.3
+
+
+def test_bg_migration_does_not_rerun_on_an_already_migrated_config():
+    # Someone who deliberately picks 0.15 after migrating must keep it.
+    c = _detached()
+    c.background_volume = C._LEGACY_BG_VOLUME
+    c.config_version = C.CONFIG_VERSION
+    C._migrate(c, C.CONFIG_VERSION)
+    assert c.background_volume == C._LEGACY_BG_VOLUME
+
+
 # ── per-job overrides (CLD-189) ─────────────────────────────────────
 #
 # The Settings tab writes through cfg.set(), which validates. A per-job

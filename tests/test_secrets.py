@@ -27,7 +27,9 @@ def test_roundtrip(store, no_env):
     assert store.get("vk_access_token") == ""
     store.set("vk_access_token", "tok123")
     assert store.get("vk_access_token") == "tok123"
-    assert store.status() == {"vk_access_token": True, "vk_group_id": False}
+    assert store.status() == {"vk_access_token": True, "vk_group_id": False,
+                              "linear_api_key": False, "linear_team_id": False,
+                              "linear_project_id": False}
 
 
 def test_persists_across_instances(tmp_path, no_env):
@@ -115,6 +117,8 @@ def test_module_functions_delegate(tmp_path, no_env, monkeypatch):
     assert secrets_mod.get_secret("vk_access_token") == "tok"
     assert secrets_mod.secret_status() == {
         "vk_access_token": True, "vk_group_id": False,
+        "linear_api_key": False, "linear_team_id": False,
+        "linear_project_id": False,
     }
     with pytest.raises(KeyError):
         secrets_mod.set_secret("nope", "x")

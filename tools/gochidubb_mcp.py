@@ -94,7 +94,7 @@ async def gochidubb_dub(
     voice_preset: str = "auto",
     voice_style: str = "",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     auto_denoise: bool = False,
     context_hint: str = "",
     wizard_mode: str = "auto",
@@ -115,7 +115,7 @@ async def gochidubb_dub(
         voice_preset: Voice preset key, or 'auto' for source-cloned voice.
         voice_style: Free-text voice style hint (overrides preset cloning).
         tts_speed: 'fast' | 'balanced' | 'quality'.
-        keep_bg: Preserve background music under the new dub.
+        keep_bg: Preserve background music under the new dub (default: on).
         auto_denoise: Denoise the voice reference before cloning.
         context_hint: Free-text hint for translator (e.g. "tech podcast").
         wizard_mode: 'auto', or 'review_translation'/'review_transcript' to
@@ -165,7 +165,7 @@ async def gochidubb_compare(
     model: Optional[str] = None,
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     voxcpm_cfg: float = 0.0,
     voxcpm_steps: int = 0,
     wait: bool = False,
@@ -176,6 +176,7 @@ async def gochidubb_compare(
 
     target_langs: 2-6 language codes.
     trim_seconds: 15-120, default 60.
+    keep_bg: background music/SFX kept by default.
     voxcpm_cfg / voxcpm_steps: per-job VoxCPM overrides; 0 = global setting.
     """
     c = await _get_client()
@@ -205,7 +206,7 @@ async def gochidubb_showcase(
     model: Optional[str] = None,
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     voxcpm_cfg: float = 0.0,
     voxcpm_steps: int = 0,
     wait: bool = False,
@@ -218,6 +219,7 @@ async def gochidubb_showcase(
     cloning across languages (vs. gochidubb_compare which gives N files).
 
     target_langs: 2-6 codes. trim_seconds: 15-120.
+    keep_bg: background music/SFX kept by default.
     voxcpm_cfg / voxcpm_steps: per-job VoxCPM overrides; 0 = global setting.
     """
     c = await _get_client()
@@ -346,6 +348,15 @@ async def gochidubb_cancel_job(job_id: str) -> dict:
     """Request cancellation of a queued or running job."""
     c = await _get_client()
     return await c.cancel_job(job_id)
+
+
+@mcp.tool()
+async def gochidubb_rescue_job(job_id: str, file_path: str) -> dict:
+    """Attach a manually-downloaded video file to a job whose download
+    failed (see the job's download_hint) and resume it from the extract
+    stage."""
+    c = await _get_client()
+    return await c.attach_source(job_id, file_path)
 
 
 @mcp.tool()

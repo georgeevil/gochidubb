@@ -89,8 +89,8 @@ Translation backend is dual: `USE_LM_STUDIO=1` (default) hits an OpenAI-compatib
 ### Three parallel access paths
 
 - **UI**: `static/index.html` (single-page JS, no build step, no framework) — talks to `/api/*`
-- **CLI**: `tools/gochidubb_cli.py` (subcommands: `dub`, `compare`, `showcase`, `redub`, `status`, `jobs`, `wait`, `showcase-status`, `showcase-rebuild`, `cancel`, `delete`, `system`, `languages`, `models`, `voices`) — all HTTP calls via `tools/gochidubb_client.py`
-- **MCP**: `tools/gochidubb_mcp.py` exposes `gochidubb_dub`, `gochidubb_compare`, `gochidubb_showcase`, `gochidubb_redub`, `gochidubb_get_job`, `gochidubb_list_jobs`, `gochidubb_get_showcase`, `gochidubb_rebuild_showcase`, `gochidubb_cancel_job`, `gochidubb_delete_job`, `gochidubb_system_status`, `gochidubb_list_languages`, `gochidubb_list_models`, `gochidubb_list_voices`
+- **CLI**: `tools/gochidubb_cli.py` (subcommands: `dub`, `compare`, `showcase`, `redub`, `status`, `jobs`, `wait`, `showcase-status`, `showcase-rebuild`, `cancel`, `rescue`, `delete`, `system`, `languages`, `models`, `voices`) — all HTTP calls via `tools/gochidubb_client.py`
+- **MCP**: `tools/gochidubb_mcp.py` exposes `gochidubb_dub`, `gochidubb_compare`, `gochidubb_showcase`, `gochidubb_redub`, `gochidubb_get_job`, `gochidubb_list_jobs`, `gochidubb_get_showcase`, `gochidubb_rebuild_showcase`, `gochidubb_cancel_job`, `gochidubb_rescue_job`, `gochidubb_delete_job`, `gochidubb_system_status`, `gochidubb_list_languages`, `gochidubb_list_models`, `gochidubb_list_voices`
 
 All three respect `GOCHIDUBB_URL` (default `http://localhost:8910`) so any of them can drive a remote box. The CLI and MCP both go through `GoChiDUBBClient` in `tools/gochidubb_client.py` — if you're adding a capability, add the API route to `server.py` first, then a client method, then wire up CLI/MCP.
 

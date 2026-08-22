@@ -61,6 +61,7 @@ import json
 import re
 import logging
 import os
+import platform
 import shutil
 import signal
 import sys
@@ -444,6 +445,60 @@ def _mark_interrupted(job_id: str) -> None:
         log.debug(f"[queue] could not persist interrupted status: {e}")
 
 
+def _set_job_error(job: dict, exc, stage_id: str = "") -> dict:
+    """Attach a structured error to the job (and keep the legacy string).
+
+    The structured form is what lets the UI say *where* it failed and show
+    the exact log lines: `log_from` is the ring seq recorded when the failed
+    stage started (see run_pipeline_stages), `log_to` the seq at failure —
+    by which point the caller must already have logged the traceback, or the
+    window won't cover it. History survives retries so a fail→retry→fail
+    sequence stays legible; `last_error` and `error` are cleared on restart
+    by _clear_job_error.
+    """
+    if isinstance(exc, BaseException):
+        message = str(exc) or type(exc).__name__
+        etype = type(exc).__name__
+        tb_tail = ""
+        if exc.__traceback__ is not None:
+            import traceback as _tb
+            tb_tail = "".join(
+                _tb.format_exception(type(exc), exc, exc.__traceback__))[-2500:]
+    else:
+        message, etype, tb_tail = str(exc), "", ""
+    stage = stage_id or job.get("failed_stage") or job.get("stage_id") or ""
+    err = {
+        "stage": stage,
+        "stage_label": (STAGE_BY_ID.get(stage) or {}).get("label", stage),
+        "type": etype,
+        "message": message,
+        "traceback_tail": tb_tail,
+        "ts": time.time(),
+        "log_from": int(job.get("_stage_log_from") or 0),
+        "log_to": logbuf.current_seq(),
+    }
+    job["error"] = message           # legacy consumers (CLI, MCP, old UI paths)
+    job["last_error"] = err
+    hist = job.setdefault("error_history", [])
+    hist.append({k: v for k, v in err.items() if k != "traceback_tail"})
+    del hist[:-8]                    # cap: an error loop must not bloat the job
+    return err
+
+
+def _clear_job_error(job: dict) -> None:
+    """Reset error state when a job is (re)started.
+
+    Every restart path must call this, or the previous failure keeps
+    rendering until the new run finishes — the exact stale-error bug this
+    replaces. `error_history` deliberately survives.
+    """
+    job.pop("error", None)
+    job.pop("last_error", None)
+    job.pop("failed_stage", None)
+    job.pop("stale_from_restart", None)
+    job.pop("download_hint", None)
+
+
 def _maybe_terminate_tts_worker():
     """Best-effort kill of the persistent VoxCPM TTS subprocess.
     Called when we detect cancel mid-synthesis so the next iteration
@@ -642,6 +697,8 @@ async def _job_queue_worker():
             # in a big batch). See "#3 started_at is never recorded" audit.
             if job_id in jobs:
                 jobs[job_id]["started_at"] = time.time()
+                # A re-run must not display the previous run's failure.
+                _clear_job_error(jobs[job_id])
                 save_job(jobs[job_id])
             # Queue stores args as a dict keyword, not positional tuple — so we
             # can add new pipeline params without breaking old enqueue sites
@@ -686,7 +743,7 @@ async def _job_queue_worker():
             log.error(f"[queue] Job {job_id} crashed: {e}", exc_info=True)
             if job_id in jobs:
                 jobs[job_id]["status"] = "error"
-                jobs[job_id]["error"] = str(e) or type(e).__name__
+                _set_job_error(jobs[job_id], e)
                 save_job(jobs[job_id])
         else:
             # Job completed cleanly. Run post-success hooks:
@@ -2837,6 +2894,9 @@ async def run_pipeline_stages(
             spec = PIPELINE_STAGES[i]
             sid = spec["id"]
             lo, hi = spec["progress"]
+            # Anchor for the failure log window: if this stage dies, the UI
+            # shows exactly the ring entries produced since this point.
+            job["_stage_log_from"] = logbuf.current_seq()
             update(
                 status=spec["status"], progress=lo, stage_id=sid,
                 step_detail=spec["hint"],
@@ -2942,8 +3002,16 @@ async def run_pipeline_stages(
         raise
     except Exception as e:
         job["failed_stage"] = job.get("stage_id", "")
-        update(status="error", error=str(e))
+        # Log BEFORE recording: _set_job_error snapshots the ring seq as the
+        # end of the failure window, and the traceback must be inside it.
         log.exception(f"Pipeline failed at stage '{job.get('stage_id')}': {e}")
+        _set_job_error(job, e)
+        # A DownloadFailed carries a structured rescue hint (which yt-dlp
+        # command to run by hand) — surface it for the UI's rescue panel.
+        hint = getattr(e, "hint", None)
+        if isinstance(hint, dict) and hint:
+            job["download_hint"] = hint
+        update(status="error")
 
 
 async def run_pipeline(
@@ -3204,7 +3272,7 @@ async def scout_dub(request: _ScoutRequest):
         source_lang=str(body.get("source_lang") or "auto"),
         target_lang=target_lang,
         model=str(body.get("model") or "gemma4:e4b"),
-        keep_bg=bool(body.get("keep_bg", False)),
+        keep_bg=bool(body.get("keep_bg", True)),
         whisper_model=str(body.get("whisper_model") or "large-v3"),
         speaker_mode=str(body.get("speaker_mode") or "main"),
         context_hint=str(body.get("context_hint") or ""),
@@ -3484,7 +3552,7 @@ async def start_dub(
     source_lang: str = Form("auto"),
     target_lang: str = Form("ru"),
     model: str = Form("gemma4:e4b"),
-    keep_bg: bool = Form(False),
+    keep_bg: bool = Form(True),
     whisper_model: str = Form("large-v3"),
     speaker_mode: str = Form("main"),   # "main" | "all"
     context_hint: str = Form(""),
@@ -3706,7 +3774,7 @@ async def start_batch_dub(
     source_lang: str = Form("auto"),
     target_lang: str = Form("ru"),
     model: str = Form("aya-expanse:8b"),
-    keep_bg: bool = Form(False),
+    keep_bg: bool = Form(True),
     whisper_model: str = Form("large-v3"),
     speaker_mode: str = Form("main"),
     context_hint: str = Form(""),
@@ -4417,7 +4485,7 @@ async def start_quick_test(
     voice_preset: str = Form("auto"),
     voice_style: str = Form(""),
     tts_speed: str = Form("balanced"),
-    keep_bg: bool = Form(False),
+    keep_bg: bool = Form(True),
     auto_denoise: bool = Form(False),
     context_hint: str = Form(""),
     batch_label: str = Form(""),
@@ -4858,6 +4926,34 @@ def _probe_duration(path: Path) -> float:
     return 0.0
 
 
+def _validate_attached_video(path: Path) -> Optional[str]:
+    """Why `path` is not a usable video, or None when it is.
+
+    Two checks: a positive probed duration (rejects images and corrupt
+    files) and an actual video stream (rejects audio-only files — a WAV
+    has a duration but nothing to dub onto).
+    """
+    import subprocess  # follow existing per-function-import pattern
+    if _probe_duration(path) <= 0:
+        return ("File has no readable duration — it doesn't look like a "
+                "video (an image, or corrupt?)")
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            check=True, capture_output=True, text=True, timeout=15,
+        )
+    except Exception as e:
+        log.warning(f"[rescue] stream probe failed for {path}: "
+                    f"{type(e).__name__}: {e}")
+        return f"Could not inspect the file's streams: {type(e).__name__}"
+    if "video" not in (r.stdout or ""):
+        return ("File has no video stream (audio-only?) — attach the "
+                "downloaded video file itself")
+    return None
+
+
 _showcase_assembling: set = set()  # in-progress batch IDs (de-dupe re-entry)
 _showcase_tasks: set = set()       # strong refs so asyncio GC doesn't kill them
 
@@ -5220,7 +5316,7 @@ async def start_showcase(
     voice_preset: str = Form("auto"),
     voice_style: str = Form(""),
     tts_speed: str = Form("balanced"),
-    keep_bg: bool = Form(False),
+    keep_bg: bool = Form(True),
     auto_denoise: bool = Form(False),
     context_hint: str = Form(""),
     batch_label: str = Form(""),
@@ -6378,7 +6474,8 @@ async def retry_tts_pipeline(job_id: str, voice_style: str, voice_preset: str,
             _load_checkpoint(job_id, "tts_done")
     if not state:
         job["status"] = "error"
-        job["error"] = "No saved state to retry - run full pipeline once first"
+        _set_job_error(job, "No saved state to retry - run full pipeline once first",
+                       stage_id="tts")
         save_job(job)
         return
     try:
@@ -6391,7 +6488,9 @@ async def retry_tts_pipeline(job_id: str, voice_style: str, voice_preset: str,
         )
     except Exception as e:
         log.error(f"[retry] Failed: {e}", exc_info=True)
-        job.update(status="error", error=str(e)); save_job(job)
+        _set_job_error(job, e, stage_id="tts")
+        job["status"] = "error"
+        save_job(job)
 
 
 
@@ -6433,6 +6532,10 @@ async def retry_tts(
         ref_path = str(UPLOAD_DIR / f"{job_id}_retry_ref{ref_ext}")
         with open(ref_path, "wb") as f:
             shutil.copyfileobj(reference.file, f)
+
+    # A re-run must not display the previous run's failure while it works.
+    _clear_job_error(jobs[job_id])
+    save_job(jobs[job_id])
 
     asyncio.create_task(retry_tts_pipeline(
         job_id, voice_style, voice_preset, tts_speed, ref_path,
@@ -6764,6 +6867,15 @@ def build_stage_report(job_id: str) -> dict:
         if q and q.get("available"):
             s["quality_score"] = q.get("score")
 
+    # The failed stage's row should carry the job's structured error even
+    # when metrics.json has nothing for it (e.g. a crash before the stage
+    # timer wrote its record).
+    last_error = job.get("last_error")
+    if last_error and job_status == "error":
+        for s in stages:
+            if s["id"] == last_error.get("stage") and not s["error"]:
+                s["error"] = last_error.get("message")
+
     total = sum(s["duration_sec"] or 0 for s in stages)
     return {
         "job_id": job_id,
@@ -6771,6 +6883,7 @@ def build_stage_report(job_id: str) -> dict:
         "busy": is_busy,
         "current_stage": live_stage,
         "failed_stage": job.get("failed_stage"),
+        "last_error": last_error,
         "total_duration_sec": round(total, 3),
         "gpu_backend": gpu_backend(),
         "quality_overall": qual.get("overall"),
@@ -6950,6 +7063,33 @@ async def get_job_audit(job_id: str):
     return await asyncio.to_thread(_audit_job, OUTPUT_DIR / job_id)
 
 
+def _fresh_run_ctx(job: dict) -> dict:
+    """Pipeline context for a from-scratch run of an existing job.
+
+    The same fields the original /api/dub submission produced, rebuilt from
+    the persisted job — used by retry_stage for a from-download re-run and
+    by attach_source when a manually-downloaded file replaces the download
+    stage entirely.
+    """
+    return {
+        "source": job.get("source", ""),
+        "source_lang": job.get("source_lang", "auto"),
+        "target_lang": job.get("target_lang", "ru"),
+        "model": job.get("model") or cfg.translation_model,
+        "keep_bg": bool(job.get("keep_bg")),
+        "whisper_model": job.get("whisper_model") or cfg.whisper_model,
+        "reference_audio": "",
+        "speaker_mode": job.get("speaker_mode", "main"),
+        "context_hint": job.get("context_hint", ""),
+        "voice_style": job.get("voice_style", ""),
+        "voice_preset": job.get("voice_preset", "auto"),
+        "tts_speed": job.get("tts_speed", "balanced"),
+        "auto_denoise": bool(job.get("auto_denoise", True)),
+        "voxcpm_cfg": job.get("voxcpm_cfg", 0),
+        "voxcpm_steps": job.get("voxcpm_steps", 0),
+    }
+
+
 @app.post("/api/dub/{job_id}/retry_stage/{stage}")
 async def retry_stage(
     job_id: str,
@@ -6996,23 +7136,7 @@ async def retry_stage(
     # Build the input context: the checkpoint written by the previous
     # stage, or the original request for a from-scratch re-run.
     if _stage_index(stage) == 0:
-        ctx = {
-            "source": job.get("source", ""),
-            "source_lang": job.get("source_lang", "auto"),
-            "target_lang": job.get("target_lang", "ru"),
-            "model": job.get("model") or cfg.translation_model,
-            "keep_bg": bool(job.get("keep_bg")),
-            "whisper_model": job.get("whisper_model") or cfg.whisper_model,
-            "reference_audio": "",
-            "speaker_mode": job.get("speaker_mode", "main"),
-            "context_hint": job.get("context_hint", ""),
-            "voice_style": job.get("voice_style", ""),
-            "voice_preset": job.get("voice_preset", "auto"),
-            "tts_speed": job.get("tts_speed", "balanced"),
-            "auto_denoise": bool(job.get("auto_denoise", True)),
-            "voxcpm_cfg": job.get("voxcpm_cfg", 0),
-            "voxcpm_steps": job.get("voxcpm_steps", 0),
-        }
+        ctx = _fresh_run_ctx(job)
         if not ctx["source"]:
             return JSONResponse({"error": "Job has no source to re-download"}, 409)
     else:
@@ -7053,9 +7177,7 @@ async def retry_stage(
     # the original source refs instead of a previously-baked preset.
     ctx["_is_retry"] = True
 
-    job.pop("error", None)
-    job.pop("failed_stage", None)
-    job.pop("stale_from_restart", None)
+    _clear_job_error(job)
     job.pop("cancel_requested", None)
     job["status"] = "queued"
     job["step_detail"] = f"Queued — retrying from '{stage}'"
@@ -7082,6 +7204,77 @@ async def retry_stage(
         "ok": True, "job_id": job_id,
         "retry_from": stage, "stop_after": stop_after or None,
     }
+
+
+@app.post("/api/job/{job_id}/attach_source")
+async def attach_source(job_id: str, video: UploadFile = File(...)):
+    """Rescue a job whose download failed: accept a manually-downloaded
+    video, install it as the job's source, and resume from 'extract'.
+
+    Pairs with the `download_hint` a failed download attaches to the job —
+    the user runs one of the suggested yt-dlp commands locally, then drops
+    the file here. Deliberately not restricted to errored jobs: any
+    non-busy job can have its source replaced and re-run.
+    """
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    job = jobs[job_id]
+    if job.get("status") in _BUSY_STATUSES:
+        return JSONResponse(
+            {"error": "Job is busy — cancel it before attaching a source"},
+            409,
+        )
+    if not (video and video.filename):
+        return JSONResponse({"error": "Provide a video file"}, 400)
+
+    ext = Path(video.filename).suffix or ".mp4"
+    tmp_path = UPLOAD_DIR / f"{job_id}_attached{ext}"
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(video.file, f)
+
+    why = _validate_attached_video(tmp_path)
+    if why:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        log.info(f"[rescue] job={job_id} rejected {video.filename!r}: {why}")
+        return JSONResponse({"error": why}, 400)
+    duration = _probe_duration(tmp_path)
+
+    work = OUTPUT_DIR / job_id
+    work.mkdir(exist_ok=True)
+    dest = work / "source_video.mp4"
+    shutil.move(str(tmp_path), str(dest))
+    size_mb = round(dest.stat().st_size / 1048576, 2)
+    # Keep job["source"] as-is (provenance — a re-download retry stays
+    # possible), just record how the video actually got here.
+    job["rescued_with_upload"] = video.filename
+
+    ctx = _fresh_run_ctx(job)
+    ctx["video_path"] = str(dest)
+    ctx["duration"] = duration
+    ctx["wizard_mode"] = "auto"
+    # Write the download checkpoint the download stage would have written,
+    # so the stage panel shows it as done and retry_stage("extract") keeps
+    # working later.
+    _save_checkpoint(job_id, work, stage="download_done",
+                     data=_ctx_for_checkpoint(ctx))
+
+    _clear_job_error(job)
+    job.pop("cancel_requested", None)
+    job["status"] = "queued"
+    job["duration"] = round(duration, 1)
+    job["step_detail"] = "Queued — resuming from attached video"
+    save_job(job)
+
+    log.info(f"[rescue] job={job_id} attached {video.filename!r} "
+             f"({size_mb} MB, {duration:.1f}s) — resuming from 'extract'")
+    await enqueue_job(job_id, {"__stage_retry__": {
+        "ctx": ctx, "start_stage": "extract", "stop_after": "",
+    }})
+    return {"ok": True, "job_id": job_id, "resumed_from": "extract",
+            "duration": duration, "size_mb": size_mb}
 
 
 @app.post("/api/dub/{job_id}/edit_translations")
@@ -7598,8 +7791,7 @@ async def continue_pipeline(
     # the job is alive again. _continue_from_checkpoint will set status
     # to "translating"/"synthesizing" as it starts each stage.
     job["status"] = "resuming"
-    job.pop("error", None)
-    job.pop("stale_from_restart", None)
+    _clear_job_error(job)
     save_job(job)
 
     asyncio.create_task(_continue_from_checkpoint(
@@ -7667,7 +7859,9 @@ async def _continue_from_checkpoint(
         save_job(job)
     except Exception as e:
         log.error(f"[continue] Failed: {e}", exc_info=True)
-        job.update(status="error", error=str(e)); save_job(job)
+        _set_job_error(job, e)
+        job["status"] = "error"
+        save_job(job)
 
 
 @app.post("/api/dub/{job_id}/retranslate")
@@ -7850,7 +8044,8 @@ async def _regen_single_segment(
         )
     except Exception as e:
         log.error(f"[regen_seg] Failed: {e}", exc_info=True)
-        update(status="error", error=str(e))
+        _set_job_error(job, e, stage_id="tts")
+        update(status="error")
 
 
 def _voice_preset_payload() -> dict:
@@ -8208,6 +8403,7 @@ async def patch_config(body: str = Form(...)):
 
 from fastapi import Request  # noqa: E402  (kept local to this route region)
 from app import secrets as app_secrets  # noqa: E402
+from app import bugreport  # noqa: E402
 
 
 @app.post("/api/secrets")
@@ -8245,6 +8441,75 @@ async def set_secrets(request: Request):
 async def get_secrets_status():
     """Presence booleans per known secret key — never the values."""
     return app_secrets.secret_status()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Bug reports — package a failed job for an issue tracker
+# ═══════════════════════════════════════════════════════════════════════
+# Assembly and delivery live in app/bugreport.py; these routes only look up
+# the in-memory job (the DB copy has large fields stripped) and take a cheap
+# system snapshot — no subprocesses, no network probes.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _bug_report_payload(job_id: str) -> dict:
+    job = jobs[job_id]
+    system = {
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "gpu_backend": gpu_backend(),
+        "gpu": gpu_snapshot() or {},
+        "translation_backend": "lm_studio" if USE_LM_STUDIO else "ollama",
+        "mode": cfg.mode,
+    }
+    logs = bugreport.select_log_window(logbuf.snapshot, job.get("last_error"))
+    return bugreport.build_bug_report(job, system=system, logs=logs)
+
+
+@app.get("/api/bugreport/{job_id}")
+async def get_bug_report(job_id: str):
+    """Preview: the full report plus whether a Linear sink is configured."""
+    if job_id not in jobs:
+        return JSONResponse({"error": "Job not found"}, 404)
+    payload = _bug_report_payload(job_id)
+    return {"report": payload, "signature": payload["signature"],
+            "linear_configured": bugreport.sink_configured()}
+
+
+@app.post("/api/bugreport/{job_id}")
+async def send_bug_report(job_id: str, request: Request):
+    """Deliver the report to the configured sink (Linear).
+
+    Optional JSON body {"note": "..."} — a missing or malformed body is
+    tolerated, and the note is redacted before it leaves the machine.
+    """
+    job = jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, 404)
+    if not (job.get("last_error") or job.get("error")):
+        return JSONResponse({"error": "Job has no recorded error"}, 400)
+    note = ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            note = bugreport.redact(str(body.get("note") or ""))[:2000]
+    except Exception:
+        pass
+    sink = bugreport.get_sink()
+    if sink is None:
+        return JSONResponse({"error": "Linear is not configured. Set "
+                             "linear_api_key and linear_team_id via "
+                             "/api/secrets."}, 400)
+    report = _bug_report_payload(job_id)
+    result = await sink.deliver(report, note=note)
+    log.info(f"[bugreport] {job_id} -> {result.get('action')} "
+             f"{result.get('issue') or ''}")
+    if not result.get("ok"):
+        return JSONResponse({"ok": False,
+                             "error": result.get("error") or "Delivery failed"},
+                            502)
+    return {"ok": True, "action": result.get("action"),
+            "url": result.get("url"), "issue": result.get("issue"),
+            "signature": result.get("signature")}
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -486,8 +486,44 @@ def _video_codec_args(video_path, must_encode, codec_pref, preset, crf):
     return encode
 
 
+# Ducking curve for the music/SFX bed under the dub. The dub is loudnorm'd
+# to -16 LUFS (LN_I), i.e. ~-18 dBFS RMS ~= 0.126 linear; a 0.03 threshold
+# (~-30 dBFS) with ratio 8 yields ~11 dB of bed dip while speech is present.
+# attack 20 ms catches word onsets without pumping; release 400 ms rides
+# through inter-word gaps and brings the bed back smoothly in pauses.
+DUCK_THRESHOLD = 0.03
+DUCK_RATIO = 8
+DUCK_ATTACK_MS = 20
+DUCK_RELEASE_MS = 400
+
+
+def build_audio_mix_filter(bg_volume: float, ducking: bool = True) -> str:
+    """filter_complex mixing dub ([1:a]) with the separated bed ([2:a]) into [out].
+
+    sidechaincompress takes [main][sidechain]: the bed is the main input and
+    the dub is the key, so the dub must feed both the key and the final mix —
+    hence the asplit. [dubm] stays the FIRST amix input, preserving the
+    duration=first semantics of the legacy flat mix. bg_volume applies BEFORE
+    the compressor so it keeps meaning "bed ceiling" (level when nobody
+    speaks) and existing configs keep their meaning. Headroom: the dub
+    true-peaks at -1.5 dBTP ~= 0.84, the ducked bed sits ~= 0.14, sum ~= 0.98
+    — no limiter needed.
+    """
+    if not ducking:
+        return (f"[1:a]volume=1.0[dub];[2:a]volume={bg_volume}[bg];"
+                f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]")
+    return (
+        f"[1:a]asplit=2[dubm][dubsc];"
+        f"[2:a]volume={bg_volume}[bgin];"
+        f"[bgin][dubsc]sidechaincompress="
+        f"threshold={DUCK_THRESHOLD}:ratio={DUCK_RATIO}:"
+        f"attack={DUCK_ATTACK_MS}:release={DUCK_RELEASE_MS}:makeup=1[bgduck];"
+        f"[dubm][bgduck]amix=inputs=2:duration=first:normalize=0[out]"
+    )
+
+
 def merge_audio_video(video_path, dubbed_audio_path, output_path,
-                     background_audio_path="", bg_volume=None,
+                     background_audio_path="", bg_volume=None, bg_ducking=None,
                      codec_pref=None, preset=None, crf=None,
                      audio_bitrate=None):
     """Merge dubbed audio with video. If dubbed audio is longer than source
@@ -503,6 +539,8 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
         from app.config import cfg as _cfg
         if bg_volume is None:
             bg_volume = _cfg.background_volume
+        if bg_ducking is None:
+            bg_ducking = _cfg.bg_ducking
         codec_pref = codec_pref or _cfg.output_video_codec
         preset = preset or _cfg.output_preset
         crf = _cfg.output_crf if crf is None else crf
@@ -510,7 +548,8 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
     except Exception:
         # Config unavailable (bare pipeline use) — fall back to what these
         # values were hardcoded to before they became settings.
-        bg_volume = 0.15 if bg_volume is None else bg_volume
+        bg_volume = 0.5 if bg_volume is None else bg_volume
+        bg_ducking = True if bg_ducking is None else bg_ducking
         codec_pref = codec_pref or "h264"
         preset = preset or "veryfast"
         crf = 23 if crf is None else crf
@@ -552,9 +591,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-i", dubbed_audio_path,
                 "-i", background_audio_path,
                 "-filter_complex",
-                f"[0:v]{tpad}[v];"
-                f"[1:a]volume=1.0[dub];[2:a]volume={bg_volume}[bg];"
-                f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]",
+                f"[0:v]{tpad}[v];" + build_audio_mix_filter(bg_volume, bg_ducking),
                 "-map", "[v]", "-map", "[out]",
                 *vargs, *aargs,
                 "-movflags", "+faststart",
@@ -567,8 +604,7 @@ def merge_audio_video(video_path, dubbed_audio_path, output_path,
                 "-i", dubbed_audio_path,
                 "-i", background_audio_path,
                 "-filter_complex",
-                f"[1:a]volume=1.0[dub];[2:a]volume={bg_volume}[bg];"
-                f"[dub][bg]amix=inputs=2:duration=first:normalize=0[out]",
+                build_audio_mix_filter(bg_volume, bg_ducking),
                 "-map", "0:v", "-map", "[out]",
                 *vargs, *aargs,
                 "-movflags", "+faststart",

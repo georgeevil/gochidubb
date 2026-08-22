@@ -33,6 +33,9 @@ SECRETS_FILE = BASE / "secrets.json"
 KNOWN_SECRETS = {
     "vk_access_token": "VK_ACCESS_TOKEN",
     "vk_group_id": "VK_GROUP_ID",
+    "linear_api_key": "LINEAR_API_KEY",
+    "linear_team_id": "LINEAR_TEAM_ID",
+    "linear_project_id": "LINEAR_PROJECT_ID",
 }
 
 

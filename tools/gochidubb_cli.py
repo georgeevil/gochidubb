@@ -226,6 +226,11 @@ async def cmd_status(c: GoChiDUBBClient, a) -> None:
             if pub.get("url"):
                 line += f" -> {pub['url']}"
             print(line)
+        hint = j.get("download_hint")
+        if isinstance(hint, dict) and hint:
+            print(f"   rescue: {hint.get('summary', '')}")
+            for cmd in hint.get("commands") or []:
+                print(f"           {cmd.get('label', '?')}: {cmd.get('command', '')}")
 
 
 async def cmd_jobs(c: GoChiDUBBClient, a) -> None:
@@ -267,6 +272,10 @@ async def cmd_showcase_rebuild(c: GoChiDUBBClient, a) -> None:
 
 async def cmd_cancel(c: GoChiDUBBClient, a) -> None:
     _print_json(await c.cancel_job(a.job_id))
+
+
+async def cmd_rescue(c: GoChiDUBBClient, a) -> None:
+    _print_json(await c.attach_source(a.job_id, a.video_file))
 
 
 async def cmd_delete(c: GoChiDUBBClient, a) -> None:
@@ -483,7 +492,8 @@ def _add_common_dub_opts(p: argparse.ArgumentParser) -> None:
                    help="Free-text voice style hint (overrides preset cloning)")
     p.add_argument("--tts-speed", default="balanced",
                    choices=["fast", "balanced", "quality"])
-    p.add_argument("--keep-bg", action="store_true", help="Keep background music")
+    p.add_argument("--keep-bg", action=argparse.BooleanOptionalAction, default=True,
+                   help="Keep background music/SFX (default: on; --no-keep-bg to disable)")
     p.add_argument("--auto-denoise", action="store_true",
                    help="Denoise the voice reference before cloning")
     p.add_argument("--voxcpm-cfg", type=float, default=0.0,
@@ -651,6 +661,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("cancel", help="Cancel a running job")
     s.add_argument("job_id")
     s.set_defaults(handler=cmd_cancel)
+    s = sub.add_parser("rescue", help="Attach a manually-downloaded video "
+                                      "to a failed job and resume it")
+    s.add_argument("job_id")
+    s.add_argument("video_file")
+    s.set_defaults(handler=cmd_rescue)
     s = sub.add_parser("delete", help="Delete a job and its files")
     s.add_argument("job_id")
     s.set_defaults(handler=cmd_delete)

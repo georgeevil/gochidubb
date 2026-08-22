@@ -34,7 +34,7 @@ for _d in (UPLOAD_DIR, OUTPUT_DIR, JOBS_DB, STATIC_DIR, VOICE_PRESETS_DIR):
 
 # Bump when a setting's meaning changes and old files need fixing up; add the
 # corresponding step to _migrate().
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 # Validation table for the settings the product lets a user edit. set() and
 # update() both consult it, so every write path — the Settings UI,
@@ -65,6 +65,7 @@ FIELD_SPECS: dict = {
     # 0 = no cap (best available); otherwise a real frame height.
     "output_max_height":   (int, 360, 2160, 0),
     "background_volume":   (float, 0.0, 1.0),
+    "bg_ducking":          (bool,),
     "mode":                (str, ("local", "hosted")),
 }
 
@@ -208,8 +209,10 @@ class UserConfig:
     output_crf: int = 23                 # 18 (larger, better) … 28 (smaller)
     output_audio_bitrate: str = "192k"
     output_max_height: int = 1080        # source download cap, 0 = best available
-    # Background music/SFX level in the final mix, relative to the dub.
-    background_volume: float = 0.15
+    # Bed CEILING: music/SFX level when nobody speaks; with bg_ducking on,
+    # sidechain compression pulls it further down under speech.
+    background_volume: float = 0.5
+    bg_ducking: bool = True  # duck the bed under speech (off = legacy flat mix)
 
     # ── FFmpeg (extract / render) ─────────────────────────────────────
     # Soft timeout: while ffmpeg keeps reporting encode progress the deadline
@@ -281,6 +284,9 @@ class UserConfig:
 # The value voxcpm_steps defaulted to before it became a real override.
 _LEGACY_VOXCPM_STEPS = 10
 
+# The background_volume default before ducking existed (flat mix level).
+_LEGACY_BG_VOLUME = 0.15
+
 
 def _migrate(c: "UserConfig", from_version: int) -> None:
     """Fix up a persisted config whose settings have changed meaning.
@@ -301,6 +307,15 @@ def _migrate(c: "UserConfig", from_version: int) -> None:
     if from_version < 1 and c.voxcpm_steps == _LEGACY_VOXCPM_STEPS:
         c.voxcpm_steps = 0
         changed.append("voxcpm_steps 10 -> 0 (follow tts_speed tier)")
+
+    # v1 → v2: background_volume changed meaning from flat mix level to the
+    # ducked bed's ceiling, and its default moved 0.15 -> 0.5. _save() wrote
+    # 0.15 into every existing config-user.json, so a stored 0.15 means "the
+    # old default" and follows the new one; an explicitly chosen other value
+    # survives untouched.
+    if from_version < 2 and c.background_volume == _LEGACY_BG_VOLUME:
+        c.background_volume = 0.5
+        changed.append("background_volume 0.15 -> 0.5 (ducked bed ceiling)")
 
     c.config_version = CONFIG_VERSION
     if changed:
@@ -329,6 +344,7 @@ def _load_config() -> UserConfig:
         "GOCHIDUBB_OUTPUT_CRF": "output_crf",
         "GOCHIDUBB_OUTPUT_MAX_HEIGHT": "output_max_height",
         "GOCHIDUBB_BACKGROUND_VOLUME": "background_volume",
+        "GOCHIDUBB_BG_DUCKING": "bg_ducking",
         "OLLAMA_URL": "ollama_url",
         "WHISPER_MODEL": "whisper_model",
         "GOCHIDUBB_OPEN_BROWSER": "open_browser",

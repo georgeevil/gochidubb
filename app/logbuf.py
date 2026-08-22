@@ -106,6 +106,15 @@ class LogRing:
             "capacity": self.capacity,
         }
 
+    def current_seq(self) -> int:
+        """The seq of the newest entry — an anchor for time-window queries.
+
+        Job failures record [seq-at-stage-start, seq-at-failure] so the UI
+        can show exactly the log lines a failed stage produced.
+        """
+        with self._lock:
+            return self._seq
+
     def clear(self) -> None:
         with self._lock:
             self._buf.clear()
@@ -295,3 +304,7 @@ def uninstall() -> None:
 def snapshot(level: str = "", limit: int = 300,
              since_seq: int = 0) -> Dict[str, Any]:
     return ring.entries(level=level, limit=limit, since_seq=since_seq)
+
+
+def current_seq() -> int:
+    return ring.current_seq()

@@ -1,14 +1,17 @@
 """Tests for pipeline/downloader.py — yt-dlp discovery, metadata, cookies."""
+import shlex
 from unittest.mock import patch
 
 import pytest
 
 from app.config import cfg
 from pipeline.downloader import (
+    DownloadFailed,
     _cookie_args,
     _find_ytdlp,
     _is_403,
     _parse_probe_json,
+    classify_download_failure,
     curate_metadata,
     download_video,
     probe_metadata,
@@ -391,3 +394,151 @@ class TestChapterCapture:
         long_desc = "d" * 3000
         out = curate_metadata({"id": "x", "title": "T", "description": long_desc})
         assert len(out["description"]) == 3000
+
+
+class TestClassifyDownloadFailure:
+    """classify_download_failure() turns yt-dlp stderr into a rescue hint."""
+
+    URL = "https://www.youtube.com/watch?v=abc&t=10"
+
+    @pytest.mark.parametrize("stderr,expected", [
+        # bot-check — including YouTube's curly-apostrophe phrasing, which
+        # yt-dlp echoes verbatim.
+        ("ERROR: [youtube] abc: Sign in to confirm you're not a bot. "
+         "Use --cookies-from-browser or --cookies for the authentication.",
+         "bot-check"),
+        ("ERROR: [youtube] abc: Sign in to confirm you’re not a bot. "
+         "This helps protect our community.", "bot-check"),
+        ("ERROR: [youtube] abc: Use --cookies-from-browser or --cookies "
+         "for the authentication.", "bot-check"),
+        # age-gate
+        ("ERROR: [youtube] abc: Sign in to confirm your age. This video "
+         "may be inappropriate for some users.", "age-gate"),
+        ("ERROR: [youtube] abc: This video is age-restricted and only "
+         "available on YouTube.", "age-gate"),
+        # geo-block
+        ("ERROR: [youtube] abc: The uploader has not made this video "
+         "available in your country", "geo-block"),
+        ("ERROR: [youtube] abc: Video unavailable. The uploader has "
+         "blocked it in your country", "geo-block"),
+        ("ERROR: [generic] abc: This video is unavailable from your "
+         "location due to geo restriction", "geo-block"),
+        # persistent-403
+        ("ERROR: unable to download video data: HTTP Error 403: Forbidden",
+         "persistent-403"),
+        ("ERROR: fragment 1 not found, unable to continue (403 Forbidden)",
+         "persistent-403"),
+        # format
+        ("ERROR: [youtube] abc: Requested format is not available. "
+         "Use --list-formats for a list of available formats", "format"),
+        ("ERROR: [youtube] abc: No video formats found!; please report "
+         "this issue", "format"),
+        ("ERROR: [youtube] abc: Only images are available for download.",
+         "format"),
+        # network
+        ("ERROR: Unable to download webpage: <urlopen error [Errno 8] "
+         "nodename nor servname provided>", "network"),
+        ("ERROR: Unable to download webpage: The read operation timed out",
+         "network"),
+        ("ERROR: Unable to download webpage: [Errno 61] Connection refused",
+         "network"),
+        # unknown — the real reason survives in summary/detail instead
+        ("ERROR: [youtube] abc: Video unavailable", "unknown"),
+        ("ERROR: [youtube] abc: Private video. Sign in if you've been "
+         "granted access to this video", "unknown"),
+        ("", "unknown"),
+    ])
+    def test_classification(self, stderr, expected):
+        hint = classify_download_failure(stderr, "", self.URL)
+        assert hint["failure_class"] == expected
+
+    def test_bot_check_wins_over_403(self):
+        # The two co-occur: YouTube serves the bot interstitial with a 403.
+        stderr = ("ERROR: [youtube] abc: Sign in to confirm you're not a "
+                  "bot (HTTP Error 403: Forbidden)")
+        assert classify_download_failure(
+            stderr, "", self.URL)["failure_class"] == "bot-check"
+
+    def test_reads_stdout_as_well_as_stderr(self):
+        hint = classify_download_failure(
+            "", "Sign in to confirm you're not a bot", self.URL)
+        assert hint["failure_class"] == "bot-check"
+
+    def test_detail_is_the_first_error_line(self):
+        stderr = ("WARNING: something benign\n"
+                  "ERROR: [youtube] abc: Video unavailable\n"
+                  "ERROR: a second error line")
+        hint = classify_download_failure(stderr, "", self.URL)
+        assert hint["detail"] == "ERROR: [youtube] abc: Video unavailable"
+        # The unknown class quotes the real reason so it isn't lost.
+        assert "Video unavailable" in hint["summary"]
+
+    def test_bot_check_mentions_the_settings_option(self):
+        hint = classify_download_failure(
+            "Sign in to confirm you're not a bot", "", self.URL)
+        assert "Cookies from browser" in hint["summary"]
+        assert "firefox" in hint["summary"]
+
+    # ── Command construction ──────────────────────────────────────────
+
+    ALL_CLASS_STDERRS = [
+        "Sign in to confirm you're not a bot",
+        "Sign in to confirm your age",
+        "not available in your country",
+        "HTTP Error 403: Forbidden",
+        "Requested format is not available",
+        "Connection refused",
+        "ERROR: something else entirely",
+    ]
+
+    @pytest.mark.parametrize("stderr", ALL_CLASS_STDERRS)
+    def test_url_is_shell_quoted_in_every_command(self, stderr):
+        # The URL contains '&', which unquoted would background the command.
+        hint = classify_download_failure(stderr, "", self.URL)
+        for cmd in hint["commands"]:
+            text = cmd["command"]
+            if "youtube.com" in text:
+                assert shlex.quote(self.URL) in text
+                # The URL must survive shell splitting as ONE argument.
+                assert self.URL in shlex.split(text)
+
+    def test_bot_check_leads_with_the_cookies_command(self):
+        hint = classify_download_failure(
+            "Sign in to confirm you're not a bot", "", self.URL)
+        assert "--cookies-from-browser firefox" in hint["commands"][0]["command"]
+
+    @pytest.mark.parametrize("stderr", ALL_CLASS_STDERRS)
+    def test_every_class_yields_a_complete_hint(self, stderr):
+        hint = classify_download_failure(stderr, "", self.URL)
+        assert hint["summary"]
+        assert isinstance(hint["commands"], list) and hint["commands"]
+        for cmd in hint["commands"]:
+            assert isinstance(cmd, dict)
+            assert cmd["label"] and cmd["command"]
+
+    @pytest.mark.parametrize("stderr,stdout,source", [
+        (None, None, None),
+        (b"\xff\xfe garbage bytes", b"", b""),
+        (12345, object(), ""),
+        ("ERROR: x", "", None),
+    ])
+    def test_never_raises_on_garbage_input(self, stderr, stdout, source):
+        hint = classify_download_failure(stderr, stdout, source)
+        assert hint["failure_class"]
+        assert hint["summary"]
+
+
+class TestDownloadFailedCarriesHint:
+    def test_hint_reaches_the_exception(self, tmp_path):
+        # Every attempt fails with a bot-check message (no 403, so the
+        # web_embedded fallback is not taken and no file appears).
+        def fake_run(cmd, **kwargs):
+            return _Result(1, "ERROR: [youtube] abc: Sign in to confirm "
+                              "you're not a bot")
+
+        with patch("pipeline.downloader.subprocess.run", side_effect=fake_run):
+            with pytest.raises(DownloadFailed) as exc:
+                download_video("https://youtu.be/abc", str(tmp_path))
+        assert isinstance(exc.value, RuntimeError)
+        assert exc.value.hint["failure_class"] == "bot-check"
+        assert exc.value.hint["commands"]

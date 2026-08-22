@@ -1,12 +1,15 @@
 """Tests for pipeline/assembler.py — SRT formatting, writing, and audio assembly."""
 import os
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 
 from pipeline.assembler import (
     MIN_SEGMENT_GAP,
+    build_audio_mix_filter,
     format_srt_time,
+    merge_audio_video,
     plan_segment_fit,
     write_srt,
 )
@@ -227,3 +230,92 @@ class TestPlanSegmentFit:
         _, speed = plan_segment_fit(
             seg_start=30.0, next_start=36.0, tts_dur=4.0, current_end=25.0)
         assert speed == 1.0
+
+
+class TestBuildAudioMixFilter:
+    """build_audio_mix_filter() renders the dub+bed filter_complex graph."""
+
+    def test_legacy_flat_mix_is_byte_identical(self):
+        # ducking=False must reproduce the pre-ducking mix exactly, so the
+        # legacy toggle really is "the old behaviour" and not a near-miss.
+        assert build_audio_mix_filter(0.15, ducking=False) == (
+            "[1:a]volume=1.0[dub];[2:a]volume=0.15[bg];"
+            "[dub][bg]amix=inputs=2:duration=first:normalize=0[out]")
+
+    def test_ducking_graph_shape(self):
+        f = build_audio_mix_filter(0.5, ducking=True)
+        assert "asplit=2" in f
+        assert ("sidechaincompress=threshold=0.03:ratio=8:"
+                "attack=20:release=400") in f
+        assert f.endswith("[out]")
+        # The bed ceiling applies BEFORE the compressor, on the bed input.
+        assert "[2:a]volume=0.5[bgin]" in f
+        assert f.index("volume=0.5") < f.index("sidechaincompress")
+
+    def test_dub_is_first_amix_input(self):
+        # duration=first keys the mix length off the dub in both modes.
+        flat = build_audio_mix_filter(0.3, ducking=False)
+        assert "[dub][bg]amix" in flat
+        ducked = build_audio_mix_filter(0.3, ducking=True)
+        assert "[dubm][bgduck]amix" in ducked
+
+    def test_bed_ceiling_follows_bg_volume(self):
+        assert "volume=0.0" in build_audio_mix_filter(0.0, ducking=True)
+
+
+class TestMergeUsesMixFilter:
+    """merge_audio_video() hands the mix graph to ffmpeg unchanged."""
+
+    def _merge(self, monkeypatch, tmp_path, bg_path, **kwargs):
+        calls = []
+        monkeypatch.setattr("pipeline.assembler._run",
+                            lambda cmd, desc="", timeout=None: calls.append(cmd))
+        monkeypatch.setattr("pipeline.assembler._probe_video_stream",
+                            lambda path: ("h264", "yuv420p"))
+        merge_audio_video("fake_video.mp4", "fake_dub.wav",
+                          str(tmp_path / "out.mp4"),
+                          background_audio_path=bg_path, **kwargs)
+        assert len(calls) == 1
+        return calls[0]
+
+    def _filter_complex(self, cmd):
+        return cmd[cmd.index("-filter_complex") + 1]
+
+    def test_ducking_filter_reaches_ffmpeg(self, monkeypatch, tmp_path,
+                                           temp_audio_file):
+        cmd = self._merge(monkeypatch, tmp_path, temp_audio_file,
+                          bg_volume=0.5, bg_ducking=True)
+        assert self._filter_complex(cmd) == build_audio_mix_filter(0.5, True)
+
+    def test_flat_filter_reaches_ffmpeg(self, monkeypatch, tmp_path,
+                                        temp_audio_file):
+        cmd = self._merge(monkeypatch, tmp_path, temp_audio_file,
+                          bg_volume=0.2, bg_ducking=False)
+        assert self._filter_complex(cmd) == build_audio_mix_filter(0.2, False)
+
+    def test_no_bg_mix_without_background_path(self, monkeypatch, tmp_path):
+        cmd = self._merge(monkeypatch, tmp_path, "",
+                          bg_volume=0.5, bg_ducking=True)
+        assert "-filter_complex" not in cmd
+        assert "amix" not in " ".join(cmd)
+
+    def test_extend_branch_keeps_video_prefix_and_maps(self, monkeypatch,
+                                                       tmp_path,
+                                                       temp_audio_file):
+        # Audio longer than video → the tpad branch: the mix graph is
+        # appended after the [0:v]…[v] video filter, and both labels map out.
+        import subprocess
+
+        durations = {"fake_video.mp4": "2.0\n", "fake_dub.wav": "10.0\n"}
+
+        def fake_ffprobe(cmd, **kw):
+            return SimpleNamespace(stdout=durations[cmd[-1]])
+
+        monkeypatch.setattr(subprocess, "run", fake_ffprobe)
+        cmd = self._merge(monkeypatch, tmp_path, temp_audio_file,
+                          bg_volume=0.5, bg_ducking=True)
+        fc = self._filter_complex(cmd)
+        assert fc.startswith("[0:v]tpad=stop_mode=clone:stop_duration=")
+        assert fc.endswith("[v];" + build_audio_mix_filter(0.5, True))
+        maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
+        assert maps == ["[v]", "[out]"]
