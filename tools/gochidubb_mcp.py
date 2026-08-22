@@ -94,7 +94,7 @@ async def gochidubb_dub(
     voice_preset: str = "auto",
     voice_style: str = "",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     auto_denoise: bool = False,
     context_hint: str = "",
     wizard_mode: str = "auto",
@@ -113,7 +113,7 @@ async def gochidubb_dub(
         voice_preset: Voice preset key, or 'auto' for source-cloned voice.
         voice_style: Free-text voice style hint (overrides preset cloning).
         tts_speed: 'fast' | 'balanced' | 'quality'.
-        keep_bg: Preserve background music under the new dub.
+        keep_bg: Preserve background music under the new dub (default: on).
         auto_denoise: Denoise the voice reference before cloning.
         context_hint: Free-text hint for translator (e.g. "tech podcast").
         wizard_mode: 'auto', or 'review_translation'/'review_transcript' to
@@ -157,7 +157,7 @@ async def gochidubb_compare(
     model: Optional[str] = None,
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     wait: bool = False,
     wait_timeout: float = 3600.0,
 ) -> dict:
@@ -166,6 +166,7 @@ async def gochidubb_compare(
 
     target_langs: 2-6 language codes.
     trim_seconds: 15-120, default 60.
+    keep_bg: background music/SFX kept by default.
     """
     c = await _get_client()
     res = await c.submit_compare(
@@ -193,7 +194,7 @@ async def gochidubb_showcase(
     model: Optional[str] = None,
     voice_preset: str = "auto",
     tts_speed: str = "balanced",
-    keep_bg: bool = False,
+    keep_bg: bool = True,
     wait: bool = False,
     wait_timeout: float = 3600.0,
 ) -> dict:
@@ -204,6 +205,7 @@ async def gochidubb_showcase(
     cloning across languages (vs. gochidubb_compare which gives N files).
 
     target_langs: 2-6 codes. trim_seconds: 15-120.
+    keep_bg: background music/SFX kept by default.
     """
     c = await _get_client()
     res = await c.submit_showcase(

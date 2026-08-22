@@ -988,7 +988,10 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
   const [voiceStyle, setVoiceStyle] = useState('');
   const [ttsSpeed, setTtsSpeed] = useState(() => _lsGet('ttsSpeed', 'balanced'));
   const [contextHint, setContextHint] = useState(() => _lsGet('contextHint', ''));
-  const [keepBg, setKeepBg] = useState(() => _lsGet('keepBg', false));
+  // 'keepBg2': the persist effect below auto-wrote keepBg:false for every existing
+  // visitor on first render, so flipping only the default would change nothing for
+  // existing browsers — a renamed key lets the new default actually take effect.
+  const [keepBg, setKeepBg] = useState(() => _lsGet('keepBg2', true));
   const [autoDenoise, setAutoDenoise] = useState(() => _lsGet('autoDenoise', false));
   const [lipSync, setLipSync] = useState(() => _lsGet('lipSync', false));
   const [llmRegroup, setLlmRegroup] = useState(() => _lsGet('llmRegroup', false));
@@ -1097,7 +1100,7 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
   useEffect(() => { _lsSet('voicePreset', voicePreset); }, [voicePreset]);
   useEffect(() => { _lsSet('ttsSpeed', ttsSpeed); }, [ttsSpeed]);
   useEffect(() => { _lsSet('contextHint', contextHint); }, [contextHint]);
-  useEffect(() => { _lsSet('keepBg', keepBg); }, [keepBg]);
+  useEffect(() => { _lsSet('keepBg2', keepBg); }, [keepBg]);
   useEffect(() => { _lsSet('autoDenoise', autoDenoise); }, [autoDenoise]);
   useEffect(() => { _lsSet('lipSync', lipSync); }, [lipSync]);
   useEffect(() => { _lsSet('llmRegroup', llmRegroup); }, [llmRegroup]);
@@ -1471,7 +1474,7 @@ function HomeView({ system, voicePresets, sphereOn, onJobSubmitted,
         </div>
 
         <SectionHeader index={4} title="Advanced"/>
-        <Toggle value={keepBg}     onChange={setKeepBg}     label="Keep background audio (music / SFX)" hint="Uses audio-separator. Install required — see System."/>
+        <Toggle value={keepBg}     onChange={setKeepBg}     label="Keep background audio (music / SFX)" hint="Splits music/SFX from speech (Demucs, or audio-separator as fallback) and ducks it under the dub. If neither is installed the dub still completes, with a notice — see System."/>
         <Toggle value={autoDenoise} onChange={setAutoDenoise} label="Auto-denoise audio" hint="+3-5s · ON for noisy footage (mat sounds, crowd, AC hum) · OFF for clean studio audio"/>
         <Toggle value={lipSync} onChange={setLipSync}
                 disabled={lipStatus && !lipStatus.installed}
@@ -4137,7 +4140,11 @@ function OutputTab({ system }) {
         <NumberKnob label="Background volume" min={0} max={1} step={0.05}
                     value={draft.background_volume}
                     onChange={v => set('background_volume', Math.round(v * 20) / 20)}
-                    hint="Level of the separated music/SFX bed under the dub, when 'Keep background audio' is on. 0 mutes it."/>
+                    hint="Music/SFX bed level when no one is speaking; it ducks automatically under the dub. 0 mutes it."/>
+        <Toggle value={!!draft.bg_ducking}
+                onChange={v => set('bg_ducking', v)}
+                label="Duck background under speech"
+                hint="Off = legacy flat mix at the volume above."/>
       </div>
 
       {err && (

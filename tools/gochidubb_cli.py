@@ -479,7 +479,8 @@ def _add_common_dub_opts(p: argparse.ArgumentParser) -> None:
                    help="Free-text voice style hint (overrides preset cloning)")
     p.add_argument("--tts-speed", default="balanced",
                    choices=["fast", "balanced", "quality"])
-    p.add_argument("--keep-bg", action="store_true", help="Keep background music")
+    p.add_argument("--keep-bg", action=argparse.BooleanOptionalAction, default=True,
+                   help="Keep background music/SFX (default: on; --no-keep-bg to disable)")
     p.add_argument("--auto-denoise", action="store_true",
                    help="Denoise the voice reference before cloning")
     p.add_argument("--wait", action="store_true", help="Block until job(s) finish")

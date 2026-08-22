@@ -105,7 +105,7 @@ class GoChiDUBBClient:
         voice_style: str = "",
         tts_speed: str = "balanced",
         speaker_mode: str = "main",
-        keep_bg: bool = False,
+        keep_bg: bool = True,
         auto_denoise: bool = False,
         context_hint: str = "",
         wizard_mode: str = "auto",
@@ -152,7 +152,7 @@ class GoChiDUBBClient:
         voice_preset: str = "auto",
         voice_style: str = "",
         tts_speed: str = "balanced",
-        keep_bg: bool = False,
+        keep_bg: bool = True,
         auto_denoise: bool = False,
         context_hint: str = "",
     ) -> dict:
@@ -188,7 +188,7 @@ class GoChiDUBBClient:
         voice_preset: str = "auto",
         voice_style: str = "",
         tts_speed: str = "balanced",
-        keep_bg: bool = False,
+        keep_bg: bool = True,
         auto_denoise: bool = False,
         context_hint: str = "",
     ) -> dict:
